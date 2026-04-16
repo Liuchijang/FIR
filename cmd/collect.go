@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	artifactFlag   string
-	timeoutFlag    time.Duration
+	artifactFlag    string
+	timeoutFlag     time.Duration
 	concurrencyFlag int
 )
 
@@ -85,7 +85,6 @@ func executeCollection(collectors []collector.Collector) error {
 	defer logging.Close()
 
 	log := logging.G()
-	log.Banner(output.Version)
 	log.Info(fmt.Sprintf("Output directory: %s", mgr.BaseDir()))
 	log.Info(fmt.Sprintf("Collectors to run: %d", len(collectors)))
 
@@ -139,22 +138,23 @@ func runCollectors(collectors []collector.Collector, mgr *output.Manager) []coll
 			defer cancel()
 
 			start := time.Now()
-			err := col.Collect(ctx, mgr.BaseDir())
+			files, err := col.Collect(ctx, mgr.BaseDir())
 			elapsed := time.Since(start)
 
 			result := collector.Result{
-				CollectorName: col.Name(),
-				Category:      col.Category(),
-				Duration:      elapsed,
-				DurationSec:   elapsed.Seconds(),
-				Success:       err == nil,
+				CollectorName:  col.Name(),
+				Category:       col.Category(),
+				FilesCollected: files,
+				Duration:       elapsed,
+				DurationSec:    elapsed.Seconds(),
+				Success:        err == nil,
 			}
 
 			if err != nil {
 				result.Error = err.Error()
 				log.Failed(col.Name(), err)
 			} else {
-				log.Done(col.Name(), 0, "artifacts", elapsed)
+				log.Done(col.Name(), len(files), "artifacts", elapsed)
 			}
 
 			mu.Lock()

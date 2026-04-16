@@ -12,49 +12,38 @@ import (
 	"github.com/fir/fir/internal/utils"
 )
 
-func init() {
-	collector.Register(&wmiCollector{})
-}
+func init() { collector.Register(&wmiCollector{}) }
 
 type wmiCollector struct{}
 
-func (c *wmiCollector) Name() string        { return "wmi" }
-func (c *wmiCollector) Category() string     { return "system" }
+func (c *wmiCollector) Name() string     { return "wmi" }
+func (c *wmiCollector) Category() string { return "system" }
 func (c *wmiCollector) Description() string {
 	return "Collects WMI repository files (OBJECTS.DATA, INDEX.BTR, MAPPING*.MAP)"
 }
 
-// wmiFiles are the key WMI repository files to collect.
-var wmiFiles = []string{
-	"OBJECTS.DATA",
-	"INDEX.BTR",
-}
+var wmiFiles = []string{"OBJECTS.DATA", "INDEX.BTR"}
 
-func (c *wmiCollector) Collect(ctx context.Context, outputDir string) error {
+func (c *wmiCollector) Collect(ctx context.Context, outputDir string) ([]collector.FileInfo, error) {
 	log := logging.G()
 	outDir := filepath.Join(outputDir, "system", "wmi")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return fmt.Errorf("create WMI output dir: %w", err)
+		return nil, fmt.Errorf("create WMI output dir: %w", err)
 	}
 
 	wmiDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "wbem", "Repository")
-
 	var allFiles []collector.FileInfo
-
-	// Copy known key files.
 	for _, name := range wmiFiles {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return allFiles, ctx.Err()
 		default:
 		}
-
 		src := filepath.Join(wmiDir, name)
 		if _, err := os.Stat(src); os.IsNotExist(err) {
 			log.Debug(fmt.Sprintf("WMI file not found: %s", name))
 			continue
 		}
-
 		dst := filepath.Join(outDir, name)
 		fi, err := utils.SafeCopyFile(src, dst)
 		if err != nil {
@@ -64,17 +53,14 @@ func (c *wmiCollector) Collect(ctx context.Context, outputDir string) error {
 		allFiles = append(allFiles, fi)
 	}
 
-	// Copy MAPPING*.MAP files (glob pattern).
-	mappingPattern := filepath.Join(wmiDir, "MAPPING*.MAP")
-	matches, err := filepath.Glob(mappingPattern)
+	matches, err := filepath.Glob(filepath.Join(wmiDir, "MAPPING*.MAP"))
 	if err == nil {
 		for _, match := range matches {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return allFiles, ctx.Err()
 			default:
 			}
-
 			name := filepath.Base(match)
 			dst := filepath.Join(outDir, name)
 			fi, err := utils.SafeCopyFile(match, dst)
@@ -87,8 +73,7 @@ func (c *wmiCollector) Collect(ctx context.Context, outputDir string) error {
 	}
 
 	if len(allFiles) == 0 {
-		return fmt.Errorf("no WMI repository files collected from %s", wmiDir)
+		return nil, fmt.Errorf("no WMI repository files collected from %s", wmiDir)
 	}
-
-	return nil
+	return allFiles, nil
 }

@@ -11,24 +11,21 @@ import (
 	"github.com/fir/fir/internal/collector"
 )
 
-// Version is the current FIR version. Set at build time via ldflags.
 var Version = "1.0.0"
 
-// Metadata represents the collection metadata written to metadata.json.
 type Metadata struct {
-	Hostname           string              `json:"hostname"`
-	Timestamp          string              `json:"timestamp"`
-	TimestampUTC       string              `json:"timestamp_utc"`
-	OS                 string              `json:"os"`
-	Architecture       string              `json:"architecture"`
-	ArtifactsCollected []string            `json:"artifacts_collected"`
-	CollectorVersion   string              `json:"collector_version"`
-	TotalDuration      string              `json:"total_duration"`
-	Results            []collector.Result   `json:"results"`
-	Errors             []string            `json:"errors,omitempty"`
+	Hostname           string             `json:"hostname"`
+	Timestamp          string             `json:"timestamp"`
+	TimestampUTC       string             `json:"timestamp_utc"`
+	OS                 string             `json:"os"`
+	Architecture       string             `json:"architecture"`
+	ArtifactsCollected []string           `json:"artifacts_collected"`
+	CollectorVersion   string             `json:"collector_version"`
+	TotalDuration      string             `json:"total_duration"`
+	Results            []collector.Result `json:"results"`
+	Errors             []string           `json:"errors,omitempty"`
 }
 
-// WriteMetadata generates and writes the metadata.json file to the output directory.
 func WriteMetadata(outputDir string, results []collector.Result, totalDuration time.Duration) error {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -40,25 +37,15 @@ func WriteMetadata(outputDir string, results []collector.Result, totalDuration t
 	var errors []string
 
 	for _, r := range results {
-		collected = append(collected, r.CollectorName)
+		if r.Success {
+			collected = append(collected, r.CollectorName)
+		}
 		if r.Error != "" {
 			errors = append(errors, fmt.Sprintf("%s: %s", r.CollectorName, r.Error))
 		}
 	}
 
-	meta := Metadata{
-		Hostname:           hostname,
-		Timestamp:          now.Format(time.RFC3339),
-		TimestampUTC:       now.UTC().Format(time.RFC3339),
-		OS:                 runtime.GOOS,
-		Architecture:       runtime.GOARCH,
-		ArtifactsCollected: collected,
-		CollectorVersion:   Version,
-		TotalDuration:      fmt.Sprintf("%.3fs", totalDuration.Seconds()),
-		Results:            results,
-		Errors:             errors,
-	}
-
+	meta := Metadata{Hostname: hostname, Timestamp: now.Format(time.RFC3339), TimestampUTC: now.UTC().Format(time.RFC3339), OS: runtime.GOOS, Architecture: runtime.GOARCH, ArtifactsCollected: collected, CollectorVersion: Version, TotalDuration: fmt.Sprintf("%.3fs", totalDuration.Seconds()), Results: results, Errors: errors}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal metadata: %w", err)
@@ -68,6 +55,5 @@ func WriteMetadata(outputDir string, results []collector.Result, totalDuration t
 	if err := os.WriteFile(metaPath, data, 0o644); err != nil {
 		return fmt.Errorf("write metadata.json: %w", err)
 	}
-
 	return nil
 }

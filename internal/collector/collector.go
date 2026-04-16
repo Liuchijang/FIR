@@ -23,7 +23,7 @@ type Collector interface {
 	// Collect performs the actual artifact acquisition.
 	// It receives a context for timeout/cancellation and the output directory path.
 	// The collector must create its own subdirectory within outputDir if needed.
-	Collect(ctx context.Context, outputDir string) error
+	Collect(ctx context.Context, outputDir string) ([]FileInfo, error)
 }
 
 // FileInfo holds metadata about a collected file, including its integrity hash.

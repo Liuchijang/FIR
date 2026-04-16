@@ -9,13 +9,12 @@ import (
 	"path/filepath"
 
 	"github.com/fir/fir/internal/collector"
+	"golang.org/x/sys/windows"
 )
 
-const copyBufferSize = 64 * 1024 // 64KB copy buffer
+const copyBufferSize = 64 * 1024
 
 // SafeCopyFile copies src to dst while simultaneously computing the SHA-256 hash.
-// It returns file metadata including the hash and size.
-// The destination directory must already exist.
 func SafeCopyFile(src, dst string) (collector.FileInfo, error) {
 	srcFile, err := os.Open(src)
 	if err != nil {
@@ -23,12 +22,48 @@ func SafeCopyFile(src, dst string) (collector.FileInfo, error) {
 	}
 	defer srcFile.Close()
 
-	// Validate source is readable.
 	if _, err := srcFile.Stat(); err != nil {
 		return collector.FileInfo{}, fmt.Errorf("stat source %s: %w", src, err)
 	}
 
-	// Ensure destination directory exists.
+	return copyToDestination(srcFile, dst)
+}
+
+// SafeCopyFileBackup copies a file using backup semantics so SeBackupPrivilege can help with locked files.
+func SafeCopyFileBackup(src, dst string) (collector.FileInfo, error) {
+	srcPtr, err := windows.UTF16PtrFromString(src)
+	if err != nil {
+		return collector.FileInfo{}, fmt.Errorf("utf16 source %s: %w", src, err)
+	}
+
+	handle, err := windows.CreateFile(
+		srcPtr,
+		windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS,
+		0,
+	)
+	if err != nil {
+		return collector.FileInfo{}, fmt.Errorf("open source %s with backup semantics: %w", src, err)
+	}
+	defer windows.CloseHandle(handle)
+
+	srcFile := os.NewFile(uintptr(handle), src)
+	if srcFile == nil {
+		return collector.FileInfo{}, fmt.Errorf("create file wrapper for %s", src)
+	}
+	defer srcFile.Close()
+
+	if _, err := srcFile.Stat(); err != nil {
+		return collector.FileInfo{}, fmt.Errorf("stat source %s: %w", src, err)
+	}
+
+	return copyToDestination(srcFile, dst)
+}
+
+func copyToDestination(srcFile *os.File, dst string) (collector.FileInfo, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return collector.FileInfo{}, fmt.Errorf("create dest dir: %w", err)
 	}
@@ -40,44 +75,25 @@ func SafeCopyFile(src, dst string) (collector.FileInfo, error) {
 	defer func() {
 		dstFile.Close()
 		if err != nil {
-			os.Remove(dst) // Clean up partial file on error.
+			os.Remove(dst)
 		}
 	}()
 
-	// Tee reader: write to dest and hash simultaneously.
 	hasher := sha256.New()
 	writer := io.MultiWriter(dstFile, hasher)
-
 	buf := make([]byte, copyBufferSize)
 	written, err := io.CopyBuffer(writer, srcFile, buf)
 	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("copy %s: %w", src, err)
+		return collector.FileInfo{}, fmt.Errorf("copy to %s: %w", dst, err)
 	}
 
 	if err := dstFile.Sync(); err != nil {
 		return collector.FileInfo{}, fmt.Errorf("sync %s: %w", dst, err)
 	}
 
-	return collector.FileInfo{
-		Path:   filepath.Base(dst),
-		SHA256: hex.EncodeToString(hasher.Sum(nil)),
-		Size:   written,
-	}, nil
+	return collector.FileInfo{Path: filepath.Base(dst), SHA256: hex.EncodeToString(hasher.Sum(nil)), Size: written}, nil
 }
 
-// SafeCopyFileBackup copies a file using FILE_FLAG_BACKUP_SEMANTICS,
-// which leverages SeBackupPrivilege to bypass ACLs.
-// Falls back to normal copy if backup semantics fail.
-func SafeCopyFileBackup(src, dst string) (collector.FileInfo, error) {
-	info, err := SafeCopyFile(src, dst)
-	if err != nil {
-		return collector.FileInfo{}, err
-	}
-	return info, nil
-}
-
-// CopyDir copies all files from srcDir to dstDir (non-recursive).
-// Returns metadata for all successfully copied files.
 func CopyDir(srcDir, dstDir string) ([]collector.FileInfo, error) {
 	entries, err := os.ReadDir(srcDir)
 	if err != nil {
@@ -111,13 +127,12 @@ func CopyDir(srcDir, dstDir string) ([]collector.FileInfo, error) {
 	return files, nil
 }
 
-// CopyDirRecursive copies all files from srcDir to dstDir recursively.
 func CopyDirRecursive(srcDir, dstDir string) ([]collector.FileInfo, error) {
 	var files []collector.FileInfo
 
 	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip inaccessible files.
+			return nil
 		}
 
 		relPath, _ := filepath.Rel(srcDir, path)
@@ -129,7 +144,7 @@ func CopyDirRecursive(srcDir, dstDir string) ([]collector.FileInfo, error) {
 
 		fi, copyErr := SafeCopyFile(path, dstPath)
 		if copyErr != nil {
-			return nil // Skip files that fail to copy.
+			return nil
 		}
 		fi.Path = relPath
 		files = append(files, fi)
