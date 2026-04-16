@@ -1,4 +1,4 @@
-# FIR — First Incident Response
+# FIR — Freedom Incident Response
 
 A production-grade Windows DFIR (Digital Forensics & Incident Response) artifact collection tool written in Go. Designed for first-response triage scenarios with a focus on minimal system impact, forensic integrity, and extensibility.
 
@@ -149,7 +149,7 @@ DESKTOP-ABC123_20260416_143210/
 
 ```
   ╔═══════════════════════════════════════╗
-  ║   FIR — First Incident Response      ║
+  ║   FIR — Freedom Incident Response      ║
   ║   Windows DFIR Artifact Collector     ║
   ║   Version 1.0.0                       ║
   ╚═══════════════════════════════════════╝

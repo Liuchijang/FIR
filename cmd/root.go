@@ -28,7 +28,7 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "fir",
-	Short: "FIR — First Incident Response",
+	Short: "FIR — Freedom Incident Response",
 	Long: `FIR is a production-grade Windows DFIR artifact collection tool.
 It collects forensic artifacts with minimal system impact for incident response.
 

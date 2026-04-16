@@ -185,7 +185,7 @@ func (l *Logger) Failed(collector string, err error) {
 func (l *Logger) Banner(version string) {
 	fmt.Fprintf(os.Stderr, "\n%s%s", colorCyan, colorBold)
 	fmt.Fprintf(os.Stderr, "  ╔═══════════════════════════════════════╗\n")
-	fmt.Fprintf(os.Stderr, "  ║   FIR — First Incident Response      ║\n")
+	fmt.Fprintf(os.Stderr, "  ║   FIR — Freedom Incident Response      ║\n")
 	fmt.Fprintf(os.Stderr, "  ║   Windows DFIR Artifact Collector     ║\n")
 	fmt.Fprintf(os.Stderr, "  ║   Version %-27s ║\n", version)
 	fmt.Fprintf(os.Stderr, "  ╚═══════════════════════════════════════╝%s\n\n", colorReset)
