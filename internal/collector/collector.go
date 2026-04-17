@@ -1,4 +1,4 @@
-// Package collector defines the core Collector interface and associated types
+﻿// Package collector defines the core Collector interface and associated types
 // used by all artifact collectors in FIR.
 package collector
 

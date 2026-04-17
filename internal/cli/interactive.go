@@ -1,4 +1,4 @@
-// Package cli implements the interactive menu-driven interface for FIR.
+﻿// Package cli implements the interactive menu-driven interface for FIR.
 package cli
 
 import (
@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/fir/fir/internal/collector"
+	"github.com/Liuchijang/FIR/internal/collector"
 )
 
 const (

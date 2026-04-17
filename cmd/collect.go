@@ -1,4 +1,4 @@
-package cmd
+﻿package cmd
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fir/fir/internal/collector"
-	"github.com/fir/fir/internal/logging"
-	"github.com/fir/fir/internal/output"
+	"github.com/Liuchijang/FIR/internal/collector"
+	"github.com/Liuchijang/FIR/internal/logging"
+	"github.com/Liuchijang/FIR/internal/output"
 	"github.com/spf13/cobra"
 )
 

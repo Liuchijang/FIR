@@ -1,4 +1,4 @@
-package utils
+﻿package utils
 
 import (
 	"crypto/sha256"
@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/fir/fir/internal/collector"
+	"github.com/Liuchijang/FIR/internal/collector"
 	"golang.org/x/sys/windows"
 )
 

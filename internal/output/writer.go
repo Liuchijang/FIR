@@ -1,4 +1,4 @@
-// Package output manages the output directory structure and file writing for FIR.
+﻿// Package output manages the output directory structure and file writing for FIR.
 package output
 
 import (

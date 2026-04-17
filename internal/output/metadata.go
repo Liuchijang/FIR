@@ -1,4 +1,4 @@
-package output
+﻿package output
 
 import (
 	"encoding/json"
@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/fir/fir/internal/collector"
+	"github.com/Liuchijang/FIR/internal/collector"
 )
 
 var Version = "1.0.0"

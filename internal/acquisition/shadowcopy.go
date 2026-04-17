@@ -1,4 +1,4 @@
-package acquisition
+﻿package acquisition
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fir/fir/internal/logging"
+	"github.com/Liuchijang/FIR/internal/logging"
 )
 
 // ShadowCopy represents a Volume Shadow Copy that has been created.

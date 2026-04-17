@@ -1,4 +1,4 @@
-// Package logging provides a dual-output logger for FIR.
+﻿// Package logging provides a dual-output logger for FIR.
 // Console output shows only progress/status messages with color.
 // File output captures full structured logs for forensic audit trail.
 package logging

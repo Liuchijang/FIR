@@ -1,10 +1,10 @@
-package main
+﻿package main
 
 import (
 	"os"
 
-	"github.com/fir/fir/cmd"
-	"github.com/fir/fir/internal/console"
+	"github.com/Liuchijang/FIR/cmd"
+	"github.com/Liuchijang/FIR/internal/console"
 )
 
 func main() {

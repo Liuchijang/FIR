@@ -1,4 +1,4 @@
-package ntfs
+﻿package ntfs
 
 import (
 	"context"
@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/fir/fir/internal/acquisition"
-	"github.com/fir/fir/internal/collector"
-	"github.com/fir/fir/internal/logging"
-	"github.com/fir/fir/internal/utils"
+	"github.com/Liuchijang/FIR/internal/acquisition"
+	"github.com/Liuchijang/FIR/internal/collector"
+	"github.com/Liuchijang/FIR/internal/logging"
+	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func init() { collector.Register(&secureCollector{}) }

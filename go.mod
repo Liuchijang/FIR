@@ -1,4 +1,4 @@
-module github.com/fir/fir
+module github.com/Liuchijang/FIR
 
 go 1.26.2
 

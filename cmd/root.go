@@ -1,4 +1,4 @@
-// Package cmd implements the Cobra CLI commands for FIR.
+﻿// Package cmd implements the Cobra CLI commands for FIR.
 package cmd
 
 import (
@@ -6,18 +6,18 @@ import (
 	"os"
 	"time"
 
-	"github.com/fir/fir/internal/cli"
-	"github.com/fir/fir/internal/logging"
-	"github.com/fir/fir/internal/output"
-	"github.com/fir/fir/internal/utils"
+	"github.com/Liuchijang/FIR/internal/cli"
+	"github.com/Liuchijang/FIR/internal/logging"
+	"github.com/Liuchijang/FIR/internal/output"
+	"github.com/Liuchijang/FIR/internal/utils"
 	"github.com/spf13/cobra"
 
-	_ "github.com/fir/fir/internal/eventlog"
-	_ "github.com/fir/fir/internal/execution"
-	_ "github.com/fir/fir/internal/memory"
-	_ "github.com/fir/fir/internal/ntfs"
-	_ "github.com/fir/fir/internal/registry"
-	_ "github.com/fir/fir/internal/system"
+	_ "github.com/Liuchijang/FIR/internal/eventlog"
+	_ "github.com/Liuchijang/FIR/internal/execution"
+	_ "github.com/Liuchijang/FIR/internal/memory"
+	_ "github.com/Liuchijang/FIR/internal/ntfs"
+	_ "github.com/Liuchijang/FIR/internal/registry"
+	_ "github.com/Liuchijang/FIR/internal/system"
 )
 
 var (

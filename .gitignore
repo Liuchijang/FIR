@@ -33,15 +33,6 @@ go.work.sum
 # Test binary, built with `go test -c`
 *.test
 
-# Code coverage profiles and other test artifacts
-*.out
-coverage.*
-*.coverprofile
-profile.cov
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
 # Go workspace file
 go.work
 go.work.sum
@@ -52,3 +43,13 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Code Review Graph
+.code-review-graph/
+.claude/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.cursorrules
+.opencode.json
+.mcp.json

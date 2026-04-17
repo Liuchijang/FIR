@@ -1,4 +1,4 @@
-// Package acquisition provides low-level Windows disk and volume access for FIR.
+﻿// Package acquisition provides low-level Windows disk and volume access for FIR.
 package acquisition
 
 import (

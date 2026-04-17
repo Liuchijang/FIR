@@ -20,7 +20,7 @@ A production-grade Windows DFIR (Digital Forensics & Incident Response) artifact
 go build -ldflags "-s -w" -o fir.exe .
 
 # Or with version info
-go build -ldflags "-s -w -X github.com/fir/fir/internal/output.Version=1.2.0" -o fir.exe .
+go build -ldflags "-s -w -X github.com/Liuchijang/FIR/internal/output.Version=1.2.0" -o fir.exe .
 ```
 
 **Requirements**: Go 1.21+ and Windows target platform.
@@ -148,11 +148,10 @@ DESKTOP-ABC123_20260416_143210/
 ## CLI Output Example
 
 ```
-  ╔═══════════════════════════════════════╗
-  ║   FIR — Freedom Incident Response      ║
-  ║   Windows DFIR Artifact Collector     ║
-  ║   Version 1.0.0                       ║
-  ╚═══════════════════════════════════════╝
+  |-----||   O    |----\\
+  |    --| |----| |   x  <|'
+  |__|--'  |____| |__|\\__/
+  Windows DFIR Artifact Collector  v1.0.0
 
 [+] Output directory: C:\triage\DESKTOP-ABC123_20260416_143210
 [+] Collectors to run: 3
@@ -192,7 +191,7 @@ type Collector interface {
 ```go
 package newcategory
 
-import "github.com/fir/fir/internal/collector"
+import "github.com/Liuchijang/FIR/internal/collector"
 
 func init() {
     collector.Register(&myCollector{})
@@ -212,7 +211,7 @@ func (c *myCollector) Collect(ctx context.Context, outputDir string) error {
 
 4. Add a blank import in `cmd/root.go`:
 ```go
-_ "github.com/fir/fir/internal/newcategory"
+_ "github.com/Liuchijang/FIR/internal/newcategory"
 ```
 
 **No changes to core orchestration logic required.**
