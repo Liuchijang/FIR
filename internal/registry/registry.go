@@ -5,13 +5,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/collector"
 	"github.com/Liuchijang/FIR/internal/logging"
-	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func init() { collector.Register(&registryCollector{}) }
@@ -25,6 +24,7 @@ func (c *registryCollector) Description() string {
 }
 
 var systemHives = []string{"SYSTEM", "SOFTWARE", "SAM", "SECURITY", "DEFAULT"}
+var hiveLogSuffixes = []string{"", ".LOG1", ".LOG2"}
 
 func (c *registryCollector) Collect(ctx context.Context, outputDir string) ([]collector.FileInfo, error) {
 	log := logging.G()
@@ -35,46 +35,35 @@ func (c *registryCollector) Collect(ctx context.Context, outputDir string) ([]co
 
 	var allFiles []collector.FileInfo
 	var errors []string
-	configDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "config")
-	for _, hive := range systemHives {
-		select {
-		case <-ctx.Done():
-			return allFiles, ctx.Err()
-		default:
-		}
-		src := filepath.Join(configDir, hive)
-		dst := filepath.Join(outDir, hive)
-		fi, err := utils.SafeCopyFile(src, dst)
-		if err != nil {
-			log.Debug(fmt.Sprintf("Direct copy of %s failed, attempting reg save: %v", hive, err))
-			fi, err = saveHiveViaReg(ctx, hive, dst)
-			if err != nil {
-				errors = append(errors, fmt.Sprintf("%s: %v", hive, err))
-				log.Warn(fmt.Sprintf("Failed to collect registry hive %s: %v", hive, err))
-				continue
-			}
-		}
-		allFiles = append(allFiles, fi)
-		log.Debug(fmt.Sprintf("Collected registry hive: %s (%d bytes)", hive, fi.Size))
-	}
 
-	userFiles, userErrors := collectUserHives(ctx, outDir)
-	allFiles = append(allFiles, userFiles...)
-	errors = append(errors, userErrors...)
+	files, err := collectRegistryFromSnapshot(ctx, outDir)
+	if err != nil {
+		errors = append(errors, err.Error())
+		log.Warn(fmt.Sprintf("Failed to collect registry hives: %v", err))
+	} else {
+		allFiles = append(allFiles, files...)
+	}
 	if len(allFiles) == 0 {
 		return nil, fmt.Errorf("no registry hives collected: %s", strings.Join(errors, "; "))
 	}
 	return allFiles, nil
 }
 
-func collectUserHives(ctx context.Context, outDir string) ([]collector.FileInfo, []string) {
-	log := logging.G()
-	var files []collector.FileInfo
-	var errors []string
+func collectRegistryFromSnapshot(ctx context.Context, outDir string) ([]collector.FileInfo, error) {
+	configDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "config")
+	pairs := make(map[string]string)
+
+	for _, hive := range systemHives {
+		for _, suffix := range hiveLogSuffixes {
+			name := hive + suffix
+			pairs[filepath.Join(configDir, name)] = filepath.Join(outDir, name)
+		}
+	}
+
 	usersDir := filepath.Join(os.Getenv("SystemDrive")+`\`, "Users")
 	entries, err := os.ReadDir(usersDir)
 	if err != nil {
-		return nil, []string{fmt.Sprintf("read Users dir: %v", err)}
+		return nil, fmt.Errorf("read Users dir: %w", err)
 	}
 
 	for _, entry := range entries {
@@ -83,7 +72,7 @@ func collectUserHives(ctx context.Context, outDir string) ([]collector.FileInfo,
 		}
 		select {
 		case <-ctx.Done():
-			return files, append(errors, "context cancelled")
+			return nil, ctx.Err()
 		default:
 		}
 		username := entry.Name()
@@ -94,79 +83,39 @@ func collectUserHives(ctx context.Context, outDir string) ([]collector.FileInfo,
 		profileDir := filepath.Join(usersDir, username)
 		userOutDir := filepath.Join(outDir, "users", username)
 		if err := os.MkdirAll(userOutDir, 0o755); err != nil {
-			errors = append(errors, fmt.Sprintf("create dir for %s: %v", username, err))
-			continue
+			return nil, fmt.Errorf("create dir for %s: %w", username, err)
 		}
 
-		ntuser := filepath.Join(profileDir, "NTUSER.DAT")
-		if _, err := os.Stat(ntuser); err == nil {
-			fi, err := copyUserHive(ntuser, filepath.Join(userOutDir, "NTUSER.DAT"))
-			if err != nil {
-				errors = append(errors, fmt.Sprintf("%s/NTUSER.DAT: %v", username, err))
-				log.Debug(fmt.Sprintf("Failed to copy NTUSER.DAT for %s: %v", username, err))
-			} else {
-				fi.Path = filepath.Join("users", username, "NTUSER.DAT")
-				files = append(files, fi)
-				log.Debug(fmt.Sprintf("Collected NTUSER.DAT for user: %s", username))
+		ntBase := filepath.Join(profileDir, "NTUSER.DAT")
+		for _, suffix := range hiveLogSuffixes {
+			src := ntBase + suffix
+			if _, err := os.Stat(src); err == nil {
+				pairs[src] = filepath.Join(userOutDir, "NTUSER.DAT"+suffix)
 			}
 		}
 
-		usrclass := filepath.Join(profileDir, "AppData", "Local", "Microsoft", "Windows", "UsrClass.dat")
-		if _, err := os.Stat(usrclass); err == nil {
-			fi, err := copyUserHive(usrclass, filepath.Join(userOutDir, "UsrClass.dat"))
-			if err != nil {
-				errors = append(errors, fmt.Sprintf("%s/UsrClass.dat: %v", username, err))
-				log.Debug(fmt.Sprintf("Failed to copy UsrClass.dat for %s: %v", username, err))
-			} else {
-				fi.Path = filepath.Join("users", username, "UsrClass.dat")
-				files = append(files, fi)
-				log.Debug(fmt.Sprintf("Collected UsrClass.dat for user: %s", username))
+		usrBase := filepath.Join(profileDir, "AppData", "Local", "Microsoft", "Windows", "UsrClass.dat")
+		for _, suffix := range hiveLogSuffixes {
+			src := usrBase + suffix
+			if _, err := os.Stat(src); err == nil {
+				pairs[src] = filepath.Join(userOutDir, "UsrClass.dat"+suffix)
 			}
 		}
 	}
 
-	return files, errors
-}
-
-func copyUserHive(src, dst string) (collector.FileInfo, error) {
-	fi, err := utils.SafeCopyFile(src, dst)
-	if err == nil {
-		return fi, nil
-	}
-	return utils.SafeCopyFileBackup(src, dst)
-}
-
-func saveHiveViaReg(ctx context.Context, hiveName, outputPath string) (collector.FileInfo, error) {
-	var regKey string
-	switch strings.ToUpper(hiveName) {
-	case "SYSTEM":
-		regKey = `HKLM\SYSTEM`
-	case "SOFTWARE":
-		regKey = `HKLM\SOFTWARE`
-	case "SAM":
-		regKey = `HKLM\SAM`
-	case "SECURITY":
-		regKey = `HKLM\SECURITY`
-	case "DEFAULT":
-		regKey = `HKU\.DEFAULT`
-	default:
-		return collector.FileInfo{}, fmt.Errorf("unknown system hive: %s", hiveName)
-	}
-
-	os.Remove(outputPath)
-	cmd := exec.CommandContext(ctx, "reg", "save", regKey, outputPath, "/y")
-	out, err := cmd.CombinedOutput()
+	files, err := acquisition.CopyFilesFromVolumeSnapshot(ctx, acquisition.VolumeOfPath(configDir), pairs)
 	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("reg save %s: %w\nOutput: %s", regKey, err, string(out))
+		return nil, err
 	}
 
-	hash, err := utils.HashFile(outputPath)
-	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("hash %s: %w", outputPath, err)
+	for i := range files {
+		name := filepath.Base(files[i].Path)
+		switch {
+		case strings.HasPrefix(strings.ToUpper(name), "NTUSER.DAT"), strings.HasPrefix(strings.ToUpper(name), "USRCLASS.DAT"):
+			// Keep destination basename; parent folder already groups by user.
+		default:
+			files[i].Path = name
+		}
 	}
-	stat, err := os.Stat(outputPath)
-	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("stat %s: %w", outputPath, err)
-	}
-	return collector.FileInfo{Path: filepath.Base(outputPath), SHA256: hash, Size: stat.Size()}, nil
+	return files, nil
 }

@@ -1,4 +1,4 @@
-﻿// Package cmd implements the Cobra CLI commands for FIR.
+// Package cmd implements the Cobra CLI commands for FIR.
 package cmd
 
 import (
@@ -7,13 +7,15 @@ import (
 	"time"
 
 	"github.com/Liuchijang/FIR/internal/cli"
-	"github.com/Liuchijang/FIR/internal/logging"
+	"github.com/Liuchijang/FIR/internal/console"
 	"github.com/Liuchijang/FIR/internal/output"
 	"github.com/Liuchijang/FIR/internal/utils"
 	"github.com/spf13/cobra"
 
+	_ "github.com/Liuchijang/FIR/internal/browser"
 	_ "github.com/Liuchijang/FIR/internal/eventlog"
 	_ "github.com/Liuchijang/FIR/internal/execution"
+	_ "github.com/Liuchijang/FIR/internal/live"
 	_ "github.com/Liuchijang/FIR/internal/memory"
 	_ "github.com/Liuchijang/FIR/internal/ntfs"
 	_ "github.com/Liuchijang/FIR/internal/registry"
@@ -45,6 +47,7 @@ Run without subcommands to enter interactive mode, or use 'fir collect' for flag
 }
 
 func init() {
+	cobra.MousetrapHelpText = ""
 	rootCmd.PersistentFlags().StringVarP(&outputDir, "output", "o", ".", "Base output directory for collected artifacts")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose/debug output")
 }
@@ -52,8 +55,8 @@ func init() {
 func Execute() error { return rootCmd.Execute() }
 
 func runInteractive() error {
-	log := logging.G()
-	log.Banner(output.Version)
+	console.EnsureInteractive()
+
 	collectors, err := cli.RunInteractiveMenu()
 	if err != nil {
 		return fmt.Errorf("interactive menu: %w", err)
@@ -68,7 +71,7 @@ func runInteractive() error {
 	if timeoutFlag == 0 {
 		timeoutFlag = 5 * time.Minute
 	}
-	return executeCollection(collectors)
+	return runInteractiveCollection(collectors)
 }
 
 func preflightChecks() error {

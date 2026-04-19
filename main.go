@@ -9,7 +9,13 @@ import (
 
 func main() {
 	console.Ensure()
+	exitCode := 0
 	if err := cmd.Execute(); err != nil {
-		os.Exit(1)
+		exitCode = 1
+	}
+
+	console.PauseBeforeExit()
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }

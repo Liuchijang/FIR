@@ -76,3 +76,8 @@ func sanitizeDirName(name string) string {
 	}
 	return result
 }
+
+// SanitizeDirNameForExport reuses FIR's directory-name normalization in other packages.
+func SanitizeDirNameForExport(name string) string {
+	return sanitizeDirName(name)
+}

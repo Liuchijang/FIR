@@ -1,9 +1,10 @@
-﻿package cmd
+package cmd
 
 import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,18 @@ var (
 	concurrencyFlag int
 )
 
+type collectionCallbacks struct {
+	OnOutputReady     func(string)
+	OnCollectorQueued func(int, collector.Collector)
+	OnCollectorStart  func(int, collector.Collector)
+	OnCollectorFinish func(int, collector.Result)
+}
+
+type collectionOptions struct {
+	SilentConsole bool
+	Callbacks     collectionCallbacks
+}
+
 var collectCmd = &cobra.Command{
 	Use:   "collect",
 	Short: "Collect forensic artifacts (flag-driven mode)",
@@ -32,10 +45,13 @@ Examples:
 
 Available artifact names:
   ram, mft, usnjrnl, secure_sds, registry, eventlog,
-  prefetch, amcache, wmi, srum
+  prefetch, amcache, wmi, srum, browser_chromium,
+  process_explorer, autoruns
 
 Category shortcuts:
   all       - All collectors
+  browser   - Chromium browser forensic artifacts
+  live      - Live process and autoruns forensic collection
   memory    - RAM acquisition
   ntfs      - MFT, USN Journal, Secure SDS
   registry  - Registry hives
@@ -68,56 +84,66 @@ func runCollect() error {
 
 // executeCollection is the core orchestration logic shared by interactive and flag modes.
 func executeCollection(collectors []collector.Collector) error {
+	_, err := executeCollectionWithOptions(collectors, collectionOptions{})
+	return err
+}
+
+func executeCollectionWithOptions(collectors []collector.Collector, opts collectionOptions) (output.SummaryReport, error) {
 	// Create output directory.
 	mgr, err := output.NewManager(outputDir)
 	if err != nil {
-		return fmt.Errorf("create output directory: %w", err)
+		return output.SummaryReport{}, fmt.Errorf("create output directory: %w", err)
+	}
+	if opts.Callbacks.OnOutputReady != nil {
+		opts.Callbacks.OnOutputReady(mgr.BaseDir())
 	}
 
-	// Initialize logging into the output directory.
-	logsDir, err := mgr.CategoryDir("logs")
-	if err != nil {
-		return fmt.Errorf("create logs directory: %w", err)
-	}
-	if err := logging.Init(logsDir, verbose); err != nil {
-		return fmt.Errorf("initialize logging: %w", err)
+	// Write collector.log at the session root beside metadata.json.
+	if err := logging.Init(mgr.BaseDir(), verbose); err != nil {
+		return output.SummaryReport{}, fmt.Errorf("initialize logging: %w", err)
 	}
 	defer logging.Close()
+	if opts.SilentConsole {
+		logging.SetConsoleOutput(false)
+		defer logging.SetConsoleOutput(true)
+	}
 
 	log := logging.G()
 	log.Info(fmt.Sprintf("Output directory: %s", mgr.BaseDir()))
 	log.Info(fmt.Sprintf("Collectors to run: %d", len(collectors)))
+	for idx, c := range collectors {
+		if opts.Callbacks.OnCollectorQueued != nil {
+			opts.Callbacks.OnCollectorQueued(idx, c)
+		}
+	}
 
 	startTime := time.Now()
-	results := runCollectors(collectors, mgr)
+	results := runCollectors(collectors, mgr, opts.Callbacks)
 	totalDuration := time.Since(startTime)
+	report := output.NewSummaryReport(mgr.BaseDir(), startTime, totalDuration, timeoutFlag, concurrencyFlag, results)
 
 	// Write metadata.
 	if err := output.WriteMetadata(mgr.BaseDir(), results, totalDuration); err != nil {
 		log.Error(fmt.Sprintf("Failed to write metadata: %v", err))
 	}
-
-	// Summary.
-	successCount := 0
-	failCount := 0
-	for _, r := range results {
-		if r.Success {
-			successCount++
-		} else {
-			failCount++
-		}
+	if err := output.WriteSummary(mgr.BaseDir(), report); err != nil {
+		log.Error(fmt.Sprintf("Failed to write summary: %v", err))
 	}
 
-	fmt.Fprintf(os.Stderr, "\n")
+	if !opts.SilentConsole {
+		fmt.Fprintf(os.Stderr, "\n")
+		fmt.Fprintln(os.Stderr, report.Render())
+	}
 	log.Info(fmt.Sprintf("Collection completed in %.1fs", totalDuration.Seconds()))
-	log.Success(fmt.Sprintf("Results: %d succeeded, %d failed", successCount, failCount))
+	log.Success(fmt.Sprintf("Results: %d succeeded, %d failed", report.SuccessCount, report.FailureCount))
 	log.Info(fmt.Sprintf("Output: %s", mgr.BaseDir()))
+	log.Info(fmt.Sprintf("Summary: %s", outputSummaryPath(mgr.BaseDir())))
 
-	return nil
+	return report, nil
 }
 
 // runCollectors executes collectors with concurrency limits and timeouts.
-func runCollectors(collectors []collector.Collector, mgr *output.Manager) []collector.Result {
+func runCollectors(collectors []collector.Collector, mgr *output.Manager, callbacks collectionCallbacks) []collector.Result {
 	log := logging.G()
 	results := make([]collector.Result, len(collectors))
 	sem := make(chan struct{}, concurrencyFlag)
@@ -132,6 +158,9 @@ func runCollectors(collectors []collector.Collector, mgr *output.Manager) []coll
 			sem <- struct{}{}        // Acquire semaphore.
 			defer func() { <-sem }() // Release semaphore.
 
+			if callbacks.OnCollectorStart != nil {
+				callbacks.OnCollectorStart(idx, col)
+			}
 			log.Progress(col.Name(), fmt.Sprintf("Starting %s collector", col.Name()))
 
 			ctx, cancel := context.WithTimeout(context.Background(), timeoutFlag)
@@ -160,6 +189,9 @@ func runCollectors(collectors []collector.Collector, mgr *output.Manager) []coll
 			mu.Lock()
 			results[idx] = result
 			mu.Unlock()
+			if callbacks.OnCollectorFinish != nil {
+				callbacks.OnCollectorFinish(idx, result)
+			}
 		}(i, c)
 	}
 
@@ -211,4 +243,8 @@ func resolveCollectors(artifactStr string) ([]collector.Collector, error) {
 	}
 
 	return result, nil
+}
+
+func outputSummaryPath(baseDir string) string {
+	return filepath.Join(baseDir, "summary.txt")
 }

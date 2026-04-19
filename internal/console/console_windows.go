@@ -1,37 +1,118 @@
-﻿//go:build windows
+//go:build windows
 
 package console
 
 import (
+	"fmt"
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 var (
-	modKernel32          = windows.NewLazySystemDLL("kernel32.dll")
-	procAllocConsole     = modKernel32.NewProc("AllocConsole")
-	procAttachConsole    = modKernel32.NewProc("AttachConsole")
-	procGetConsoleWindow = modKernel32.NewProc("GetConsoleWindow")
+	modKernel32                    = windows.NewLazySystemDLL("kernel32.dll")
+	procAllocConsole               = modKernel32.NewProc("AllocConsole")
+	procAttachConsole              = modKernel32.NewProc("AttachConsole")
+	procFlushConsoleInputBuffer    = modKernel32.NewProc("FlushConsoleInputBuffer")
+	procGetConsoleProcessList      = modKernel32.NewProc("GetConsoleProcessList")
+	procGetConsoleScreenBufferInfo = modKernel32.NewProc("GetConsoleScreenBufferInfo")
+	procGetConsoleWindow           = modKernel32.NewProc("GetConsoleWindow")
+	procReadConsoleInputW          = modKernel32.NewProc("ReadConsoleInputW")
+	procSetConsoleScreenBufferSize = modKernel32.NewProc("SetConsoleScreenBufferSize")
+	procSetConsoleCP               = modKernel32.NewProc("SetConsoleCP")
+	procSetConsoleOutputCP         = modKernel32.NewProc("SetConsoleOutputCP")
 )
 
 const attachParentProcess = ^uint32(0)
 
+const (
+	enableProcessedOutput           = 0x0001
+	enableVirtualTerminalProcessing = 0x0004
+	keyEventType                    = 0x0001
+	utf8CodePage                    = 65001
+)
+
+type inputRecord struct {
+	EventType uint16
+	_         uint16
+	Event     [16]byte
+}
+
+type keyEventRecord struct {
+	BKeyDown          int32
+	WRepeatCount      uint16
+	WVirtualKeyCode   uint16
+	WVirtualScanCode  uint16
+	UnicodeChar       uint16
+	DwControlKeyState uint32
+}
+
+type coord struct {
+	X int16
+	Y int16
+}
+
+type smallRect struct {
+	Left   int16
+	Top    int16
+	Right  int16
+	Bottom int16
+}
+
+type consoleScreenBufferInfo struct {
+	DwSize              coord
+	DwCursorPosition    coord
+	WAttributes         uint16
+	SrWindow            smallRect
+	DwMaximumWindowSize coord
+}
+
 // Ensure makes sure FIR has a usable console in both terminal and Explorer launches.
 func Ensure() {
 	if hasConsoleWindow() || hasUsableStdHandles() {
+		enableVirtualTerminal()
 		return
 	}
 
 	if attachParentConsole() {
 		rebindStandardStreams()
+		enableVirtualTerminal()
 		return
 	}
 
 	if allocConsole() {
 		rebindStandardStreams()
+		enableVirtualTerminal()
 		return
 	}
+}
+
+// EnsureInteractive guarantees the process has real console-backed stdin/stdout/stderr
+// before launching an interactive prompt. Explorer launches often provide placeholder
+// standard handles that are not attached to a console, which breaks interactive prompts.
+func EnsureInteractive() {
+	if hasConsoleWindow() && hasInteractiveConsoleHandles() {
+		return
+	}
+
+	if !hasConsoleWindow() && attachParentConsole() {
+		rebindStandardStreams()
+		if hasInteractiveConsoleHandles() {
+			return
+		}
+	}
+
+	if !hasConsoleWindow() && allocConsole() {
+		rebindStandardStreams()
+		return
+	}
+
+	if !hasInteractiveConsoleHandles() {
+		rebindStandardStreams()
+	}
+
+	enableVirtualTerminal()
 }
 
 func hasConsoleWindow() bool {
@@ -41,6 +122,12 @@ func hasConsoleWindow() bool {
 
 func hasUsableStdHandles() bool {
 	return isUsableStdHandle(windows.STD_OUTPUT_HANDLE) || isUsableStdHandle(windows.STD_ERROR_HANDLE)
+}
+
+func hasInteractiveConsoleHandles() bool {
+	return isConsoleHandle(windows.STD_INPUT_HANDLE) &&
+		isConsoleHandle(windows.STD_OUTPUT_HANDLE) &&
+		isConsoleHandle(windows.STD_ERROR_HANDLE)
 }
 
 func isUsableStdHandle(kind uint32) bool {
@@ -55,6 +142,16 @@ func isUsableStdHandle(kind uint32) bool {
 	}
 
 	return fileType != windows.FILE_TYPE_UNKNOWN
+}
+
+func isConsoleHandle(kind uint32) bool {
+	handle, err := windows.GetStdHandle(kind)
+	if err != nil || handle == 0 || handle == windows.InvalidHandle {
+		return false
+	}
+
+	var mode uint32
+	return windows.GetConsoleMode(handle, &mode) == nil
 }
 
 func attachParentConsole() bool {
@@ -80,4 +177,139 @@ func rebindStandardStreams() {
 		os.Stderr = errOut
 		_ = windows.SetStdHandle(windows.STD_ERROR_HANDLE, windows.Handle(errOut.Fd()))
 	}
+}
+
+func enableVirtualTerminal() {
+	enableUTF8Console()
+	enableVirtualTerminalForHandle(windows.STD_OUTPUT_HANDLE)
+	enableVirtualTerminalForHandle(windows.STD_ERROR_HANDLE)
+}
+
+func enableUTF8Console() {
+	procSetConsoleOutputCP.Call(uintptr(utf8CodePage))
+	procSetConsoleCP.Call(uintptr(utf8CodePage))
+}
+
+func enableVirtualTerminalForHandle(kind uint32) {
+	handle, err := windows.GetStdHandle(kind)
+	if err != nil || handle == 0 || handle == windows.InvalidHandle {
+		return
+	}
+
+	var mode uint32
+	if err := windows.GetConsoleMode(handle, &mode); err != nil {
+		return
+	}
+
+	mode |= enableProcessedOutput | enableVirtualTerminalProcessing
+	_ = windows.SetConsoleMode(handle, mode)
+}
+
+// PauseBeforeExit keeps an Explorer-launched console window open until the user acknowledges it.
+func PauseBeforeExit() {
+	if !shouldPauseBeforeExit() {
+		return
+	}
+
+	fmt.Fprint(os.Stderr, "\nPress any key to exit . . .")
+	waitForFreshConsoleKeypress()
+	fmt.Fprintln(os.Stderr)
+}
+
+func LikelyExplorerLaunch() bool {
+	return shouldPauseBeforeExit()
+}
+
+func SyncBufferToWindow() {
+	if !hasInteractiveConsoleHandles() {
+		return
+	}
+	syncBufferToWindowForHandle(windows.STD_OUTPUT_HANDLE)
+	syncBufferToWindowForHandle(windows.STD_ERROR_HANDLE)
+}
+
+func shouldPauseBeforeExit() bool {
+	if !hasConsoleWindow() || !hasInteractiveConsoleHandles() {
+		return false
+	}
+
+	processes := make([]uint32, 8)
+	r1, _, _ := procGetConsoleProcessList.Call(
+		uintptr(unsafe.Pointer(&processes[0])),
+		uintptr(len(processes)),
+	)
+	if r1 == 0 {
+		return false
+	}
+
+	// If FIR is the only process attached to this console, it was likely launched
+	// by Explorer / Right Click and should wait for user acknowledgement.
+	return r1 == 1
+}
+
+func waitForFreshConsoleKeypress() {
+	handle, err := windows.GetStdHandle(windows.STD_INPUT_HANDLE)
+	if err != nil || handle == 0 || handle == windows.InvalidHandle {
+		return
+	}
+
+	procFlushConsoleInputBuffer.Call(uintptr(handle))
+
+	records := make([]inputRecord, 1)
+	for {
+		var read uint32
+		r1, _, _ := procReadConsoleInputW.Call(
+			uintptr(handle),
+			uintptr(unsafe.Pointer(&records[0])),
+			1,
+			uintptr(unsafe.Pointer(&read)),
+		)
+		if r1 == 0 || read == 0 {
+			return
+		}
+
+		if records[0].EventType != keyEventType {
+			continue
+		}
+
+		keyEvent := (*keyEventRecord)(unsafe.Pointer(&records[0].Event[0]))
+		if keyEvent.BKeyDown != 0 {
+			return
+		}
+	}
+}
+
+func syncBufferToWindowForHandle(kind uint32) {
+	handle, err := windows.GetStdHandle(kind)
+	if err != nil || handle == 0 || handle == windows.InvalidHandle {
+		return
+	}
+
+	var info consoleScreenBufferInfo
+	r1, _, _ := procGetConsoleScreenBufferInfo.Call(
+		uintptr(handle),
+		uintptr(unsafe.Pointer(&info)),
+	)
+	if r1 == 0 {
+		return
+	}
+
+	windowWidth := info.SrWindow.Right - info.SrWindow.Left + 1
+	windowHeight := info.SrWindow.Bottom - info.SrWindow.Top + 1
+	if windowWidth <= 0 || windowHeight <= 0 {
+		return
+	}
+
+	if info.DwSize.X == windowWidth && info.DwSize.Y == windowHeight {
+		return
+	}
+
+	procSetConsoleScreenBufferSize.Call(
+		uintptr(handle),
+		packCoord(windowWidth, windowHeight),
+	)
+}
+
+func packCoord(x, y int16) uintptr {
+	return uintptr(uint32(uint16(x)) | (uint32(uint16(y)) << 16))
 }

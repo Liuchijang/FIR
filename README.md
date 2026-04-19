@@ -1,17 +1,17 @@
-# FIR — Freedom Incident Response
+# FIR - Freedom Incident Response
 
 A production-grade Windows DFIR (Digital Forensics & Incident Response) artifact collection tool written in Go. Designed for first-response triage scenarios with a focus on minimal system impact, forensic integrity, and extensibility.
 
 ## Features
 
-- **Dual CLI Modes**: Interactive menu-driven selection or flag-driven batch collection
-- **10 Built-in Collectors**: Memory, NTFS, Registry, Event Logs, Execution Artifacts, System Activity
+- **Dual CLI Modes**: Bubble Tea interactive flow or flag-driven batch collection
+- **Built-in Collectors**: Browser, Event Logs, Execution, Live Response, Memory, NTFS, Registry, and System artifacts
 - **Forensic Safety**: Read-only access, SHA-256 integrity hashing, no artifact modification
-- **Windows Privilege Handling**: Auto-detects admin status, enables SeBackupPrivilege/SeDebugPrivilege
+- **Windows Privilege Handling**: Auto-detects admin status, enables SeBackupPrivilege and SeDebugPrivilege
 - **Locked File Support**: VSS shadow copies, `reg save`, `esentutl` fallbacks for locked files
 - **Concurrent Collection**: Configurable parallelism with per-collector timeouts
-- **Structured Output**: Organized directory tree with JSON metadata and structured logs
-- **Extensible Architecture**: Add collectors by implementing a single interface — no core changes needed
+- **Structured Output**: Organized collection output with summary reports and structured logs
+- **Extensible Collectors**: Add collectors by implementing a single interface with minimal integration work
 
 ## Build
 
@@ -34,10 +34,12 @@ go build -ldflags "-s -w -X github.com/Liuchijang/FIR/internal/output.Version=1.
 .\fir.exe
 ```
 
-This launches a menu-driven interface where you can:
-- Browse collectors by category
-- Select by number, name, or category
-- Confirm before collection starts
+This launches a Bubble Tea interface where you can:
+- Browse and toggle collectors in a keyboard-driven menu
+- Show a spinner while Chromium profiles are being discovered
+- Watch collectors move through waiting, running, success, and failed states during execution
+
+After collection finishes, FIR prints a run summary table and writes the same report to `summary.txt`.
 
 ### Flag Mode
 
@@ -62,180 +64,55 @@ This launches a menu-driven interface where you can:
 
 | Name | Category | Description |
 |---|---|---|
-| `ram` | 🔴 Memory | Physical memory acquisition via winpmem |
-| `mft` | 🟠 NTFS | $MFT (Master File Table) via raw disk access |
-| `usnjrnl` | 🟠 NTFS | $UsnJrnl:$J (USN Change Journal) via FSCTL |
-| `secure_sds` | 🟠 NTFS | $Secure:$SDS (Security Descriptors) via VSS |
-| `registry` | 🔵 Registry | SYSTEM, SOFTWARE, SAM, SECURITY, NTUSER.DAT, UsrClass.dat |
-| `eventlog` | 🟢 Event Logs | All .evtx files with forensic priority ordering |
-| `prefetch` | 🟡 Execution | Windows Prefetch files (.pf) |
-| `amcache` | 🟡 Execution | Amcache.hve |
-| `wmi` | 🟣 System | WMI repository (OBJECTS.DATA, INDEX.BTR, MAPPING*.MAP) |
-| `srum` | 🟣 System | SRUM database (SRUDB.dat) |
+| `browser_chromium` | `browser` | Collects Chromium browser forensic artifacts from selected Chrome, Edge, Brave, or Vivaldi profiles |
+| `eventlog` | `eventlog` | Collects Windows Event Log files (`.evtx`) with forensic priority ordering |
+| `amcache` | `execution` | Collects `Amcache.hve` from `C:\Windows\AppCompat\Programs` |
+| `prefetch` | `execution` | Collects Windows Prefetch files (`.pf`) from `C:\Windows\Prefetch` |
+| `autoruns` | `live` | Collects live autoruns-style persistence data for services, Run keys, startup folders, and scheduled tasks into CSV |
+| `process_explorer` | `live` | Collects live process inventory, command lines, loaded DLL modules, and network connections into CSV |
+| `ram` | `memory` | Acquires physical memory using `winpmem` |
+| `mft` | `ntfs` | Collects the `$MFT` (Master File Table) via raw disk access |
+| `secure_sds` | `ntfs` | Collects the `$Secure:$SDS` stream via VSS snapshot access |
+| `usnjrnl` | `ntfs` | Collects the `$UsnJrnl:$J` USN Change Journal via FSCTL |
+| `registry` | `registry` | Collects SYSTEM, SOFTWARE, SAM, SECURITY, `NTUSER.DAT`, and `UsrClass.dat` hives |
+| `srum` | `system` | Collects the SRUM database (`SRUDB.dat`) |
+| `wmi` | `system` | Collects WMI repository files (`OBJECTS.DATA`, `INDEX.BTR`, `MAPPING*.MAP`) |
 
-**Category shortcuts**: Use `memory`, `ntfs`, `registry`, `eventlog`, `execution`, `system`, or `all`.
-
-## Output Structure
-
-```
-DESKTOP-ABC123_20260416_143210/
-├── memory/
-│   └── memory.raw
-├── ntfs/
-│   ├── $MFT
-│   ├── $UsnJrnl_J
-│   └── $Secure_SDS
-├── registry/
-│   ├── SYSTEM
-│   ├── SOFTWARE
-│   ├── SAM
-│   ├── SECURITY
-│   ├── DEFAULT
-│   └── users/
-│       ├── JohnDoe/
-│       │   ├── NTUSER.DAT
-│       │   └── UsrClass.dat
-│       └── Admin/
-│           ├── NTUSER.DAT
-│           └── UsrClass.dat
-├── eventlog/
-│   ├── Security.evtx
-│   ├── System.evtx
-│   ├── Application.evtx
-│   └── ... (all .evtx files)
-├── execution/
-│   ├── prefetch/
-│   │   ├── CHROME.EXE-ABC12345.pf
-│   │   └── ...
-│   └── Amcache.hve
-├── system/
-│   ├── wmi/
-│   │   ├── OBJECTS.DATA
-│   │   ├── INDEX.BTR
-│   │   └── MAPPING*.MAP
-│   └── SRUDB.dat
-├── logs/
-│   └── collector.log
-└── metadata.json
-```
-
-## metadata.json
-
-```json
-{
-  "hostname": "DESKTOP-ABC123",
-  "timestamp": "2026-04-16T14:32:10+07:00",
-  "timestamp_utc": "2026-04-16T07:32:10Z",
-  "os": "windows",
-  "architecture": "amd64",
-  "artifacts_collected": ["registry", "eventlog", "prefetch"],
-  "collector_version": "1.0.0",
-  "total_duration": "12.345s",
-  "results": [
-    {
-      "collector_name": "registry",
-      "category": "registry",
-      "files_collected": [
-        {"path": "SYSTEM", "sha256": "a1b2c3...", "size": 16777216}
-      ],
-      "duration_seconds": 3.21,
-      "success": true
-    }
-  ]
-}
-```
+**Category shortcuts**: Use `browser`, `eventlog`, `execution`, `live`, `memory`, `ntfs`, `registry`, `system`, or `all`.
 
 ## CLI Output Example
 
-```
-  |-----||   O    |----\\
-  |    --| |----| |   x  <|'
-  |__|--'  |____| |__|\\__/
-  Windows DFIR Artifact Collector  v1.0.0
+Interactive mode now shows a Bubble Tea screen for selection, live execution status, and a final summary report. A typical run looks like this:
 
-[+] Output directory: C:\triage\DESKTOP-ABC123_20260416_143210
-[+] Collectors to run: 3
-[+] Collecting: registry
-[✓] Done: registry (6 hives) ... (3.2s)
-[+] Collecting: eventlog
-[✓] Done: eventlog (12 files) ... (2.3s)
-[+] Collecting: prefetch
-[✓] Done: prefetch (45 files) ... (1.1s)
+```text
++--------------------------------------------------------------+
+|  |-----||   O    |----\\                                     |
+|  |    --| |----| |   x  <|'                                  |
+|  |__|--'  |____| |__|\\__/                                   |
+|  FIR v1.0.0                                                  |
+|  Freedom Incident Response                                   |
++--------------------------------------------------------------+
 
-[+] Collection completed in 6.6s
-[✓] Results: 3 succeeded, 0 failed
-[+] Output: C:\triage\DESKTOP-ABC123_20260416_143210
-```
+Collecting Artifacts
 
-## Architecture
+[OK] SUCCESS [eventlog] eventlog           files=397  size=323.9 MiB  duration=3.4s
+[OK] SUCCESS [execution] prefetch          files=271  size=7.4 MiB    duration=8s
+[-] FAILED  [memory] ram                   duration=32ms  error=winpmem not found
+| RUNNING   [live] process_explorer
 
-### Collector Interface
+Collection Summary
 
-All collectors implement this interface:
++------------+-------------------+----------+-------+-----------+----------+
+| Category   | Module            | Status   | Files | Size      | Duration |
++------------+-------------------+----------+-------+-----------+----------+
+| eventlog   | eventlog          | SUCCESS  | 397   | 323.9 MiB | 3.4s     |
+| execution  | prefetch          | SUCCESS  | 271   | 7.4 MiB   | 8s       |
+| memory     | ram               | FAILED   | 0     | 0 B       | 32ms     |
++------------+-------------------+----------+-------+-----------+----------+
 
-```go
-type Collector interface {
-    Name() string
-    Category() string
-    Description() string
-    Collect(ctx context.Context, outputDir string) error
-}
-```
-
-### Adding a New Collector
-
-1. Create a new file in the appropriate package (e.g., `internal/newcategory/mycollector.go`)
-2. Implement the `Collector` interface
-3. Self-register in `init()`:
-
-```go
-package newcategory
-
-import "github.com/Liuchijang/FIR/internal/collector"
-
-func init() {
-    collector.Register(&myCollector{})
-}
-
-type myCollector struct{}
-
-func (c *myCollector) Name() string        { return "mycollector" }
-func (c *myCollector) Category() string    { return "newcategory" }
-func (c *myCollector) Description() string { return "Collects something useful" }
-
-func (c *myCollector) Collect(ctx context.Context, outputDir string) error {
-    // Your collection logic here.
-    return nil
-}
-```
-
-4. Add a blank import in `cmd/root.go`:
-```go
-_ "github.com/Liuchijang/FIR/internal/newcategory"
-```
-
-**No changes to core orchestration logic required.**
-
-### Project Structure
-
-```
-├── main.go                         # Entry point
-├── cmd/
-│   ├── root.go                     # Root command, interactive mode, preflight
-│   └── collect.go                  # Flag-driven collection, orchestration
-├── internal/
-│   ├── collector/                  # Core interface + registry
-│   ├── cli/                        # Interactive menu
-│   ├── acquisition/                # Raw disk + VSS helpers
-│   ├── output/                     # Directory management + metadata
-│   ├── logging/                    # Dual-output logger
-│   ├── utils/                      # Privileges, file copy, hashing
-│   ├── memory/                     # RAM collector
-│   ├── ntfs/                       # MFT, USN Journal, Secure SDS
-│   ├── registry/                   # Registry hive collector
-│   ├── eventlog/                   # Event log collector
-│   ├── execution/                  # Prefetch, Amcache
-│   └── system/                     # WMI, SRUM
+Failure Details
+! [memory] ram duration=32ms
+  error: winpmem not found: winpmem executable not found
 ```
 
 ## RAM Acquisition (winpmem)
@@ -250,7 +127,7 @@ If winpmem is not found, the RAM collector will fail gracefully with a clear err
 ## Requirements
 
 - **OS**: Windows 10/11, Server 2016+
-- **Privileges**: Administrator (right-click → Run as Administrator)
+- **Privileges**: Administrator (right-click -> Run as Administrator)
 - **Go**: 1.21+ (for building from source)
 
 ## License

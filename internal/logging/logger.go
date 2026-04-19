@@ -1,4 +1,4 @@
-﻿// Package logging provides a dual-output logger for FIR.
+// Package logging provides a dual-output logger for FIR.
 // Console output shows only progress/status messages with color.
 // File output captures full structured logs for forensic audit trail.
 package logging
@@ -24,11 +24,12 @@ const (
 )
 
 type Logger struct {
-	mu        sync.Mutex
-	fileLog   *slog.Logger
-	logFile   *os.File
-	verbose   bool
-	startTime time.Time
+	mu            sync.Mutex
+	fileLog       *slog.Logger
+	logFile       *os.File
+	verbose       bool
+	startTime     time.Time
+	consoleOutput bool
 }
 
 var (
@@ -60,7 +61,13 @@ func newLogger(logDir string, verbose bool) (*Logger, error) {
 		return nil, fmt.Errorf("open log file: %w", err)
 	}
 	fileHandler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})
-	return &Logger{fileLog: slog.New(fileHandler), logFile: f, verbose: verbose, startTime: time.Now()}, nil
+	return &Logger{
+		fileLog:       slog.New(fileHandler),
+		logFile:       f,
+		verbose:       verbose,
+		startTime:     time.Now(),
+		consoleOutput: true,
+	}, nil
 }
 
 func Close() {
@@ -71,15 +78,31 @@ func Close() {
 
 func G() *Logger {
 	if global == nil {
-		return &Logger{fileLog: slog.New(slog.NewJSONHandler(io.Discard, nil)), startTime: time.Now()}
+		return &Logger{
+			fileLog:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+			startTime:     time.Now(),
+			consoleOutput: true,
+		}
 	}
 	return global
+}
+
+func SetConsoleOutput(enabled bool) {
+	if global == nil {
+		return
+	}
+	global.mu.Lock()
+	defer global.mu.Unlock()
+	global.consoleOutput = enabled
 }
 
 func (l *Logger) Info(msg string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.fileLog.Info(msg, args...)
+	if !l.consoleOutput {
+		return
+	}
 	fmt.Fprintf(os.Stderr, "%s[+]%s %s\n", colorGreen, colorReset, msg)
 }
 
@@ -87,6 +110,9 @@ func (l *Logger) Success(msg string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.fileLog.Info(msg, args...)
+	if !l.consoleOutput {
+		return
+	}
 	fmt.Fprintf(os.Stderr, "%s[OK]%s %s\n", colorGreen, colorReset, msg)
 }
 
@@ -94,6 +120,9 @@ func (l *Logger) Warn(msg string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.fileLog.Warn(msg, args...)
+	if !l.consoleOutput {
+		return
+	}
 	fmt.Fprintf(os.Stderr, "%s[!]%s %s\n", colorYellow, colorReset, msg)
 }
 
@@ -101,6 +130,9 @@ func (l *Logger) Error(msg string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.fileLog.Error(msg, args...)
+	if !l.consoleOutput {
+		return
+	}
 	fmt.Fprintf(os.Stderr, "%s[-]%s %s\n", colorRed, colorReset, msg)
 }
 
@@ -108,7 +140,7 @@ func (l *Logger) Debug(msg string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.fileLog.Debug(msg, args...)
-	if l.verbose {
+	if l.verbose && l.consoleOutput {
 		fmt.Fprintf(os.Stderr, "%s[D]%s %s\n", colorGray, colorReset, msg)
 	}
 }
@@ -117,6 +149,9 @@ func (l *Logger) Progress(collector, msg string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.fileLog.Info(msg, "collector", collector)
+	if !l.consoleOutput {
+		return
+	}
 	fmt.Fprintf(os.Stderr, "%s[+]%s %sCollecting:%s %s\n", colorCyan, colorReset, colorBold, colorReset, collector)
 }
 
@@ -125,6 +160,9 @@ func (l *Logger) Done(collector string, count int, label string, elapsed time.Du
 	defer l.mu.Unlock()
 	msg := fmt.Sprintf("Done: %s (%d %s) ... (%.1fs)", collector, count, label, elapsed.Seconds())
 	l.fileLog.Info(msg, "collector", collector, "count", count, "elapsed_s", elapsed.Seconds())
+	if !l.consoleOutput {
+		return
+	}
 	fmt.Fprintf(os.Stderr, "%s[OK]%s Done: %s%s%s (%d %s) %s... (%.1fs)%s\n", colorGreen, colorReset, colorBold, collector, colorReset, count, label, colorGray, elapsed.Seconds(), colorReset)
 }
 
@@ -133,6 +171,9 @@ func (l *Logger) Failed(collector string, err error) {
 	defer l.mu.Unlock()
 	msg := fmt.Sprintf("Failed: %s: %v", collector, err)
 	l.fileLog.Error(msg, "collector", collector, "error", err.Error())
+	if !l.consoleOutput {
+		return
+	}
 	fmt.Fprintf(os.Stderr, "%s[-]%s Failed: %s%s%s: %v\n", colorRed, colorReset, colorBold, collector, colorReset, err)
 }
 
