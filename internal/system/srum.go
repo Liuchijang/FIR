@@ -1,10 +1,9 @@
-﻿package system
+package system
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/Liuchijang/FIR/internal/collector"
@@ -37,30 +36,8 @@ func (c *srumCollector) Collect(ctx context.Context, outputDir string) ([]collec
 		fi, err = utils.SafeCopyFileBackup(srumPath, dst)
 		if err != nil {
 			log.Debug(fmt.Sprintf("Backup-semantics copy of SRUDB.dat failed: %v", err))
-			fi, err = copySRUMViaEsentutl(ctx, srumPath, dst)
-			if err != nil {
-				return nil, fmt.Errorf("collect SRUDB.dat: %w", err)
-			}
+			return nil, fmt.Errorf("collect SRUDB.dat via native Windows copy: %w", err)
 		}
 	}
 	return []collector.FileInfo{fi}, nil
-}
-
-func copySRUMViaEsentutl(ctx context.Context, src, dst string) (collector.FileInfo, error) {
-	log := logging.G()
-	cmd := exec.CommandContext(ctx, "esentutl.exe", "/y", src, "/vss", "/d", dst)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Debug(fmt.Sprintf("esentutl failed: %v, output: %s", err, string(out)))
-		return collector.FileInfo{}, fmt.Errorf("esentutl copy SRUDB.dat: %w", err)
-	}
-	hash, err := utils.HashFile(dst)
-	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("hash SRUDB.dat: %w", err)
-	}
-	stat, err := os.Stat(dst)
-	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("stat SRUDB.dat: %w", err)
-	}
-	return collector.FileInfo{Path: "SRUDB.dat", SHA256: hash, Size: stat.Size()}, nil
 }

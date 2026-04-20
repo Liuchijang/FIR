@@ -86,24 +86,14 @@ func (r SummaryReport) Render() string {
 
 	tableRows := make([][]string, 0, len(r.Results))
 	for _, result := range r.Results {
-		status := "FAILED"
-		if result.Success {
-			status = "SUCCESS"
-		}
-
-		errorText := "-"
-		if result.Error != "" {
-			errorText = sanitizeCell(result.Error)
-		}
-
 		tableRows = append(tableRows, []string{
 			result.Category,
 			result.CollectorName,
-			status,
+			resultStatus(result),
 			fmt.Sprintf("%d", len(result.FilesCollected)),
 			formatBytes(totalSize(result.FilesCollected)),
 			formatDuration(result.Duration),
-			errorText,
+			resultErrorBrief(result, 48),
 		})
 	}
 
@@ -111,12 +101,28 @@ func (r SummaryReport) Render() string {
 	b.WriteString("Collection Summary\n")
 	b.WriteString(strings.Repeat("=", 18))
 	b.WriteString("\n\n")
-	b.WriteString(renderTable([]string{"Field", "Value"}, infoRows))
+	b.WriteString(renderFixedWidthTable(
+		[]string{"Field", "Value"},
+		[]int{23, 33},
+		infoRows,
+	))
 	b.WriteString("\n\n")
-	b.WriteString(renderTable(
+	b.WriteString(renderFixedWidthTable(
 		[]string{"Category", "Module", "Status", "Files", "Size", "Duration", "Error"},
+		[]int{10, 16, 8, 5, 10, 8, 48},
 		tableRows,
 	))
+	failed := r.FailedResults()
+	if len(failed) > 0 {
+		b.WriteString("\n\nFailure Details\n")
+		b.WriteString(strings.Repeat("-", len("Failure Details")))
+		b.WriteString("\n")
+		for _, result := range failed {
+			b.WriteString(fmt.Sprintf("! [%s] %s duration=%s\n", result.Category, result.CollectorName, formatDuration(result.Duration)))
+			b.WriteString(wrapText("error: "+sanitizeCell(result.Error), 118, "  "))
+			b.WriteString("\n")
+		}
+	}
 	b.WriteString("\n")
 
 	return b.String()
@@ -331,6 +337,13 @@ func resultError(result collector.Result) string {
 		return "-"
 	}
 	return sanitizeCell(result.Error)
+}
+
+func resultErrorBrief(result collector.Result, width int) string {
+	if result.Error == "" {
+		return "-"
+	}
+	return trimToWidth(sanitizeCell(result.Error), width)
 }
 
 func renderFixedWidthTable(headers []string, widths []int, rows [][]string) string {

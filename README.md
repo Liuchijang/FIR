@@ -7,8 +7,8 @@ A production-grade Windows DFIR (Digital Forensics & Incident Response) artifact
 - **Dual CLI Modes**: Bubble Tea interactive flow or flag-driven batch collection
 - **Built-in Collectors**: Browser, Event Logs, Execution, Live Response, Memory, NTFS, Registry, and System artifacts
 - **Forensic Safety**: Read-only access, SHA-256 integrity hashing, no artifact modification
-- **Windows Privilege Handling**: Auto-detects admin status, enables SeBackupPrivilege and SeDebugPrivilege
-- **Locked File Support**: VSS shadow copies, `reg save`, `esentutl` fallbacks for locked files
+- **Windows Privilege Handling**: Auto-detects admin status and enables backup, restore, security, and debug privileges when available
+- **Native Windows Collection**: Uses backup semantics, registry hive save APIs, and raw NTFS access where needed
 - **Concurrent Collection**: Configurable parallelism with per-collector timeouts
 - **Structured Output**: Organized collection output with summary reports and structured logs
 - **Extensible Collectors**: Add collectors by implementing a single interface with minimal integration work
@@ -66,16 +66,16 @@ After collection finishes, FIR prints a run summary table and writes the same re
 |---|---|---|
 | `browser_chromium` | `browser` | Collects Chromium browser forensic artifacts from selected Chrome, Edge, Brave, or Vivaldi profiles |
 | `eventlog` | `eventlog` | Collects Windows Event Log files (`.evtx`) with forensic priority ordering |
-| `amcache` | `execution` | Collects `Amcache.hve` from `C:\Windows\AppCompat\Programs` |
+| `amcache` | `execution` | Collects `Amcache.hve` from `C:\Windows\AppCompat\Programs` via native file access with raw-volume fallback |
 | `prefetch` | `execution` | Collects Windows Prefetch files (`.pf`) from `C:\Windows\Prefetch` |
 | `autoruns` | `live` | Collects live autoruns-style persistence data for services, Run keys, startup folders, and scheduled tasks into CSV |
 | `process_explorer` | `live` | Collects live process inventory, command lines, loaded DLL modules, and network connections into CSV |
 | `ram` | `memory` | Acquires physical memory using `winpmem` |
 | `mft` | `ntfs` | Collects the `$MFT` (Master File Table) via raw disk access |
-| `secure_sds` | `ntfs` | Collects the `$Secure:$SDS` stream via VSS snapshot access |
+| `secure_sds` | `ntfs` | Best-effort collection of the `$Secure:$SDS` stream via raw NTFS record parsing |
 | `usnjrnl` | `ntfs` | Collects the `$UsnJrnl:$J` USN Change Journal via FSCTL |
-| `registry` | `registry` | Collects SYSTEM, SOFTWARE, SAM, SECURITY, `NTUSER.DAT`, and `UsrClass.dat` hives |
-| `srum` | `system` | Collects the SRUM database (`SRUDB.dat`) |
+| `registry` | `registry` | Collects SYSTEM, SOFTWARE, SAM, SECURITY, `DEFAULT`, `NTUSER.DAT`, and `UsrClass.dat` hives via backup semantics with hive-save fallback |
+| `srum` | `system` | Collects the SRUM database (`SRUDB.dat`) via native Windows file access |
 | `wmi` | `system` | Collects WMI repository files (`OBJECTS.DATA`, `INDEX.BTR`, `MAPPING*.MAP`) |
 
 **Category shortcuts**: Use `browser`, `eventlog`, `execution`, `live`, `memory`, `ntfs`, `registry`, `system`, or `all`.

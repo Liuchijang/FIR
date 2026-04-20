@@ -1,4 +1,4 @@
-﻿// Package utils provides Windows-specific utilities for FIR.
+// Package utils provides Windows-specific utilities for FIR.
 package utils
 
 import (
@@ -71,15 +71,21 @@ func EnablePrivilege(name string) error {
 	if err != nil {
 		return fmt.Errorf("AdjustTokenPrivileges(%s): %w", name, err)
 	}
+	if lastErr := windows.GetLastError(); lastErr == windows.ERROR_NOT_ALL_ASSIGNED {
+		return fmt.Errorf("AdjustTokenPrivileges(%s): %w", name, lastErr)
+	}
 
 	return nil
 }
 
 // EnableForensicPrivileges enables the standard DFIR privileges:
-// SeBackupPrivilege (bypass ACLs for file reads) and SeDebugPrivilege (process memory access).
+// SeBackupPrivilege/SeRestorePrivilege (backup APIs and hive save),
+// SeSecurityPrivilege (SACL/system objects), and SeDebugPrivilege.
 func EnableForensicPrivileges() []error {
 	privs := []string{
 		"SeBackupPrivilege",
+		"SeRestorePrivilege",
+		"SeSecurityPrivilege",
 		"SeDebugPrivilege",
 	}
 

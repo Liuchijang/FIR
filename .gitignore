@@ -4,52 +4,39 @@
 *.dll
 *.so
 *.dylib
-fir
+*.go.[0-9]*
+*.test
 
-# Test output directories
+# Runtime output
 DESKTOP-*
 test_output/
 logs/
+_collector_verify/
+_collector_verify_new/
+_summary_verify/
+_registry_verify/
+_registry_verify2/
+DESKTOP-INA4OT9_*/
 
 # IDE / Editor
 .vscode/
 .idea/
 *.swp
 *.swo
+.claude/
+.code-review-graph/
+.gocache/
+.gomodcache/
+.cursorrules
+.opencode.json
+.mcp.json
+AGENTS.md
+CLAUDE.md
+GEMINI.md
 
 # Go workspaces
-go.work
-go.work.sum
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Test binary, built with `go test -c`
-*.test
-
-# Go workspace file
 go.work
 go.work.sum
 
 # env file
 .env
-
-# Editor/IDE
-# .idea/
-# .vscode/
-
-# Code Review Graph
-.code-review-graph/
-.claude/
-AGENTS.md
-CLAUDE.md
-GEMINI.md
-.cursorrules
-.opencode.json
-.mcp.json

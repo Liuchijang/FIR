@@ -1,4 +1,4 @@
-﻿package ntfs
+package ntfs
 
 import (
 	"context"
@@ -19,7 +19,7 @@ type secureCollector struct{}
 func (c *secureCollector) Name() string     { return "secure_sds" }
 func (c *secureCollector) Category() string { return "ntfs" }
 func (c *secureCollector) Description() string {
-	return "Collects the $Secure:$SDS (Security Descriptor Stream) via VSS snapshot access"
+	return "Collects the $Secure:$SDS stream via direct NTFS metafile access"
 }
 
 func (c *secureCollector) Collect(ctx context.Context, outputDir string) ([]collector.FileInfo, error) {
@@ -30,20 +30,27 @@ func (c *secureCollector) Collect(ctx context.Context, outputDir string) ([]coll
 	}
 
 	outputPath := filepath.Join(outDir, "$Secure_SDS")
-	sc, cleanup, err := acquisition.CreateShadowCopy(ctx, `C:\`)
+	vol, err := acquisition.OpenRawVolume("C")
 	if err != nil {
-		log.Debug(fmt.Sprintf("VSS shadow copy creation failed: %v", err))
-		return nil, fmt.Errorf("$Secure:$SDS requires a working snapshot provider: %w", err)
+		return nil, fmt.Errorf("open raw volume: %w", err)
 	}
-	defer cleanup()
+	defer vol.Close()
 
-	securePath := sc.ShadowPath(`$Secure`)
-	fi, err := utils.SafeCopyFile(securePath, outputPath)
+	volData, err := vol.GetNTFSVolumeData()
 	if err != nil {
-		log.Warn("$Secure:$SDS collection skipped: metafile is not directly accessible from the snapshot path")
-		return nil, fmt.Errorf("$Secure:$SDS not accessible via snapshot path: %w", err)
+		return nil, fmt.Errorf("get NTFS volume data: %w", err)
 	}
 
-	log.Debug(fmt.Sprintf("$Secure:$SDS collected: %d bytes, SHA256: %s", fi.Size, fi.SHA256))
-	return []collector.FileInfo{fi}, nil
+	written, err := acquisition.CopyNamedDataStreamFromMFTRecord(vol, volData, 9, "$SDS", outputPath)
+	if err != nil {
+		log.Debug(fmt.Sprintf("Raw $Secure:$SDS extraction failed: %v", err))
+		return nil, fmt.Errorf("$Secure:$SDS raw NTFS extraction failed: %w", err)
+	}
+
+	hash, err := utils.HashFile(outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("hash $Secure:$SDS: %w", err)
+	}
+	log.Debug(fmt.Sprintf("$Secure:$SDS collected via raw NTFS record 9: %d bytes, SHA256: %s", written, hash))
+	return []collector.FileInfo{{Path: "$Secure_SDS", SHA256: hash, Size: written}}, nil
 }

@@ -1,4 +1,4 @@
-﻿package utils
+package utils
 
 import (
 	"crypto/sha256"
@@ -55,10 +55,6 @@ func SafeCopyFileBackup(src, dst string) (collector.FileInfo, error) {
 		return collector.FileInfo{}, fmt.Errorf("create file wrapper for %s", src)
 	}
 	defer srcFile.Close()
-
-	if _, err := srcFile.Stat(); err != nil {
-		return collector.FileInfo{}, fmt.Errorf("stat source %s: %w", src, err)
-	}
 
 	return copyToDestination(srcFile, dst)
 }
