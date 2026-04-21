@@ -51,7 +51,7 @@ Available artifact names:
 Category shortcuts:
   all       - All modules
   browser   - Chromium browser forensic artifacts
-  live      - Live process and autoruns forensic collection
+  live      - Live process and autoruns triage analysis
   memory    - RAM acquisition
   ntfs      - MFT, USN Journal, Secure SDS
   registry  - Registry hives

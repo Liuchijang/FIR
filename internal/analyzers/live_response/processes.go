@@ -4,25 +4,25 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/Liuchijang/FIR/internal/module"
 )
 
-func init() { module.Register(&processExplorerCollector{}) }
+func init() { module.Register(&processExplorerAnalyzer{}) }
 
-type processExplorerCollector struct{}
+type processExplorerAnalyzer struct{}
 
-func (c *processExplorerCollector) Name() string     { return "process_explorer" }
-func (c *processExplorerCollector) Category() string { return "live" }
-func (c *processExplorerCollector) Description() string {
-	return "Collects live process inventory, command lines, loaded DLL modules, and network connections into CSV"
+func (a *processExplorerAnalyzer) Name() string     { return "process_explorer" }
+func (a *processExplorerAnalyzer) Category() string { return "live" }
+func (a *processExplorerAnalyzer) Mode() string     { return module.ModeAnalyzer }
+func (a *processExplorerAnalyzer) Description() string {
+	return "Generates live process, module, and network triage CSV from the running system"
 }
 
-func (c *processExplorerCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := filepath.Join(outputDir, "live", "process_explorer")
+func (a *processExplorerAnalyzer) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+	outDir := module.ModuleDir(outputDir, a)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create process explorer output dir: %w", err)
+		return nil, fmt.Errorf("create process explorer analyzer output dir: %w", err)
 	}
 
 	script := `
@@ -181,7 +181,7 @@ $connectionRows | Sort-Object Protocol, ProcessId, LocalAddress, LocalPort, Remo
 `
 
 	if err := runPowerShell(ctx, script); err != nil {
-		return nil, fmt.Errorf("collect live process explorer data: %w", err)
+		return nil, fmt.Errorf("analyze live process data: %w", err)
 	}
 
 	return collectGeneratedCSVs(outDir)

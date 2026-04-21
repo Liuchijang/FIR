@@ -4,25 +4,25 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/Liuchijang/FIR/internal/module"
 )
 
-func init() { module.Register(&autorunsCollector{}) }
+func init() { module.Register(&autorunsAnalyzer{}) }
 
-type autorunsCollector struct{}
+type autorunsAnalyzer struct{}
 
-func (c *autorunsCollector) Name() string     { return "autoruns" }
-func (c *autorunsCollector) Category() string { return "live" }
-func (c *autorunsCollector) Description() string {
-	return "Collects live autoruns-style persistence data for services, Run keys, startup folders, and scheduled tasks into CSV"
+func (a *autorunsAnalyzer) Name() string     { return "autoruns" }
+func (a *autorunsAnalyzer) Category() string { return "live" }
+func (a *autorunsAnalyzer) Mode() string     { return module.ModeAnalyzer }
+func (a *autorunsAnalyzer) Description() string {
+	return "Generates live autoruns-style triage CSV for services, Run keys, startup folders, and scheduled tasks"
 }
 
-func (c *autorunsCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := filepath.Join(outputDir, "live", "autoruns")
+func (a *autorunsAnalyzer) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+	outDir := module.ModuleDir(outputDir, a)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create autoruns output dir: %w", err)
+		return nil, fmt.Errorf("create autoruns analyzer output dir: %w", err)
 	}
 
 	script := `
@@ -126,7 +126,7 @@ $startupRows | Sort-Object Scope, Name | Export-Csv -Path $startupCsv -NoTypeInf
 `
 
 	if err := runPowerShell(ctx, script); err != nil {
-		return nil, fmt.Errorf("collect live autoruns data: %w", err)
+		return nil, fmt.Errorf("analyze live autoruns data: %w", err)
 	}
 
 	return collectGeneratedCSVs(outDir)

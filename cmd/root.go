@@ -13,10 +13,10 @@ import (
 	"github.com/spf13/cobra"
 
 	_ "github.com/Liuchijang/FIR/internal/analyzers"
+	_ "github.com/Liuchijang/FIR/internal/analyzers/live_response"
 	_ "github.com/Liuchijang/FIR/internal/collectors/browser"
 	_ "github.com/Liuchijang/FIR/internal/collectors/eventlog"
 	_ "github.com/Liuchijang/FIR/internal/collectors/execution"
-	_ "github.com/Liuchijang/FIR/internal/collectors/live_response"
 	_ "github.com/Liuchijang/FIR/internal/collectors/memory"
 	_ "github.com/Liuchijang/FIR/internal/collectors/ntfs"
 	_ "github.com/Liuchijang/FIR/internal/collectors/registry"

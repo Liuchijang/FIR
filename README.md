@@ -68,8 +68,8 @@ After collection finishes, FIR prints a run summary table and writes the same re
 | `eventlog` | `eventlog` | Collects Windows Event Log files (`.evtx`) with forensic priority ordering |
 | `amcache` | `execution` | Collects `Amcache.hve` from `C:\Windows\AppCompat\Programs` via native file access with raw-volume fallback |
 | `prefetch` | `execution` | Collects Windows Prefetch files (`.pf`) from `C:\Windows\Prefetch` |
-| `autoruns` | `live` | Collects live autoruns-style persistence data for services, Run keys, startup folders, and scheduled tasks into CSV |
-| `process_explorer` | `live` | Collects live process inventory, command lines, loaded DLL modules, and network connections into CSV |
+| `autoruns` | `live` | Generates live autoruns-style triage CSV for services, Run keys, startup folders, and scheduled tasks |
+| `process_explorer` | `live` | Generates live process, module, and network triage CSV from the running system |
 | `ram` | `memory` | Acquires physical memory using `winpmem` |
 | `mft` | `ntfs` | Collects the `$MFT` (Master File Table) via raw disk access |
 | `secure_sds` | `ntfs` | Best-effort collection of the `$Secure:$SDS` stream via raw NTFS record parsing |
