@@ -12,10 +12,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 
-	"github.com/Liuchijang/FIR/internal/collector"
 	"github.com/Liuchijang/FIR/internal/console"
+	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/output"
-	"github.com/Liuchijang/FIR/internal/ui"
+	"github.com/Liuchijang/FIR/internal/tui"
 )
 
 type collectorStatus string
@@ -31,7 +31,7 @@ type progressRow struct {
 	name     string
 	category string
 	status   collectorStatus
-	result   *collector.Result
+	result   *module.Result
 }
 
 type outputReadyMsg struct {
@@ -44,7 +44,7 @@ type collectorStartedMsg struct {
 
 type collectorFinishedMsg struct {
 	index  int
-	result collector.Result
+	result module.Result
 }
 
 type collectionFinishedMsg struct {
@@ -62,7 +62,7 @@ type collectionProgressModel struct {
 	viewport viewport.Model
 	updates  chan tea.Msg
 
-	collectors  []collector.Collector
+	collectors  []module.Module
 	rows        []progressRow
 	outputDir   string
 	report      *output.SummaryReport
@@ -78,7 +78,7 @@ var safePinkSpinnerCmd = spinner.Spinner{
 	FPS:    time.Second / 10,
 }
 
-func runInteractiveCollection(collectors []collector.Collector) error {
+func runInteractiveCollection(collectors []module.Module) error {
 	updates := make(chan tea.Msg)
 	console.SyncBufferToWindow()
 	model := newCollectionProgressModel(collectors, updates)
@@ -98,7 +98,7 @@ func runInteractiveCollection(collectors []collector.Collector) error {
 	return nil
 }
 
-func newCollectionProgressModel(collectors []collector.Collector, updates chan tea.Msg) collectionProgressModel {
+func newCollectionProgressModel(collectors []module.Module, updates chan tea.Msg) collectionProgressModel {
 	spin := spinner.New()
 	if console.LikelyExplorerLaunch() {
 		spin.Spinner = safePinkSpinnerCmd
@@ -277,7 +277,7 @@ func (m collectionProgressModel) headerView() string {
 }
 
 func (m collectionProgressModel) bannerView(width int) string {
-	content := ui.BannerContent{
+	content := tui.BannerContent{
 		Version:  output.Version,
 		Subtitle: "Interactive collection runner",
 	}
@@ -313,7 +313,7 @@ func (m collectionProgressModel) bannerView(width int) string {
 		}
 	}
 
-	return ui.RenderAppBanner(width, content)
+	return tui.RenderAppBanner(width, content)
 }
 
 func (m collectionProgressModel) renderRunningContent(width int) string {
@@ -412,7 +412,7 @@ func (m collectionProgressModel) statusLine() string {
 	return strings.Join(parts, "  |  ")
 }
 
-func startCollectionCmd(collectors []collector.Collector, updates chan<- tea.Msg) tea.Cmd {
+func startCollectionCmd(collectors []module.Module, updates chan<- tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
 			report, err := executeCollectionWithOptions(collectors, collectionOptions{
@@ -421,10 +421,10 @@ func startCollectionCmd(collectors []collector.Collector, updates chan<- tea.Msg
 					OnOutputReady: func(path string) {
 						updates <- outputReadyMsg{path: path}
 					},
-					OnCollectorStart: func(index int, _ collector.Collector) {
+					OnModuleStart: func(index int, _ module.Module) {
 						updates <- collectorStartedMsg{index: index}
 					},
-					OnCollectorFinish: func(index int, result collector.Result) {
+					OnModuleFinish: func(index int, result module.Result) {
 						updates <- collectorFinishedMsg{index: index, result: result}
 					},
 				},
@@ -538,7 +538,7 @@ func maxCmd(a, b int) int {
 	return b
 }
 
-func totalSizeCmd(files []collector.FileInfo) int64 {
+func totalSizeCmd(files []module.FileInfo) int64 {
 	var total int64
 	for _, file := range files {
 		total += file.Size

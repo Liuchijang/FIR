@@ -8,32 +8,32 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Liuchijang/FIR/internal/collector"
+	"github.com/Liuchijang/FIR/internal/module"
 	"golang.org/x/sys/windows"
 )
 
 const copyBufferSize = 64 * 1024
 
 // SafeCopyFile copies src to dst while simultaneously computing the SHA-256 hash.
-func SafeCopyFile(src, dst string) (collector.FileInfo, error) {
+func SafeCopyFile(src, dst string) (module.FileInfo, error) {
 	srcFile, err := os.Open(src)
 	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("open source %s: %w", src, err)
+		return module.FileInfo{}, fmt.Errorf("open source %s: %w", src, err)
 	}
 	defer srcFile.Close()
 
 	if _, err := srcFile.Stat(); err != nil {
-		return collector.FileInfo{}, fmt.Errorf("stat source %s: %w", src, err)
+		return module.FileInfo{}, fmt.Errorf("stat source %s: %w", src, err)
 	}
 
 	return copyToDestination(srcFile, dst)
 }
 
 // SafeCopyFileBackup copies a file using backup semantics so SeBackupPrivilege can help with locked files.
-func SafeCopyFileBackup(src, dst string) (collector.FileInfo, error) {
+func SafeCopyFileBackup(src, dst string) (module.FileInfo, error) {
 	srcPtr, err := windows.UTF16PtrFromString(src)
 	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("utf16 source %s: %w", src, err)
+		return module.FileInfo{}, fmt.Errorf("utf16 source %s: %w", src, err)
 	}
 
 	handle, err := windows.CreateFile(
@@ -46,27 +46,27 @@ func SafeCopyFileBackup(src, dst string) (collector.FileInfo, error) {
 		0,
 	)
 	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("open source %s with backup semantics: %w", src, err)
+		return module.FileInfo{}, fmt.Errorf("open source %s with backup semantics: %w", src, err)
 	}
 	defer windows.CloseHandle(handle)
 
 	srcFile := os.NewFile(uintptr(handle), src)
 	if srcFile == nil {
-		return collector.FileInfo{}, fmt.Errorf("create file wrapper for %s", src)
+		return module.FileInfo{}, fmt.Errorf("create file wrapper for %s", src)
 	}
 	defer srcFile.Close()
 
 	return copyToDestination(srcFile, dst)
 }
 
-func copyToDestination(srcFile *os.File, dst string) (collector.FileInfo, error) {
+func copyToDestination(srcFile *os.File, dst string) (module.FileInfo, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return collector.FileInfo{}, fmt.Errorf("create dest dir: %w", err)
+		return module.FileInfo{}, fmt.Errorf("create dest dir: %w", err)
 	}
 
 	dstFile, err := os.Create(dst)
 	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("create destination %s: %w", dst, err)
+		return module.FileInfo{}, fmt.Errorf("create destination %s: %w", dst, err)
 	}
 	defer func() {
 		dstFile.Close()
@@ -80,17 +80,17 @@ func copyToDestination(srcFile *os.File, dst string) (collector.FileInfo, error)
 	buf := make([]byte, copyBufferSize)
 	written, err := io.CopyBuffer(writer, srcFile, buf)
 	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("copy to %s: %w", dst, err)
+		return module.FileInfo{}, fmt.Errorf("copy to %s: %w", dst, err)
 	}
 
 	if err := dstFile.Sync(); err != nil {
-		return collector.FileInfo{}, fmt.Errorf("sync %s: %w", dst, err)
+		return module.FileInfo{}, fmt.Errorf("sync %s: %w", dst, err)
 	}
 
-	return collector.FileInfo{Path: filepath.Base(dst), SHA256: hex.EncodeToString(hasher.Sum(nil)), Size: written}, nil
+	return module.FileInfo{Path: filepath.Base(dst), SHA256: hex.EncodeToString(hasher.Sum(nil)), Size: written}, nil
 }
 
-func CopyDir(srcDir, dstDir string) ([]collector.FileInfo, error) {
+func CopyDir(srcDir, dstDir string) ([]module.FileInfo, error) {
 	entries, err := os.ReadDir(srcDir)
 	if err != nil {
 		return nil, fmt.Errorf("read directory %s: %w", srcDir, err)
@@ -100,7 +100,7 @@ func CopyDir(srcDir, dstDir string) ([]collector.FileInfo, error) {
 		return nil, fmt.Errorf("create dest dir %s: %w", dstDir, err)
 	}
 
-	var files []collector.FileInfo
+	var files []module.FileInfo
 	var lastErr error
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -123,8 +123,8 @@ func CopyDir(srcDir, dstDir string) ([]collector.FileInfo, error) {
 	return files, nil
 }
 
-func CopyDirRecursive(srcDir, dstDir string) ([]collector.FileInfo, error) {
-	var files []collector.FileInfo
+func CopyDirRecursive(srcDir, dstDir string) ([]module.FileInfo, error) {
+	var files []module.FileInfo
 
 	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {

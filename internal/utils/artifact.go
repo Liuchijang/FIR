@@ -5,22 +5,22 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Liuchijang/FIR/internal/collector"
+	"github.com/Liuchijang/FIR/internal/module"
 )
 
 // FileInfoFromPath computes metadata for a generated artifact already written to disk.
-func FileInfoFromPath(path string) (collector.FileInfo, error) {
+func FileInfoFromPath(path string) (module.FileInfo, error) {
 	hash, err := HashFile(path)
 	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("hash %s: %w", path, err)
+		return module.FileInfo{}, fmt.Errorf("hash %s: %w", path, err)
 	}
 
 	stat, err := os.Stat(path)
 	if err != nil {
-		return collector.FileInfo{}, fmt.Errorf("stat %s: %w", path, err)
+		return module.FileInfo{}, fmt.Errorf("stat %s: %w", path, err)
 	}
 
-	return collector.FileInfo{
+	return module.FileInfo{
 		Path:   filepath.Base(path),
 		SHA256: hash,
 		Size:   stat.Size(),

@@ -6,20 +6,21 @@ import (
 	"os"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/cli"
 	"github.com/Liuchijang/FIR/internal/console"
 	"github.com/Liuchijang/FIR/internal/output"
+	"github.com/Liuchijang/FIR/internal/tui"
 	"github.com/Liuchijang/FIR/internal/utils"
 	"github.com/spf13/cobra"
 
-	_ "github.com/Liuchijang/FIR/internal/browser"
-	_ "github.com/Liuchijang/FIR/internal/eventlog"
-	_ "github.com/Liuchijang/FIR/internal/execution"
-	_ "github.com/Liuchijang/FIR/internal/live"
-	_ "github.com/Liuchijang/FIR/internal/memory"
-	_ "github.com/Liuchijang/FIR/internal/ntfs"
-	_ "github.com/Liuchijang/FIR/internal/registry"
-	_ "github.com/Liuchijang/FIR/internal/system"
+	_ "github.com/Liuchijang/FIR/internal/analyzers"
+	_ "github.com/Liuchijang/FIR/internal/collectors/browser"
+	_ "github.com/Liuchijang/FIR/internal/collectors/eventlog"
+	_ "github.com/Liuchijang/FIR/internal/collectors/execution"
+	_ "github.com/Liuchijang/FIR/internal/collectors/live_response"
+	_ "github.com/Liuchijang/FIR/internal/collectors/memory"
+	_ "github.com/Liuchijang/FIR/internal/collectors/ntfs"
+	_ "github.com/Liuchijang/FIR/internal/collectors/registry"
+	_ "github.com/Liuchijang/FIR/internal/collectors/system"
 )
 
 var (
@@ -31,7 +32,7 @@ var rootCmd = &cobra.Command{
 	Use:   "fir",
 	Short: "FIR - Freedom Incident Response",
 	Long: `FIR is a production-grade Windows DFIR artifact collection tool.
-It collects forensic artifacts with minimal system impact for incident response.
+It runs collection and analyzer modules for incident response.
 
 Run without subcommands to enter interactive mode, or use 'fir collect' for flag-driven mode.`,
 	Version: output.Version,
@@ -57,12 +58,12 @@ func Execute() error { return rootCmd.Execute() }
 func runInteractive() error {
 	console.EnsureInteractive()
 
-	collectors, err := cli.RunInteractiveMenu()
+	modules, err := tui.RunInteractiveMenu()
 	if err != nil {
 		return fmt.Errorf("interactive menu: %w", err)
 	}
-	if len(collectors) == 0 {
-		fmt.Fprintf(os.Stderr, "\n[+] No collectors selected. Exiting.\n")
+	if len(modules) == 0 {
+		fmt.Fprintf(os.Stderr, "\n[+] No modules selected. Exiting.\n")
 		return nil
 	}
 	if concurrencyFlag == 0 {
@@ -71,13 +72,13 @@ func runInteractive() error {
 	if timeoutFlag == 0 {
 		timeoutFlag = 5 * time.Minute
 	}
-	return runInteractiveCollection(collectors)
+	return runInteractiveCollection(modules)
 }
 
 func preflightChecks() error {
 	if !utils.IsAdmin() {
 		fmt.Fprintf(os.Stderr, "\n%s[!] WARNING: Not running as Administrator.%s\n", "\033[33m", "\033[0m")
-		fmt.Fprintf(os.Stderr, "    Some collectors may fail without elevated privileges.\n")
+		fmt.Fprintf(os.Stderr, "    Some modules may fail without elevated privileges.\n")
 		fmt.Fprintf(os.Stderr, "    Recommend: Right-click -> Run as Administrator\n\n")
 	} else {
 		errs := utils.EnableForensicPrivileges()

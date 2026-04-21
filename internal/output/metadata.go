@@ -1,4 +1,4 @@
-﻿package output
+package output
 
 import (
 	"encoding/json"
@@ -8,25 +8,25 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/collector"
+	"github.com/Liuchijang/FIR/internal/module"
 )
 
 var Version = "1.0.0"
 
 type Metadata struct {
-	Hostname           string             `json:"hostname"`
-	Timestamp          string             `json:"timestamp"`
-	TimestampUTC       string             `json:"timestamp_utc"`
-	OS                 string             `json:"os"`
-	Architecture       string             `json:"architecture"`
-	ArtifactsCollected []string           `json:"artifacts_collected"`
-	CollectorVersion   string             `json:"collector_version"`
-	TotalDuration      string             `json:"total_duration"`
-	Results            []collector.Result `json:"results"`
-	Errors             []string           `json:"errors,omitempty"`
+	Hostname           string          `json:"hostname"`
+	Timestamp          string          `json:"timestamp"`
+	TimestampUTC       string          `json:"timestamp_utc"`
+	OS                 string          `json:"os"`
+	Architecture       string          `json:"architecture"`
+	ArtifactsCollected []string        `json:"artifacts_collected"`
+	CollectorVersion   string          `json:"collector_version"`
+	TotalDuration      string          `json:"total_duration"`
+	Results            []module.Result `json:"results"`
+	Errors             []string        `json:"errors,omitempty"`
 }
 
-func WriteMetadata(outputDir string, results []collector.Result, totalDuration time.Duration) error {
+func WriteMetadata(outputDir string, results []module.Result, totalDuration time.Duration) error {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "UNKNOWN"

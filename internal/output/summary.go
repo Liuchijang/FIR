@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/collector"
+	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wordwrap"
 )
@@ -31,10 +31,10 @@ type SummaryReport struct {
 	CollectorsTotal     int
 	SuccessCount        int
 	FailureCount        int
-	Results             []collector.Result
+	Results             []module.Result
 }
 
-func NewSummaryReport(outputDir string, startedAt time.Time, totalDuration time.Duration, timeout time.Duration, concurrency int, results []collector.Result) SummaryReport {
+func NewSummaryReport(outputDir string, startedAt time.Time, totalDuration time.Duration, timeout time.Duration, concurrency int, results []module.Result) SummaryReport {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "UNKNOWN"
@@ -128,8 +128,8 @@ func (r SummaryReport) Render() string {
 	return b.String()
 }
 
-func (r SummaryReport) FailedResults() []collector.Result {
-	var failed []collector.Result
+func (r SummaryReport) FailedResults() []module.Result {
+	var failed []module.Result
 	for _, result := range r.Results {
 		if !result.Success {
 			failed = append(failed, result)
@@ -224,7 +224,7 @@ func renderTerminalInfoTable(report SummaryReport, width int) string {
 	return renderFixedWidthTable([]string{"Field", "Value"}, []int{fieldWidth, valueWidth}, rows)
 }
 
-func renderTerminalModulesTable(results []collector.Result, width int) string {
+func renderTerminalModulesTable(results []module.Result, width int) string {
 	switch {
 	case width >= 95:
 		rows := make([][]string, 0, len(results))
@@ -325,21 +325,21 @@ func renderTerminalModulesTable(results []collector.Result, width int) string {
 	}
 }
 
-func resultStatus(result collector.Result) string {
+func resultStatus(result module.Result) string {
 	if result.Success {
 		return "SUCCESS"
 	}
 	return "FAILED"
 }
 
-func resultError(result collector.Result) string {
+func resultError(result module.Result) string {
 	if result.Error == "" {
 		return "-"
 	}
 	return sanitizeCell(result.Error)
 }
 
-func resultErrorBrief(result collector.Result, width int) string {
+func resultErrorBrief(result module.Result, width int) string {
 	if result.Error == "" {
 		return "-"
 	}
@@ -411,7 +411,7 @@ func sanitizeCell(value string) string {
 	return value
 }
 
-func totalSize(files []collector.FileInfo) int64 {
+func totalSize(files []module.FileInfo) int64 {
 	var total int64
 	for _, file := range files {
 		total += file.Size

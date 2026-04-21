@@ -7,14 +7,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/collector"
+	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 // CopyFilesDirect copies one or more files directly from the live filesystem.
 // It first tries a normal copy and then retries with backup semantics.
-func CopyFilesDirect(ctx context.Context, pairs map[string]string) ([]collector.FileInfo, error) {
-	var files []collector.FileInfo
+func CopyFilesDirect(ctx context.Context, pairs map[string]string) ([]module.FileInfo, error) {
+	var files []module.FileInfo
 	var errs []string
 	srcPaths := make([]string, 0, len(pairs))
 	for src := range pairs {
@@ -44,7 +44,7 @@ func CopyFilesDirect(ctx context.Context, pairs map[string]string) ([]collector.
 	return files, nil
 }
 
-func copySingleFile(src, dst string) (collector.FileInfo, error) {
+func copySingleFile(src, dst string) (module.FileInfo, error) {
 	fi, err := utils.SafeCopyFile(src, dst)
 	if err == nil {
 		return fi, nil

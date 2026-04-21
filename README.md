@@ -5,13 +5,13 @@ A production-grade Windows DFIR (Digital Forensics & Incident Response) artifact
 ## Features
 
 - **Dual CLI Modes**: Bubble Tea interactive flow or flag-driven batch collection
-- **Built-in Collectors**: Browser, Event Logs, Execution, Live Response, Memory, NTFS, Registry, and System artifacts
+- **Built-in Modules**: Collector modules for Browser, Event Logs, Execution, Live Response, Memory, NTFS, Registry, and System artifacts, plus analyzer modules for parsed triage output
 - **Forensic Safety**: Read-only access, SHA-256 integrity hashing, no artifact modification
 - **Windows Privilege Handling**: Auto-detects admin status and enables backup, restore, security, and debug privileges when available
 - **Native Windows Collection**: Uses backup semantics, registry hive save APIs, and raw NTFS access where needed
-- **Concurrent Collection**: Configurable parallelism with per-collector timeouts
+- **Concurrent Collection**: Configurable parallelism with per-module timeouts
 - **Structured Output**: Organized collection output with summary reports and structured logs
-- **Extensible Collectors**: Add collectors by implementing a single interface with minimal integration work
+- **Extensible Modules**: Add collection or analyzer modules behind a shared module contract with minimal integration work
 
 ## Build
 
@@ -35,9 +35,9 @@ go build -ldflags "-s -w -X github.com/Liuchijang/FIR/internal/output.Version=1.
 ```
 
 This launches a Bubble Tea interface where you can:
-- Browse and toggle collectors in a keyboard-driven menu
+- Browse and toggle modules in a keyboard-driven menu
 - Show a spinner while Chromium profiles are being discovered
-- Watch collectors move through waiting, running, success, and failed states during execution
+- Watch modules move through waiting, running, success, and failed states during execution
 
 After collection finishes, FIR prints a run summary table and writes the same report to `summary.txt`.
 
@@ -123,6 +123,31 @@ FIR does **not** bundle winpmem due to licensing. Place `winpmem_mini_x64.exe` i
 - System PATH
 
 If winpmem is not found, the RAM collector will fail gracefully with a clear error message.
+
+## Package Layout
+
+The project now follows the runtime flow more directly:
+
+```text
+cmd/
+  root.go
+  collect.go
+  interactive_progress.go
+
+internal/
+  module/        shared module contract + registry
+  collectors/    artifact acquisition modules grouped by category
+  analyzers/     parsed / enriched output modules
+  tui/           Bubble Tea menu + shared terminal UI helpers
+  acquisition/   low-level Windows and NTFS access helpers
+  output/        summary + metadata rendering
+  logging/       session logging
+  console/       console/window handling
+  utils/         remaining generic helpers
+```
+
+This keeps the practical path easy to follow:
+`main -> cmd -> module registry -> collectors/analyzers -> output/logging`
 
 ## Requirements
 

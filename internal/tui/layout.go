@@ -1,0 +1,160 @@
+package tui
+
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+// ScreenLayout stores the measured terminal layout for a fixed header and
+// responsive content area.
+type RootLayout struct {
+	TotalWidth    int
+	TotalHeight   int
+	HeaderHeight  int
+	FooterHeight  int
+	ContentHeight int
+}
+
+// MeasureRootLayout calculates fixed header/footer heights from their rendered
+// output and reserves the remaining rows for the main content area.
+func MeasureRootLayout(totalWidth, totalHeight int, header, footer string) RootLayout {
+	width := maxInt(0, totalWidth)
+	height := maxInt(0, totalHeight)
+	headerHeight := lipgloss.Height(trimTrailingNewlines(header))
+	headerHeight = clampInt(headerHeight, 0, height)
+	footerHeight := lipgloss.Height(trimTrailingNewlines(footer))
+	footerHeight = clampInt(footerHeight, 0, maxInt(0, height-headerHeight))
+
+	return RootLayout{
+		TotalWidth:    width,
+		TotalHeight:   height,
+		HeaderHeight:  headerHeight,
+		FooterHeight:  footerHeight,
+		ContentHeight: maxInt(0, height-headerHeight-footerHeight),
+	}
+}
+
+// MeasureScreenLayout keeps the previous helper name for callers that only
+// need a fixed header and responsive content area.
+func MeasureScreenLayout(totalWidth, totalHeight int, header string) RootLayout {
+	return MeasureRootLayout(totalWidth, totalHeight, header, "")
+}
+
+// AvailableContentSize returns the usable size for the content area after
+// subtracting any border, margin, or padding applied by the content style.
+func AvailableContentSize(layout RootLayout, style lipgloss.Style) (int, int) {
+	return AvailableSize(layout.TotalWidth, layout.ContentHeight, style)
+}
+
+// AvailableSize returns the usable width and height after subtracting the
+// frame size of a lipgloss style.
+func AvailableSize(totalWidth, totalHeight int, style lipgloss.Style) (int, int) {
+	usableWidth := maxInt(0, totalWidth-style.GetHorizontalFrameSize())
+	usableHeight := maxInt(0, totalHeight-style.GetVerticalFrameSize())
+	return usableWidth, usableHeight
+}
+
+// RenderRootLayout joins the fixed header, responsive content, and fixed
+// footer into a stable full-height terminal frame.
+func RenderRootLayout(layout RootLayout, header, content, footer string) string {
+	header = trimTrailingNewlines(header)
+	content = trimTrailingNewlines(content)
+	footer = trimTrailingNewlines(footer)
+
+	sections := make([]string, 0, 3)
+	if layout.HeaderHeight > 0 && header != "" {
+		sections = append(sections, RenderSection(layout.TotalWidth, layout.HeaderHeight, header))
+	}
+	if layout.ContentHeight > 0 {
+		sections = append(sections, RenderSection(layout.TotalWidth, layout.ContentHeight, content))
+	}
+	if layout.FooterHeight > 0 && footer != "" {
+		sections = append(sections, RenderSection(layout.TotalWidth, layout.FooterHeight, footer))
+	}
+
+	screen := ""
+	if len(sections) > 0 {
+		screen = lipgloss.JoinVertical(lipgloss.Left, sections...)
+	}
+
+	screen = trimToHeight(screen, layout.TotalHeight)
+	return padBottomToHeight(screen, layout.TotalHeight)
+}
+
+// RenderScreen keeps the previous helper name for callers that do not render a
+// footer section.
+func RenderScreen(layout RootLayout, header, content string) string {
+	return RenderRootLayout(layout, header, content, "")
+}
+
+// RenderSection clamps a section to its assigned viewport and pads any missing
+// rows so old terminal content cannot bleed through after a resize.
+func RenderSection(width, height int, content string) string {
+	if height <= 0 {
+		return ""
+	}
+	if width <= 0 {
+		return padBottomToHeight("", height)
+	}
+
+	content = trimToHeight(trimTrailingNewlines(content), height)
+	rendered := lipgloss.NewStyle().
+		Width(width).
+		MaxWidth(width).
+		Height(height).
+		MaxHeight(height).
+		Render(content)
+
+	return padBottomToHeight(trimToHeight(rendered, height), height)
+}
+
+func trimTrailingNewlines(value string) string {
+	return strings.TrimRight(value, "\n")
+}
+
+func trimToHeight(value string, height int) string {
+	if height <= 0 || strings.TrimSpace(value) == "" {
+		return ""
+	}
+
+	lines := strings.Split(strings.TrimRight(value, "\n"), "\n")
+	if len(lines) <= height {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[:height], "\n")
+}
+
+func padBottomToHeight(value string, height int) string {
+	if height <= 0 {
+		return value
+	}
+
+	contentHeight := lipgloss.Height(value)
+	if contentHeight >= height {
+		return value
+	}
+
+	padding := height - contentHeight
+	lines := make([]string, 0, contentHeight+padding)
+	if value != "" {
+		lines = append(lines, strings.Split(value, "\n")...)
+	}
+	for idx := 0; idx < padding; idx++ {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func clampInt(value, minValue, maxValue int) int {
+	if maxValue < minValue {
+		maxValue = minValue
+	}
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}

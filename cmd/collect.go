@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/collector"
 	"github.com/Liuchijang/FIR/internal/logging"
+	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -22,10 +22,10 @@ var (
 )
 
 type collectionCallbacks struct {
-	OnOutputReady     func(string)
-	OnCollectorQueued func(int, collector.Collector)
-	OnCollectorStart  func(int, collector.Collector)
-	OnCollectorFinish func(int, collector.Result)
+	OnOutputReady  func(string)
+	OnModuleQueued func(int, module.Module)
+	OnModuleStart  func(int, module.Module)
+	OnModuleFinish func(int, module.Result)
 }
 
 type collectionOptions struct {
@@ -49,7 +49,7 @@ Available artifact names:
   process_explorer, autoruns
 
 Category shortcuts:
-  all       - All collectors
+  all       - All modules
   browser   - Chromium browser forensic artifacts
   live      - Live process and autoruns forensic collection
   memory    - RAM acquisition
@@ -65,30 +65,30 @@ Category shortcuts:
 
 func init() {
 	collectCmd.Flags().StringVarP(&artifactFlag, "artifact", "a", "", "Comma-separated list of artifacts or categories to collect (required)")
-	collectCmd.Flags().DurationVarP(&timeoutFlag, "timeout", "t", 5*time.Minute, "Timeout per collector")
-	collectCmd.Flags().IntVarP(&concurrencyFlag, "concurrency", "c", 2, "Maximum number of concurrent collectors")
+	collectCmd.Flags().DurationVarP(&timeoutFlag, "timeout", "t", 5*time.Minute, "Timeout per module")
+	collectCmd.Flags().IntVarP(&concurrencyFlag, "concurrency", "c", 2, "Maximum number of concurrent modules")
 	collectCmd.MarkFlagRequired("artifact")
 
 	rootCmd.AddCommand(collectCmd)
 }
 
 func runCollect() error {
-	// Resolve which collectors to run.
-	collectors, err := resolveCollectors(artifactFlag)
+	// Resolve which modules to run.
+	modules, err := resolveModules(artifactFlag)
 	if err != nil {
 		return err
 	}
 
-	return executeCollection(collectors)
+	return executeCollection(modules)
 }
 
 // executeCollection is the core orchestration logic shared by interactive and flag modes.
-func executeCollection(collectors []collector.Collector) error {
-	_, err := executeCollectionWithOptions(collectors, collectionOptions{})
+func executeCollection(modules []module.Module) error {
+	_, err := executeCollectionWithOptions(modules, collectionOptions{})
 	return err
 }
 
-func executeCollectionWithOptions(collectors []collector.Collector, opts collectionOptions) (output.SummaryReport, error) {
+func executeCollectionWithOptions(modules []module.Module, opts collectionOptions) (output.SummaryReport, error) {
 	// Create output directory.
 	mgr, err := output.NewManager(outputDir)
 	if err != nil {
@@ -110,15 +110,15 @@ func executeCollectionWithOptions(collectors []collector.Collector, opts collect
 
 	log := logging.G()
 	log.Info(fmt.Sprintf("Output directory: %s", mgr.BaseDir()))
-	log.Info(fmt.Sprintf("Collectors to run: %d", len(collectors)))
-	for idx, c := range collectors {
-		if opts.Callbacks.OnCollectorQueued != nil {
-			opts.Callbacks.OnCollectorQueued(idx, c)
+	log.Info(fmt.Sprintf("Modules to run: %d", len(modules)))
+	for idx, m := range modules {
+		if opts.Callbacks.OnModuleQueued != nil {
+			opts.Callbacks.OnModuleQueued(idx, m)
 		}
 	}
 
 	startTime := time.Now()
-	results := runCollectors(collectors, mgr, opts.Callbacks)
+	results := runModules(modules, mgr, opts.Callbacks)
 	totalDuration := time.Since(startTime)
 	report := output.NewSummaryReport(mgr.BaseDir(), startTime, totalDuration, timeoutFlag, concurrencyFlag, results)
 
@@ -142,37 +142,37 @@ func executeCollectionWithOptions(collectors []collector.Collector, opts collect
 	return report, nil
 }
 
-// runCollectors executes collectors with concurrency limits and timeouts.
-func runCollectors(collectors []collector.Collector, mgr *output.Manager, callbacks collectionCallbacks) []collector.Result {
+// runModules executes modules with concurrency limits and timeouts.
+func runModules(modules []module.Module, mgr *output.Manager, callbacks collectionCallbacks) []module.Result {
 	log := logging.G()
-	results := make([]collector.Result, len(collectors))
+	results := make([]module.Result, len(modules))
 	sem := make(chan struct{}, concurrencyFlag)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	for i, c := range collectors {
+	for i, m := range modules {
 		wg.Add(1)
-		go func(idx int, col collector.Collector) {
+		go func(idx int, mod module.Module) {
 			defer wg.Done()
 
 			sem <- struct{}{}        // Acquire semaphore.
 			defer func() { <-sem }() // Release semaphore.
 
-			if callbacks.OnCollectorStart != nil {
-				callbacks.OnCollectorStart(idx, col)
+			if callbacks.OnModuleStart != nil {
+				callbacks.OnModuleStart(idx, mod)
 			}
-			log.Progress(col.Name(), fmt.Sprintf("Starting %s collector", col.Name()))
+			log.Progress(mod.Name(), fmt.Sprintf("Starting %s module", mod.Name()))
 
 			ctx, cancel := context.WithTimeout(context.Background(), timeoutFlag)
 			defer cancel()
 
 			start := time.Now()
-			files, err := col.Collect(ctx, mgr.BaseDir())
+			files, err := mod.Collect(ctx, mgr.BaseDir())
 			elapsed := time.Since(start)
 
-			result := collector.Result{
-				CollectorName:  col.Name(),
-				Category:       col.Category(),
+			result := module.Result{
+				CollectorName:  mod.Name(),
+				Category:       mod.Category(),
 				FilesCollected: files,
 				Duration:       elapsed,
 				DurationSec:    elapsed.Seconds(),
@@ -181,28 +181,28 @@ func runCollectors(collectors []collector.Collector, mgr *output.Manager, callba
 
 			if err != nil {
 				result.Error = err.Error()
-				log.Failed(col.Name(), err)
+				log.Failed(mod.Name(), err)
 			} else {
-				log.Done(col.Name(), len(files), "artifacts", elapsed)
+				log.Done(mod.Name(), len(files), "artifacts", elapsed)
 			}
 
 			mu.Lock()
 			results[idx] = result
 			mu.Unlock()
-			if callbacks.OnCollectorFinish != nil {
-				callbacks.OnCollectorFinish(idx, result)
+			if callbacks.OnModuleFinish != nil {
+				callbacks.OnModuleFinish(idx, result)
 			}
-		}(i, c)
+		}(i, m)
 	}
 
 	wg.Wait()
 	return results
 }
 
-// resolveCollectors converts a comma-separated artifact string to a list of collectors.
-func resolveCollectors(artifactStr string) ([]collector.Collector, error) {
+// resolveModules converts a comma-separated artifact string to a list of modules.
+func resolveModules(artifactStr string) ([]module.Module, error) {
 	names := strings.Split(artifactStr, ",")
-	var result []collector.Collector
+	var result []module.Module
 	seen := make(map[string]bool)
 
 	for _, name := range names {
@@ -212,34 +212,34 @@ func resolveCollectors(artifactStr string) ([]collector.Collector, error) {
 		}
 
 		if name == "all" {
-			return collector.All(), nil
+			return module.All(), nil
 		}
 
 		// Check if it's a category name.
-		catCollectors := collector.GetByCategory(name)
-		if len(catCollectors) > 0 {
-			for _, c := range catCollectors {
-				if !seen[c.Name()] {
-					result = append(result, c)
-					seen[c.Name()] = true
+		categoryModules := module.GetByCategory(name)
+		if len(categoryModules) > 0 {
+			for _, m := range categoryModules {
+				if !seen[m.Name()] {
+					result = append(result, m)
+					seen[m.Name()] = true
 				}
 			}
 			continue
 		}
 
-		// Check if it's a specific collector name.
-		c, err := collector.Get(name)
+		// Check if it's a specific module name.
+		m, err := module.Get(name)
 		if err != nil {
 			return nil, fmt.Errorf("unknown artifact or category: %s\nUse 'fir collect --help' to see available artifacts", name)
 		}
-		if !seen[c.Name()] {
-			result = append(result, c)
-			seen[c.Name()] = true
+		if !seen[m.Name()] {
+			result = append(result, m)
+			seen[m.Name()] = true
 		}
 	}
 
 	if len(result) == 0 {
-		return nil, fmt.Errorf("no collectors resolved from: %s", artifactStr)
+		return nil, fmt.Errorf("no modules resolved from: %s", artifactStr)
 	}
 
 	return result, nil
