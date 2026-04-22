@@ -77,7 +77,7 @@ func (c *mftParser) Name() string     { return "mft_parser" }
 func (c *mftParser) Category() string { return "ntfs" }
 func (c *mftParser) Mode() string     { return module.ModeAnalyzer }
 func (c *mftParser) Description() string {
-	return "Parses $MFT into richer CSV output inspired by MFTECmd, including 0x10 and 0x30 timestamps"
+	return "Parse $MFT to full CSV"
 }
 
 func (c *mftParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
@@ -86,12 +86,10 @@ func (c *mftParser) Collect(ctx context.Context, outputDir string) ([]module.Fil
 		return nil, fmt.Errorf("create MFT parser output dir: %w", err)
 	}
 
-	mftSourceLabel := `\\.\C: ($MFT live parse)`
 	var rows []mftRecordRow
 	if dir, ok := existingModuleDir(outputDir, "mft"); ok {
 		mftPath := filepath.Join(dir, "$MFT")
 		if _, err := os.Stat(mftPath); err == nil {
-			mftSourceLabel = mftPath
 			rows, err = parseCollectedMFT(ctx, mftPath)
 			if err != nil {
 				return nil, err
@@ -120,7 +118,6 @@ func (c *mftParser) Collect(ctx context.Context, outputDir string) ([]module.Fil
 	}
 
 	detailRows := make([][]string, 0, len(rows))
-	listingRows := make([][]string, 0, len(rows))
 	for _, row := range rows {
 		detailRows = append(detailRows, []string{
 			fmt.Sprintf("%d", row.RecordNumber),
@@ -148,28 +145,6 @@ func (c *mftParser) Collect(ctx context.Context, outputDir string) ([]module.Fil
 			fmt.Sprintf("%t", row.ResidentData),
 			fmt.Sprintf("%t", row.UnnamedDataStream),
 			fmt.Sprintf("%t", row.HasAlternateData),
-		})
-
-		listingRows = append(listingRows, []string{
-			fmt.Sprintf("%d", row.RecordNumber),
-			fmt.Sprintf("%d", row.Sequence),
-			row.FullPath,
-			row.Name,
-			row.Extension,
-			fmt.Sprintf("%d", row.ParentRef),
-			fmt.Sprintf("%t", row.InUse),
-			fmt.Sprintf("%t", row.IsDirectory),
-			fmt.Sprintf("%d", row.RealSize),
-			fmt.Sprintf("%d", row.Allocated),
-			row.SICreated,
-			row.SIModified,
-			row.SIMFTModified,
-			row.SIAccessed,
-			row.FNCreated,
-			row.FNModified,
-			row.FNMFTModified,
-			row.FNAccessed,
-			row.NameNamespace,
 		})
 	}
 
@@ -204,53 +179,11 @@ func (c *mftParser) Collect(ctx context.Context, outputDir string) ([]module.Fil
 		return nil, err
 	}
 
-	listingCSV := filepath.Join(outDir, "mft_file_listing.csv")
-	if err := writeCSVFile(listingCSV, []string{
-		"EntryNumber",
-		"SequenceNumber",
-		"FullPath",
-		"FileName",
-		"Extension",
-		"ParentEntryNumber",
-		"IsInUse",
-		"IsDirectory",
-		"RealSize",
-		"AllocatedSize",
-		"SI_CreatedUTC",
-		"SI_ModifiedUTC",
-		"SI_MFTModifiedUTC",
-		"SI_AccessedUTC",
-		"FN_CreatedUTC",
-		"FN_ModifiedUTC",
-		"FN_MFTModifiedUTC",
-		"FN_AccessedUTC",
-		"NameNamespace",
-	}, listingRows); err != nil {
-		return nil, err
-	}
-
-	supportCSV := filepath.Join(outDir, "mft_supporting_artifacts.csv")
-	supportRows, err := buildMFTSupportingRows(outputDir, mftSourceLabel)
-	if err != nil {
-		return nil, err
-	}
-	if err := writeCSVFile(supportCSV, []string{"Artifact", "Path", "SHA256", "Size"}, supportRows); err != nil {
-		return nil, err
-	}
-
 	recordInfo, err := utils.FileInfoFromPath(recordCSV)
 	if err != nil {
 		return nil, err
 	}
-	listingInfo, err := utils.FileInfoFromPath(listingCSV)
-	if err != nil {
-		return nil, err
-	}
-	supportInfo, err := utils.FileInfoFromPath(supportCSV)
-	if err != nil {
-		return nil, err
-	}
-	return []module.FileInfo{recordInfo, listingInfo, supportInfo}, nil
+	return []module.FileInfo{recordInfo}, nil
 }
 
 func parseCollectedMFT(ctx context.Context, path string) ([]mftRecordRow, error) {
@@ -612,36 +545,6 @@ func resolveMFTPath(records map[uint64]mftRecordRow, cache map[uint64]string, re
 	path := strings.TrimRight(parent, `\`) + `\` + row.Name
 	cache[recordNumber] = path
 	return path
-}
-
-func buildMFTSupportingRows(outputDir, mftSourceLabel string) ([][]string, error) {
-	type supportArtifact struct {
-		name string
-		path string
-	}
-
-	artifacts := []supportArtifact{
-		{name: "$MFT", path: mftSourceLabel},
-	}
-	if sdsDir, ok := existingModuleDir(outputDir, "secure_sds"); ok {
-		artifacts = append(artifacts, supportArtifact{name: "$Secure_SDS", path: filepath.Join(sdsDir, "$Secure_SDS")})
-	}
-
-	rows := make([][]string, 0, len(artifacts))
-	for _, artifact := range artifacts {
-		info, err := utils.FileInfoFromPath(artifact.path)
-		if err != nil {
-			rows = append(rows, []string{artifact.name, artifact.path, "", "0"})
-			continue
-		}
-		rows = append(rows, []string{
-			artifact.name,
-			artifact.path,
-			info.SHA256,
-			fmt.Sprintf("%d", info.Size),
-		})
-	}
-	return rows, nil
 }
 
 func utf16LEString(data []byte) string {

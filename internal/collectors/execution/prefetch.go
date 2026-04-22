@@ -20,7 +20,7 @@ type prefetchCollector struct{}
 func (c *prefetchCollector) Name() string     { return "prefetch" }
 func (c *prefetchCollector) Category() string { return "execution" }
 func (c *prefetchCollector) Description() string {
-	return "Collects Windows Prefetch files (.pf) from C:\\Windows\\Prefetch"
+	return "Collect Prefetch files"
 }
 
 func (c *prefetchCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {

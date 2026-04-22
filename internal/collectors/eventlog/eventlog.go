@@ -32,7 +32,7 @@ var eventLogSelection = struct {
 func (c *eventLogCollector) Name() string     { return "eventlog" }
 func (c *eventLogCollector) Category() string { return "eventlog" }
 func (c *eventLogCollector) Description() string {
-	return "Collects Windows Event Log files (.evtx) from System32\\winevt\\Logs"
+	return "Collect EVTX logs"
 }
 
 var priorityLogs = []string{"Security", "System", "Application", "Microsoft-Windows-PowerShell%4Operational", "Microsoft-Windows-Sysmon%4Operational", "Microsoft-Windows-TaskScheduler%4Operational", "Microsoft-Windows-TerminalServices-LocalSessionManager%4Operational", "Microsoft-Windows-TerminalServices-RemoteConnectionManager%4Operational", "Microsoft-Windows-Windows Defender%4Operational", "Microsoft-Windows-WMI-Activity%4Operational", "Microsoft-Windows-Bits-Client%4Operational"}

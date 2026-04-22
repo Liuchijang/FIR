@@ -17,10 +17,23 @@ func init() { module.Register(&amcacheCollector{}) }
 
 type amcacheCollector struct{}
 
+type amcacheFileSpec struct {
+	srcPath    string
+	dstPath    string
+	relPath    string
+	isPrimary  bool
+	useHiveAPI bool
+}
+
+type amcacheRawContext struct {
+	vol     *acquisition.RawVolume
+	volData *acquisition.NTFSVolumeData
+}
+
 func (c *amcacheCollector) Name() string     { return "amcache" }
 func (c *amcacheCollector) Category() string { return "execution" }
 func (c *amcacheCollector) Description() string {
-	return "Collects Amcache.hve from C:\\Windows\\AppCompat\\Programs"
+	return "Collect Amcache hive + logs"
 }
 
 func (c *amcacheCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
@@ -30,46 +43,131 @@ func (c *amcacheCollector) Collect(ctx context.Context, outputDir string) ([]mod
 		return nil, fmt.Errorf("create execution output dir: %w", err)
 	}
 
-	amcachePath := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve")
-	pairs := map[string]string{
-		amcachePath: filepath.Join(outDir, "Amcache.hve"),
+	basePath := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve")
+	specs := []amcacheFileSpec{
+		{
+			srcPath:    basePath,
+			dstPath:    filepath.Join(outDir, "Amcache.hve"),
+			relPath:    "Amcache.hve",
+			isPrimary:  true,
+			useHiveAPI: true,
+		},
+		{
+			srcPath: filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve.LOG1"),
+			dstPath: filepath.Join(outDir, "Amcache.hve.LOG1"),
+			relPath: "Amcache.hve.LOG1",
+		},
+		{
+			srcPath: filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve.LOG2"),
+			dstPath: filepath.Join(outDir, "Amcache.hve.LOG2"),
+			relPath: "Amcache.hve.LOG2",
+		},
 	}
 
-	log.Debug("Collecting Amcache.hve via direct Windows file access")
-	files, err := acquisition.CopyFilesDirect(ctx, pairs)
-	if err != nil {
-		log.Debug(fmt.Sprintf("Direct copy of Amcache.hve failed: %v", err))
-		fi, fallbackErr := collectAmcacheFallback(filepath.Join(outDir, "Amcache.hve"), amcachePath)
-		if fallbackErr != nil {
-			return nil, fmt.Errorf("collect Amcache.hve via direct copy: %v; fallback failed: %w", err, fallbackErr)
+	files := make([]module.FileInfo, 0, len(specs))
+	var rawCtx *amcacheRawContext
+	defer func() {
+		if rawCtx != nil && rawCtx.vol != nil {
+			rawCtx.vol.Close()
 		}
-		return []module.FileInfo{fi}, nil
+	}()
+	for _, spec := range specs {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		log.Debug(fmt.Sprintf("Collecting %s via direct Windows file access", spec.relPath))
+		fi, err := collectAmcacheFile(spec, &rawCtx)
+		if err != nil {
+			if spec.isPrimary {
+				return nil, fmt.Errorf("collect %s: %w", spec.relPath, err)
+			}
+
+			log.Debug(fmt.Sprintf("Skipping optional %s: %v", spec.relPath, err))
+			continue
+		}
+
+		files = append(files, fi)
 	}
 
 	return files, nil
 }
 
-func collectAmcacheFallback(dst, src string) (module.FileInfo, error) {
-	fi, err := saveMountedAmcacheHive(dst)
+func collectAmcacheFile(spec amcacheFileSpec, rawCtx **amcacheRawContext) (module.FileInfo, error) {
+	fi, err := utils.SafeCopyFile(spec.srcPath, spec.dstPath)
 	if err == nil {
+		fi.Path = spec.relPath
 		return fi, nil
 	}
 
-	vol, openErr := acquisition.OpenRawVolume("C")
-	if openErr != nil {
-		return module.FileInfo{}, fmt.Errorf("mounted hive fallback failed: %v; open raw volume fallback failed: %w", err, openErr)
-	}
-	defer vol.Close()
-
-	volData, volErr := vol.GetNTFSVolumeData()
-	if volErr != nil {
-		return module.FileInfo{}, fmt.Errorf("mounted hive fallback failed: %v; get NTFS volume data fallback failed: %w", err, volErr)
+	fi, err = utils.SafeCopyFileBackup(spec.srcPath, spec.dstPath)
+	if err == nil {
+		fi.Path = spec.relPath
+		return fi, nil
 	}
 
-	if _, copyErr := acquisition.CopyFileFromRawPath(vol, volData, src, dst); copyErr != nil {
-		return module.FileInfo{}, fmt.Errorf("mounted hive fallback failed: %v; raw path fallback failed: %w", err, copyErr)
+	var fallbackErr error
+	if spec.useHiveAPI {
+		fallbackErr = collectAmcacheHiveFallback(spec.dstPath, spec.srcPath, rawCtx)
+	} else {
+		fallbackErr = collectAmcacheRawFallback(spec.dstPath, spec.srcPath, rawCtx)
 	}
-	return utils.FileInfoFromPath(dst)
+	if fallbackErr != nil {
+		return module.FileInfo{}, fmt.Errorf("direct copy failed: %v; fallback failed: %w", err, fallbackErr)
+	}
+
+	fi, fileInfoErr := utils.FileInfoFromPath(spec.dstPath)
+	if fileInfoErr != nil {
+		return module.FileInfo{}, fileInfoErr
+	}
+	fi.Path = spec.relPath
+	return fi, nil
+}
+
+func collectAmcacheHiveFallback(dst, src string, rawCtx **amcacheRawContext) error {
+	if _, err := saveMountedAmcacheHive(dst); err == nil {
+		return nil
+	}
+	return collectAmcacheRawFallback(dst, src, rawCtx)
+}
+
+func collectAmcacheRawFallback(dst, src string, rawCtx **amcacheRawContext) error {
+	ctx, err := ensureAmcacheRawContext(rawCtx)
+	if err != nil {
+		return err
+	}
+	if _, copyErr := acquisition.CopyFileFromRawPath(ctx.vol, ctx.volData, src, dst); copyErr != nil {
+		return copyErr
+	}
+	return nil
+}
+
+func ensureAmcacheRawContext(rawCtx **amcacheRawContext) (*amcacheRawContext, error) {
+	if rawCtx != nil && *rawCtx != nil {
+		return *rawCtx, nil
+	}
+
+	vol, err := acquisition.OpenRawVolume("C")
+	if err != nil {
+		return nil, err
+	}
+
+	volData, err := vol.GetNTFSVolumeData()
+	if err != nil {
+		vol.Close()
+		return nil, err
+	}
+
+	ctx := &amcacheRawContext{
+		vol:     vol,
+		volData: volData,
+	}
+	if rawCtx != nil {
+		*rawCtx = ctx
+	}
+	return ctx, nil
 }
 
 func saveMountedAmcacheHive(dst string) (module.FileInfo, error) {

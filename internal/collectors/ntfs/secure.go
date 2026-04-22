@@ -19,7 +19,7 @@ type secureCollector struct{}
 func (c *secureCollector) Name() string     { return "secure_sds" }
 func (c *secureCollector) Category() string { return "ntfs" }
 func (c *secureCollector) Description() string {
-	return "Collects the $Secure:$SDS stream via direct NTFS metafile access"
+	return "Collect $Secure:$SDS"
 }
 
 func (c *secureCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {

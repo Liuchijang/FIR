@@ -44,7 +44,7 @@ type usnJrnlCollector struct{}
 func (c *usnJrnlCollector) Name() string     { return "usnjrnl" }
 func (c *usnJrnlCollector) Category() string { return "ntfs" }
 func (c *usnJrnlCollector) Description() string {
-	return "Collects the $UsnJrnl:$J (USN Change Journal) via FSCTL"
+	return "Collect $UsnJrnl:$J"
 }
 
 func (c *usnJrnlCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {

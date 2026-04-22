@@ -16,7 +16,7 @@ func (a *autorunsAnalyzer) Name() string     { return "autoruns" }
 func (a *autorunsAnalyzer) Category() string { return "live" }
 func (a *autorunsAnalyzer) Mode() string     { return module.ModeAnalyzer }
 func (a *autorunsAnalyzer) Description() string {
-	return "Generates live autoruns-style triage CSV for services, Run keys, startup folders, and scheduled tasks"
+	return "Live autoruns triage"
 }
 
 func (a *autorunsAnalyzer) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {

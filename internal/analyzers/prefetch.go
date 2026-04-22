@@ -23,7 +23,7 @@ func (c *prefetchParser) Name() string     { return "prefetch_parser" }
 func (c *prefetchParser) Category() string { return "execution" }
 func (c *prefetchParser) Mode() string     { return module.ModeAnalyzer }
 func (c *prefetchParser) Description() string {
-	return "Parses Prefetch files into triage-oriented CSV metadata from collected files or the live Prefetch directory"
+	return "Parse Prefetch"
 }
 
 func (c *prefetchParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {

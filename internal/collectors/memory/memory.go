@@ -21,7 +21,7 @@ type memoryCollector struct{}
 func (c *memoryCollector) Name() string     { return "ram" }
 func (c *memoryCollector) Category() string { return "memory" }
 func (c *memoryCollector) Description() string {
-	return "Acquires physical memory (RAM) using winpmem (must be present in PATH or tool directory)"
+	return "Collect memory"
 }
 
 func winpmemBinaries() []string {

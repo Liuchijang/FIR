@@ -19,7 +19,7 @@ func (c *eventLogParser) Name() string     { return "eventlog_parser" }
 func (c *eventLogParser) Category() string { return "eventlog" }
 func (c *eventLogParser) Mode() string     { return module.ModeAnalyzer }
 func (c *eventLogParser) Description() string {
-	return "Parses selected or full EVTX artifacts into analyst-friendly CSV rows from collected files or live logs"
+	return "Parse EVTX logs"
 }
 
 func (c *eventLogParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {

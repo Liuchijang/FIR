@@ -83,12 +83,16 @@ func writeCSVFile(path string, header []string, rows [][]string) error {
 	}
 	defer f.Close()
 
+	if _, err := f.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
+		return fmt.Errorf("write utf-8 bom: %w", err)
+	}
+
 	w := csv.NewWriter(f)
-	if err := w.Write(header); err != nil {
+	if err := w.Write(sanitizeCSVRow(header)); err != nil {
 		return fmt.Errorf("write csv header: %w", err)
 	}
 	for _, row := range rows {
-		if err := w.Write(row); err != nil {
+		if err := w.Write(sanitizeCSVRow(row)); err != nil {
 			return fmt.Errorf("write csv row: %w", err)
 		}
 	}
@@ -98,4 +102,22 @@ func writeCSVFile(path string, header []string, rows [][]string) error {
 	}
 
 	return nil
+}
+
+func sanitizeCSVRow(row []string) []string {
+	out := make([]string, len(row))
+	for i, value := range row {
+		out[i] = sanitizeCSVValue(value)
+	}
+	return out
+}
+
+func sanitizeCSVValue(value string) string {
+	value = strings.ToValidUTF8(value, "")
+	value = strings.ReplaceAll(value, "\x00", "")
+	value = strings.ReplaceAll(value, "\r\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\t", " ")
+	return strings.TrimSpace(value)
 }

@@ -20,7 +20,7 @@ type mftCollector struct{}
 func (c *mftCollector) Name() string     { return "mft" }
 func (c *mftCollector) Category() string { return "ntfs" }
 func (c *mftCollector) Description() string {
-	return "Collects the $MFT (Master File Table) via raw disk access"
+	return "Collect $MFT"
 }
 
 func (c *mftCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {

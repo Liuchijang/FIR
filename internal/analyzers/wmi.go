@@ -16,7 +16,7 @@ func (c *wmiParser) Name() string     { return "wmi_parser" }
 func (c *wmiParser) Category() string { return "system" }
 func (c *wmiParser) Mode() string     { return module.ModeAnalyzer }
 func (c *wmiParser) Description() string {
-	return "Parses WMI persistence and namespace inventory into CSV"
+	return "Parse WMI"
 }
 
 func (c *wmiParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {

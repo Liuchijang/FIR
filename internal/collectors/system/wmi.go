@@ -19,7 +19,7 @@ type wmiCollector struct{}
 func (c *wmiCollector) Name() string     { return "wmi" }
 func (c *wmiCollector) Category() string { return "system" }
 func (c *wmiCollector) Description() string {
-	return "Collects WMI repository files (OBJECTS.DATA, INDEX.BTR, MAPPING*.MAP)"
+	return "Collect WMI repository"
 }
 
 var wmiFiles = []string{"OBJECTS.DATA", "INDEX.BTR"}

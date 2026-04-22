@@ -46,7 +46,9 @@ Examples:
 Available artifact names:
   ram, mft, usnjrnl, secure_sds, registry, eventlog,
   prefetch, amcache, wmi, srum, browser_chromium,
-  process_explorer, autoruns
+  process_explorer, autoruns, mft_parser, usnjrnl_parser,
+  secure_sds_parser, prefetch_parser, amcache_parser,
+  shimcache_parser, eventlog_parser, wmi_parser
 
 Category shortcuts:
   all       - All modules
@@ -89,6 +91,9 @@ func executeCollection(modules []module.Module) error {
 }
 
 func executeCollectionWithOptions(modules []module.Module, opts collectionOptions) (output.SummaryReport, error) {
+	module.SetActiveRunModules(modules)
+	defer module.ClearActiveRunModules()
+
 	// Create output directory.
 	mgr, err := output.NewManager(outputDir)
 	if err != nil {
@@ -146,56 +151,76 @@ func executeCollectionWithOptions(modules []module.Module, opts collectionOption
 func runModules(modules []module.Module, mgr *output.Manager, callbacks collectionCallbacks) []module.Result {
 	log := logging.G()
 	results := make([]module.Result, len(modules))
-	sem := make(chan struct{}, concurrencyFlag)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
+	runBatch := func(indices []int) {
+		if len(indices) == 0 {
+			return
+		}
 
-	for i, m := range modules {
-		wg.Add(1)
-		go func(idx int, mod module.Module) {
-			defer wg.Done()
+		sem := make(chan struct{}, concurrencyFlag)
+		var wg sync.WaitGroup
+		var mu sync.Mutex
 
-			sem <- struct{}{}        // Acquire semaphore.
-			defer func() { <-sem }() // Release semaphore.
+		for _, idx := range indices {
+			m := modules[idx]
+			wg.Add(1)
+			go func(idx int, mod module.Module) {
+				defer wg.Done()
 
-			if callbacks.OnModuleStart != nil {
-				callbacks.OnModuleStart(idx, mod)
-			}
-			log.Progress(mod.Name(), fmt.Sprintf("Starting %s module", mod.Name()))
+				sem <- struct{}{}        // Acquire semaphore.
+				defer func() { <-sem }() // Release semaphore.
 
-			ctx, cancel := context.WithTimeout(context.Background(), timeoutFlag)
-			defer cancel()
+				if callbacks.OnModuleStart != nil {
+					callbacks.OnModuleStart(idx, mod)
+				}
+				log.Progress(mod.Name(), fmt.Sprintf("Starting %s module", mod.Name()))
 
-			start := time.Now()
-			files, err := mod.Collect(ctx, mgr.BaseDir())
-			elapsed := time.Since(start)
+				ctx, cancel := context.WithTimeout(context.Background(), timeoutFlag)
+				defer cancel()
 
-			result := module.Result{
-				CollectorName:  mod.Name(),
-				Category:       mod.Category(),
-				FilesCollected: files,
-				Duration:       elapsed,
-				DurationSec:    elapsed.Seconds(),
-				Success:        err == nil,
-			}
+				start := time.Now()
+				files, err := mod.Collect(ctx, mgr.BaseDir())
+				elapsed := time.Since(start)
 
-			if err != nil {
-				result.Error = err.Error()
-				log.Failed(mod.Name(), err)
-			} else {
-				log.Done(mod.Name(), len(files), "artifacts", elapsed)
-			}
+				result := module.Result{
+					CollectorName:  mod.Name(),
+					Category:       mod.Category(),
+					FilesCollected: files,
+					Duration:       elapsed,
+					DurationSec:    elapsed.Seconds(),
+					Success:        err == nil,
+				}
 
-			mu.Lock()
-			results[idx] = result
-			mu.Unlock()
-			if callbacks.OnModuleFinish != nil {
-				callbacks.OnModuleFinish(idx, result)
-			}
-		}(i, m)
+				if err != nil {
+					result.Error = err.Error()
+					log.Failed(mod.Name(), err)
+				} else {
+					log.Done(mod.Name(), len(files), "artifacts", elapsed)
+				}
+
+				mu.Lock()
+				results[idx] = result
+				mu.Unlock()
+				if callbacks.OnModuleFinish != nil {
+					callbacks.OnModuleFinish(idx, result)
+				}
+			}(idx, m)
+		}
+
+		wg.Wait()
 	}
 
-	wg.Wait()
+	var collectorIdx []int
+	var analyzerIdx []int
+	for idx, m := range modules {
+		if module.ModeOf(m) == module.ModeAnalyzer {
+			analyzerIdx = append(analyzerIdx, idx)
+			continue
+		}
+		collectorIdx = append(collectorIdx, idx)
+	}
+
+	runBatch(collectorIdx)
+	runBatch(analyzerIdx)
 	return results
 }
 

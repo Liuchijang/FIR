@@ -293,6 +293,27 @@ func CopyNamedDataStreamFromMFTRecord(vol *RawVolume, volData *NTFSVolumeData, r
 	return vol.CopyDataRunsToFile(volData, runs, realSize, outputPath)
 }
 
+func ReadNamedDataStreamFromMFTRecord(vol *RawVolume, volData *NTFSVolumeData, recordNumber uint64, streamName string) ([]byte, error) {
+	attrs, err := collectDataAttributesForRecord(vol, volData, recordNumber, streamName)
+	if err != nil {
+		return nil, err
+	}
+	if len(attrs) == 0 {
+		return nil, fmt.Errorf("named data stream %s not found", streamName)
+	}
+	sort.Slice(attrs, func(i, j int) bool { return attrs[i].StartVCN < attrs[j].StartVCN })
+
+	var runs []DataRun
+	var realSize int64
+	for _, attr := range attrs {
+		runs = append(runs, attr.Runs...)
+		if attr.RealSize > realSize {
+			realSize = attr.RealSize
+		}
+	}
+	return vol.ReadDataRuns(volData, runs, realSize)
+}
+
 func CopyFileFromRawPath(vol *RawVolume, volData *NTFSVolumeData, path string, outputPath string) (int64, error) {
 	recordNumber, err := FindRecordByPath(vol, volData, path)
 	if err != nil {
@@ -373,6 +394,49 @@ func (v *RawVolume) CopyDataRunsToFile(volData *NTFSVolumeData, runs []DataRun, 
 	}
 
 	return totalWritten, nil
+}
+
+func (v *RawVolume) ReadDataRuns(volData *NTFSVolumeData, runs []DataRun, realSize int64) ([]byte, error) {
+	if realSize < 0 {
+		return nil, fmt.Errorf("invalid real size: %d", realSize)
+	}
+	if realSize == 0 {
+		return []byte{}, nil
+	}
+
+	out := make([]byte, 0, realSize)
+	bytesPerCluster := int64(volData.BytesPerCluster)
+
+	for _, run := range runs {
+		runBytes := run.Length * bytesPerCluster
+		if remaining := realSize - int64(len(out)); remaining < runBytes {
+			runBytes = remaining
+		}
+		if runBytes <= 0 {
+			break
+		}
+
+		if run.Sparse {
+			out = append(out, make([]byte, runBytes)...)
+			continue
+		}
+
+		runOffset := run.LCN * bytesPerCluster
+		for consumed := int64(0); consumed < runBytes; {
+			toRead := min64(1024*1024, runBytes-consumed)
+			buf, err := v.ReadAtOffset(runOffset+consumed, toRead)
+			if err != nil {
+				return nil, fmt.Errorf("read run at offset %d: %w", runOffset+consumed, err)
+			}
+			out = append(out, buf...)
+			consumed += int64(len(buf))
+		}
+	}
+
+	if int64(len(out)) > realSize {
+		out = out[:realSize]
+	}
+	return out, nil
 }
 
 func (v *RawVolume) ReadLogicalFromRuns(volData *NTFSVolumeData, runs []DataRun, logicalOffset, size int64) ([]byte, error) {

@@ -70,7 +70,7 @@ type ChromiumProfile struct {
 func (c *chromiumCollector) Name() string     { return ChromiumCollectorName }
 func (c *chromiumCollector) Category() string { return "browser" }
 func (c *chromiumCollector) Description() string {
-	return "Collects Chromium browser forensic artifacts from selected Chrome/Edge/Brave/Vivaldi profiles"
+	return "Collect Chromium artifacts"
 }
 
 func ConfigureChromiumProfiles(paths []string) {

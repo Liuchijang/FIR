@@ -18,7 +18,7 @@ type srumCollector struct{}
 func (c *srumCollector) Name() string     { return "srum" }
 func (c *srumCollector) Category() string { return "system" }
 func (c *srumCollector) Description() string {
-	return "Collects SRUM database (SRUDB.dat) from C:\\Windows\\System32\\sru"
+	return "Collect SRUM"
 }
 
 func (c *srumCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {

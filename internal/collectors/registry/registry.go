@@ -19,7 +19,7 @@ type registryCollector struct{}
 func (c *registryCollector) Name() string     { return "registry" }
 func (c *registryCollector) Category() string { return "registry" }
 func (c *registryCollector) Description() string {
-	return "Collects Windows registry hives using native Windows file access with backup semantics"
+	return "Collect registry hives"
 }
 
 var systemHives = []string{"SYSTEM", "SOFTWARE", "SAM", "SECURITY", "DEFAULT"}

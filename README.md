@@ -66,7 +66,7 @@ After collection finishes, FIR prints a run summary table and writes the same re
 |---|---|---|
 | `browser_chromium` | `browser` | Collects Chromium browser forensic artifacts from selected Chrome, Edge, Brave, or Vivaldi profiles |
 | `eventlog` | `eventlog` | Collects Windows Event Log files (`.evtx`) with forensic priority ordering |
-| `amcache` | `execution` | Collects `Amcache.hve` from `C:\Windows\AppCompat\Programs` via native file access with raw-volume fallback |
+| `amcache` | `execution` | Collects `Amcache.hve` plus `Amcache.hve.LOG1/.LOG2` via native file access with hive-save and raw-volume fallback |
 | `prefetch` | `execution` | Collects Windows Prefetch files (`.pf`) from `C:\Windows\Prefetch` |
 | `autoruns` | `live` | Generates live autoruns-style triage CSV for services, Run keys, startup folders, and scheduled tasks |
 | `process_explorer` | `live` | Generates live process, module, and network triage CSV from the running system |
@@ -74,9 +74,24 @@ After collection finishes, FIR prints a run summary table and writes the same re
 | `mft` | `ntfs` | Collects the `$MFT` (Master File Table) via raw disk access |
 | `secure_sds` | `ntfs` | Best-effort collection of the `$Secure:$SDS` stream via raw NTFS record parsing |
 | `usnjrnl` | `ntfs` | Collects the `$UsnJrnl:$J` USN Change Journal via FSCTL |
-| `registry` | `registry` | Collects SYSTEM, SOFTWARE, SAM, SECURITY, `DEFAULT`, `NTUSER.DAT`, and `UsrClass.dat` hives via backup semantics with hive-save fallback |
+| `registry` | `registry` | Collects primary registry hives plus `.LOG1/.LOG2` via backup semantics with hive-save fallback |
 | `srum` | `system` | Collects the SRUM database (`SRUDB.dat`) via native Windows file access |
 | `wmi` | `system` | Collects WMI repository files (`OBJECTS.DATA`, `INDEX.BTR`, `MAPPING*.MAP`) |
+
+### Available Analyzer Modules
+
+| Name | Category | Description |
+|---|---|---|
+| `amcache_parser` | `execution` | Parse Amcache |
+| `eventlog_parser` | `eventlog` | Parse EVTX logs |
+| `mft_parser` | `ntfs` | Parse `$MFT` to full CSV |
+| `prefetch_parser` | `execution` | Parse Prefetch |
+| `recentdocs_parser` | `registry` | Parse RecentDocs |
+| `secure_sds_parser` | `ntfs` | Parse Secure SDS |
+| `shimcache_parser` | `registry` | Parse ShimCache |
+| `userassist_parser` | `registry` | Parse UserAssist |
+| `usnjrnl_parser` | `ntfs` | Parse USN, enrich with MFT if selected |
+| `wmi_parser` | `system` | Parse WMI |
 
 **Category shortcuts**: Use `browser`, `eventlog`, `execution`, `live`, `memory`, `ntfs`, `registry`, `system`, or `all`.
 

@@ -9,6 +9,7 @@
 
 # Runtime output
 DESKTOP-*
+_smoke_*/
 test_output/
 logs/
 _collector_verify/
@@ -16,7 +17,6 @@ _collector_verify_new/
 _summary_verify/
 _registry_verify/
 _registry_verify2/
-DESKTOP-INA4OT9_*/
 
 # IDE / Editor
 .vscode/

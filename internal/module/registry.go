@@ -11,6 +11,13 @@ var registry = &collectorRegistry{
 	collectors: make(map[string]Module),
 }
 
+var activeRun = struct {
+	mu      sync.RWMutex
+	modules map[string]bool
+}{
+	modules: make(map[string]bool),
+}
+
 // collectorRegistry provides thread-safe registration and lookup of modules.
 type collectorRegistry struct {
 	mu         sync.RWMutex
@@ -153,4 +160,33 @@ func Names() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// SetActiveRunModules stores the modules selected for the current run so that
+// modules can make small coordination decisions without changing the public
+// module contract.
+func SetActiveRunModules(modules []Module) {
+	activeRun.mu.Lock()
+	defer activeRun.mu.Unlock()
+
+	activeRun.modules = make(map[string]bool, len(modules))
+	for _, mod := range modules {
+		activeRun.modules[mod.Name()] = true
+	}
+}
+
+// ClearActiveRunModules clears the current run selection state.
+func ClearActiveRunModules() {
+	activeRun.mu.Lock()
+	defer activeRun.mu.Unlock()
+
+	activeRun.modules = make(map[string]bool)
+}
+
+// IsSelected reports whether the named module is part of the current run.
+func IsSelected(name string) bool {
+	activeRun.mu.RLock()
+	defer activeRun.mu.RUnlock()
+
+	return activeRun.modules[name]
 }

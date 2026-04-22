@@ -169,7 +169,7 @@ func newMenuModel() menuModel {
 				module: m,
 				mode:   mode,
 				title:  fmt.Sprintf("[%s] %s", m.Category(), m.Name()),
-				detail: m.Description(),
+				detail: shortMenuDescription(m.Description()),
 			})
 		}
 	}
@@ -758,6 +758,17 @@ func renderSelectableRow(cursor, selected bool, title, detail, category string, 
 		row += " " + subtleStyle.Render("-- "+trimToWidth(detail, detailWidth-3))
 	}
 	return row
+}
+
+func shortMenuDescription(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if len(value) <= 44 {
+		return value
+	}
+	return strings.TrimSpace(value[:41]) + "..."
 }
 
 func (m menuModel) bodyView(width, height int) string {

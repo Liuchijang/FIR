@@ -16,7 +16,7 @@ func (a *processExplorerAnalyzer) Name() string     { return "process_explorer" 
 func (a *processExplorerAnalyzer) Category() string { return "live" }
 func (a *processExplorerAnalyzer) Mode() string     { return module.ModeAnalyzer }
 func (a *processExplorerAnalyzer) Description() string {
-	return "Generates live process, module, and network triage CSV from the running system"
+	return "Live process triage"
 }
 
 func (a *processExplorerAnalyzer) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
