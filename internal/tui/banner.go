@@ -11,17 +11,15 @@ type BannerContent struct {
 	Subtitle    string
 	CenterTitle string
 	CenterLines []string
-	RightTitle  string
-	RightLines  []string
 }
 
 var (
 	bannerBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("240"))
-	bannerTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+				BorderForeground(lipgloss.Color("246"))
+	bannerTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("218")).Bold(true)
 	bannerMutedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	bannerLogoStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("208"))
+	bannerLogoStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("217"))
 )
 
 func RenderAppBanner(width int, content BannerContent) string {
@@ -48,8 +46,8 @@ func RenderAppBanner(width int, content BannerContent) string {
 			bannerLogoStyle.Render(renderLogo(maxInt(10, contentWidth))),
 			"",
 			bannerTitleStyle.Render("FIR v" + version),
-			wrapMessage("Freedom Incident Response", contentWidth),
-			bannerMutedStyle.Render(wrapMessage(subtitle, contentWidth)),
+			trimToWidth("Freedom Incident Response", contentWidth),
+			bannerMutedStyle.Render(trimToWidth(subtitle, contentWidth)),
 		}
 		box := lipgloss.NewStyle().
 			Width(contentWidth).
@@ -58,61 +56,50 @@ func RenderAppBanner(width int, content BannerContent) string {
 		return bannerBorderStyle.Render(box)
 	}
 
-	panelGap := 2
-	available := innerWidth - panelGap*2
-	if available < 30 {
+	panelGap := 1
+	available := innerWidth - panelGap
+	if available < 24 {
 		available = innerWidth
 	}
 
-	leftWidth := maxInt(22, (available*38)/100)
-	midWidth := maxInt(18, (available*37)/100)
-	rightWidth := maxInt(18, available-leftWidth-midWidth)
-	totalWidth := leftWidth + midWidth + rightWidth
-	if totalWidth > available {
-		overflow := totalWidth - available
-		if rightWidth-overflow >= 12 {
-			rightWidth -= overflow
-		} else if midWidth-overflow >= 12 {
-			midWidth -= overflow
-		} else {
-			leftWidth = maxInt(12, leftWidth-overflow)
-		}
+	leftWidth := maxInt(16, (available*34)/100)
+	centerWidth := maxInt(12, available-leftWidth)
+	if leftWidth+centerWidth > available {
+		leftWidth = maxInt(10, available/3)
+		centerWidth = maxInt(8, available-leftWidth)
 	}
 
 	left := strings.Join([]string{
 		bannerTitleStyle.Render("FIR v" + version),
-		wrapMessage("Freedom Incident Response", leftWidth),
-		bannerMutedStyle.Render(wrapMessage(subtitle, leftWidth)),
+		trimToWidth("Freedom Incident Response", leftWidth),
+		bannerMutedStyle.Render(trimToWidth(subtitle, leftWidth)),
 	}, "\n")
 
-	center := strings.Join(buildPanel(content.CenterTitle, content.CenterLines), "\n")
-	right := strings.Join(buildPanel(content.RightTitle, content.RightLines), "\n")
-
+	center := strings.Join(buildPanel(centerWidth, content.CenterTitle, content.CenterLines), "\n")
 	logo := bannerLogoStyle.Render(renderLogo(maxInt(10, leftWidth)))
 	left = strings.Join([]string{logo, "", left}, "\n")
 
 	panelStyle := lipgloss.NewStyle().Padding(0, 0)
-	row := lipgloss.JoinHorizontal(
-		lipgloss.Top,
+	rowParts := []string{
 		panelStyle.Width(leftWidth).Render(left),
-		lipgloss.NewStyle().Padding(0, 1).Width(midWidth).Render(center),
-		panelStyle.Width(rightWidth).Render(right),
-	)
+		lipgloss.NewStyle().Padding(0, 1).Width(centerWidth).Render(center),
+	}
+	row := lipgloss.JoinHorizontal(lipgloss.Top, rowParts...)
 	box := lipgloss.NewStyle().Width(innerWidth).Render(row)
 	return bannerBorderStyle.Render(box)
 }
 
-func buildPanel(title string, lines []string) []string {
+func buildPanel(width int, title string, lines []string) []string {
 	if title == "" && len(lines) == 0 {
 		return nil
 	}
 
 	panel := make([]string, 0, len(lines)+1)
 	if title != "" {
-		panel = append(panel, bannerTitleStyle.Render(title))
+		panel = append(panel, bannerTitleStyle.Render(trimToWidth(title, width)))
 	}
 	for _, line := range lines {
-		panel = append(panel, bannerMutedStyle.Render(line))
+		panel = append(panel, bannerMutedStyle.Render(trimToWidth(line, width)))
 	}
 	return panel
 }
@@ -125,33 +112,6 @@ func renderLogo(width int) string {
 	}
 	for idx := range lines {
 		lines[idx] = trimToWidth(lines[idx], width)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func wrapMessage(value string, width int) string {
-	if width <= 0 || lipgloss.Width(value) <= width {
-		return value
-	}
-
-	words := strings.Fields(value)
-	if len(words) == 0 {
-		return value
-	}
-
-	var lines []string
-	current := words[0]
-	for _, word := range words[1:] {
-		candidate := current + " " + word
-		if lipgloss.Width(candidate) <= width {
-			current = candidate
-			continue
-		}
-		lines = append(lines, current)
-		current = word
-	}
-	if current != "" {
-		lines = append(lines, current)
 	}
 	return strings.Join(lines, "\n")
 }

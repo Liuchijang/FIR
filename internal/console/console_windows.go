@@ -20,6 +20,7 @@ var (
 	procGetConsoleWindow           = modKernel32.NewProc("GetConsoleWindow")
 	procReadConsoleInputW          = modKernel32.NewProc("ReadConsoleInputW")
 	procSetConsoleScreenBufferSize = modKernel32.NewProc("SetConsoleScreenBufferSize")
+	procSetConsoleWindowInfo       = modKernel32.NewProc("SetConsoleWindowInfo")
 	procSetConsoleCP               = modKernel32.NewProc("SetConsoleCP")
 	procSetConsoleOutputCP         = modKernel32.NewProc("SetConsoleOutputCP")
 )
@@ -228,6 +229,13 @@ func SyncBufferToWindow() {
 	syncBufferToWindowForHandle(windows.STD_ERROR_HANDLE)
 }
 
+func CurrentSize() (int, int, bool) {
+	if !hasInteractiveConsoleHandles() {
+		return 0, 0, false
+	}
+	return consoleSizeForHandle(windows.STD_OUTPUT_HANDLE)
+}
+
 func shouldPauseBeforeExit() bool {
 	if !hasConsoleWindow() || !hasInteractiveConsoleHandles() {
 		return false
@@ -285,12 +293,8 @@ func syncBufferToWindowForHandle(kind uint32) {
 		return
 	}
 
-	var info consoleScreenBufferInfo
-	r1, _, _ := procGetConsoleScreenBufferInfo.Call(
-		uintptr(handle),
-		uintptr(unsafe.Pointer(&info)),
-	)
-	if r1 == 0 {
+	info, ok := getConsoleScreenBufferInfo(handle)
+	if !ok {
 		return
 	}
 
@@ -304,10 +308,63 @@ func syncBufferToWindowForHandle(kind uint32) {
 		return
 	}
 
+	// On Windows, SetConsoleScreenBufferSize cannot set the buffer smaller
+	// than the current window extent. When the user shrinks the terminal,
+	// we must first shrink the visible window rect so the buffer can follow.
+	needShrinkX := info.DwSize.X > windowWidth
+	needShrinkY := info.DwSize.Y > windowHeight
+	if needShrinkX || needShrinkY {
+		// Shrink the window rect to match the visible area before resizing
+		// the buffer. This avoids the "buffer < window" constraint that
+		// causes SetConsoleScreenBufferSize to silently fail.
+		shrunkRect := smallRect{
+			Left:   0,
+			Top:    0,
+			Right:  windowWidth - 1,
+			Bottom: windowHeight - 1,
+		}
+		procSetConsoleWindowInfo.Call(
+			uintptr(handle),
+			1, // bAbsolute = TRUE
+			uintptr(unsafe.Pointer(&shrunkRect)),
+		)
+	}
+
 	procSetConsoleScreenBufferSize.Call(
 		uintptr(handle),
 		packCoord(windowWidth, windowHeight),
 	)
+}
+
+func consoleSizeForHandle(kind uint32) (int, int, bool) {
+	handle, err := windows.GetStdHandle(kind)
+	if err != nil || handle == 0 || handle == windows.InvalidHandle {
+		return 0, 0, false
+	}
+
+	info, ok := getConsoleScreenBufferInfo(handle)
+	if !ok {
+		return 0, 0, false
+	}
+
+	windowWidth := int(info.SrWindow.Right - info.SrWindow.Left + 1)
+	windowHeight := int(info.SrWindow.Bottom - info.SrWindow.Top + 1)
+	if windowWidth <= 0 || windowHeight <= 0 {
+		return 0, 0, false
+	}
+	return windowWidth, windowHeight, true
+}
+
+func getConsoleScreenBufferInfo(handle windows.Handle) (consoleScreenBufferInfo, bool) {
+	var info consoleScreenBufferInfo
+	r1, _, _ := procGetConsoleScreenBufferInfo.Call(
+		uintptr(handle),
+		uintptr(unsafe.Pointer(&info)),
+	)
+	if r1 == 0 {
+		return consoleScreenBufferInfo{}, false
+	}
+	return info, true
 }
 
 func packCoord(x, y int16) uintptr {

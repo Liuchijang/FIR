@@ -3,15 +3,15 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"golang.org/x/term"
 
 	"github.com/Liuchijang/FIR/internal/collectors/browser"
 	eventlogpkg "github.com/Liuchijang/FIR/internal/collectors/eventlog"
@@ -31,21 +31,30 @@ const (
 )
 
 var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("87"))
-	subtleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	helpStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	cursorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
-	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("79"))
+	titleStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("218"))
+	subtleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	helpStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	cursorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("217"))
+	selectedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("218"))
+	menuItemStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
+	focusedRowStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("175"))
+	focusedDetailStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("175"))
+	focusedCursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("175")).Bold(true)
+	focusedCheckStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("175")).Bold(true)
+	menuFooterStyle    = lipgloss.NewStyle().
+				BorderTop(true).
+				BorderForeground(lipgloss.Color("246")).
+				Padding(0, 1)
 
 	categoryStyles = map[string]lipgloss.Style{
-		"memory":    lipgloss.NewStyle().Foreground(lipgloss.Color("204")),
-		"ntfs":      lipgloss.NewStyle().Foreground(lipgloss.Color("214")),
-		"execution": lipgloss.NewStyle().Foreground(lipgloss.Color("79")),
-		"eventlog":  lipgloss.NewStyle().Foreground(lipgloss.Color("75")),
-		"live":      lipgloss.NewStyle().Foreground(lipgloss.Color("221")),
-		"registry":  lipgloss.NewStyle().Foreground(lipgloss.Color("111")),
-		"system":    lipgloss.NewStyle().Foreground(lipgloss.Color("176")),
-		"browser":   lipgloss.NewStyle().Foreground(lipgloss.Color("117")),
+		"memory":    lipgloss.NewStyle().Foreground(lipgloss.Color("217")),
+		"ntfs":      lipgloss.NewStyle().Foreground(lipgloss.Color("218")),
+		"execution": lipgloss.NewStyle().Foreground(lipgloss.Color("182")),
+		"eventlog":  lipgloss.NewStyle().Foreground(lipgloss.Color("182")),
+		"live":      lipgloss.NewStyle().Foreground(lipgloss.Color("218")),
+		"registry":  lipgloss.NewStyle().Foreground(lipgloss.Color("217")),
+		"system":    lipgloss.NewStyle().Foreground(lipgloss.Color("218")),
+		"browser":   lipgloss.NewStyle().Foreground(lipgloss.Color("182")),
 	}
 
 	safePinkSpinner = spinner.Spinner{
@@ -88,8 +97,89 @@ type sizePollMsg struct {
 	height int
 }
 
+type menuKeyMap struct {
+	Up        key.Binding
+	Down      key.Binding
+	PageUp    key.Binding
+	PageDown  key.Binding
+	Top       key.Binding
+	Bottom    key.Binding
+	Toggle    key.Binding
+	ToggleAll key.Binding
+	Continue  key.Binding
+	Back      key.Binding
+	Help      key.Binding
+	Quit      key.Binding
+}
+
+func newMenuKeyMap() menuKeyMap {
+	return menuKeyMap{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("up/k", "move"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("down/j", "move"),
+		),
+		PageUp: key.NewBinding(
+			key.WithKeys("pgup", "b"),
+			key.WithHelp("pgup", "page up"),
+		),
+		PageDown: key.NewBinding(
+			key.WithKeys("pgdown", "f"),
+			key.WithHelp("pgdn", "page down"),
+		),
+		Top: key.NewBinding(
+			key.WithKeys("home", "g"),
+			key.WithHelp("g/home", "top"),
+		),
+		Bottom: key.NewBinding(
+			key.WithKeys("end", "G"),
+			key.WithHelp("G/end", "bottom"),
+		),
+		Toggle: key.NewBinding(
+			key.WithKeys(" "),
+			key.WithHelp("space", "toggle"),
+		),
+		ToggleAll: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("a", "all on/off"),
+		),
+		Continue: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "continue"),
+		),
+		Back: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "back"),
+		),
+		Help: key.NewBinding(
+			key.WithKeys("?"),
+			key.WithHelp("?", "toggle help"),
+		),
+		Quit: key.NewBinding(
+			key.WithKeys("q", "ctrl+c"),
+			key.WithHelp("q", "quit"),
+		),
+	}
+}
+
+func (k menuKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Up, k.PageDown, k.Toggle, k.Help, k.Quit}
+}
+
+func (k menuKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
+		{k.Toggle, k.ToggleAll},
+		{k.Continue, k.Back, k.Help, k.Quit},
+	}
+}
+
 type menuModel struct {
 	spinner spinner.Model
+	help    help.Model
 	width   int
 	height  int
 
@@ -160,7 +250,7 @@ func newMenuModel() menuModel {
 	} else {
 		spin.Spinner = spinner.Dot
 	}
-	spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("217")).Bold(true)
 
 	var options []moduleOption
 	for _, mode := range module.Modes() {
@@ -169,13 +259,14 @@ func newMenuModel() menuModel {
 				module: m,
 				mode:   mode,
 				title:  fmt.Sprintf("[%s] %s", m.Category(), m.Name()),
-				detail: shortMenuDescription(m.Description()),
+				detail: strings.TrimSpace(m.Description()),
 			})
 		}
 	}
 
 	return menuModel{
 		spinner:            spin,
+		help:               help.New(),
 		width:              100,
 		height:             28,
 		phase:              phaseCollectors,
@@ -188,7 +279,7 @@ func newMenuModel() menuModel {
 }
 
 func (m menuModel) Init() tea.Cmd {
-	return pollTerminalSizeCmd()
+	return tea.Batch(syncTerminalSizeCmd(), pollTerminalSizeCmd())
 }
 
 func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -198,6 +289,7 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Width > 0 {
 			sizeChanged = sizeChanged || msg.Width != m.width
 			m.width = msg.Width
+			m.help.Width = msg.Width
 		}
 		if msg.Height > 0 {
 			sizeChanged = sizeChanged || msg.Height != m.height
@@ -214,6 +306,7 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.width > 0 {
 			sizeChanged = sizeChanged || msg.width != m.width
 			m.width = msg.width
+			m.help.Width = msg.width
 		}
 		if msg.height > 0 {
 			sizeChanged = sizeChanged || msg.height != m.height
@@ -226,8 +319,12 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, pollTerminalSizeCmd()
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
+		keys := m.keyMap()
+		switch {
+		case key.Matches(msg, keys.Help):
+			m.help.ShowAll = !m.help.ShowAll
+			return m, nil
+		case key.Matches(msg, keys.Quit):
 			m.cancelled = true
 			return m, tea.Quit
 		}
@@ -337,14 +434,21 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m menuModel) updateCollectors(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "esc":
+		m.cancelled = true
+		return m, tea.Quit
 	case "up", "k":
-		if m.collectorCursor > 0 {
-			m.collectorCursor--
-		}
+		m.collectorCursor = moveCursorUp(m.collectorCursor, 1)
 	case "down", "j":
-		if m.collectorCursor < len(m.modules)-1 {
-			m.collectorCursor++
-		}
+		m.collectorCursor = moveCursorDown(m.collectorCursor, len(m.modules), 1)
+	case "pgup", "b":
+		m.collectorCursor = moveCursorUp(m.collectorCursor, pageStep(m.height))
+	case "pgdown", "f":
+		m.collectorCursor = moveCursorDown(m.collectorCursor, len(m.modules), pageStep(m.height))
+	case "home", "g":
+		m.collectorCursor = 0
+	case "end", "G":
+		m.collectorCursor = maxInt(0, len(m.modules)-1)
 	case " ":
 		if len(m.modules) > 0 {
 			m.selectedCollectors[m.collectorCursor] = !m.selectedCollectors[m.collectorCursor]
@@ -390,13 +494,17 @@ func (m menuModel) updateCollectors(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m menuModel) updateProfiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
-		if m.profileCursor > 0 {
-			m.profileCursor--
-		}
+		m.profileCursor = moveCursorUp(m.profileCursor, 1)
 	case "down", "j":
-		if m.profileCursor < len(m.profiles)-1 {
-			m.profileCursor++
-		}
+		m.profileCursor = moveCursorDown(m.profileCursor, len(m.profiles), 1)
+	case "pgup", "b":
+		m.profileCursor = moveCursorUp(m.profileCursor, pageStep(m.height))
+	case "pgdown", "f":
+		m.profileCursor = moveCursorDown(m.profileCursor, len(m.profiles), pageStep(m.height))
+	case "home", "g":
+		m.profileCursor = 0
+	case "end", "G":
+		m.profileCursor = maxInt(0, len(m.profiles)-1)
 	case " ":
 		if len(m.profiles) > 0 {
 			m.selectedProfiles[m.profileCursor] = !m.selectedProfiles[m.profileCursor]
@@ -440,13 +548,17 @@ func (m menuModel) updateProfiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m menuModel) updateEventLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
-		if m.eventLogCursor > 0 {
-			m.eventLogCursor--
-		}
+		m.eventLogCursor = moveCursorUp(m.eventLogCursor, 1)
 	case "down", "j":
-		if m.eventLogCursor < len(m.eventLogs)-1 {
-			m.eventLogCursor++
-		}
+		m.eventLogCursor = moveCursorDown(m.eventLogCursor, len(m.eventLogs), 1)
+	case "pgup", "b":
+		m.eventLogCursor = moveCursorUp(m.eventLogCursor, pageStep(m.height))
+	case "pgdown", "f":
+		m.eventLogCursor = moveCursorDown(m.eventLogCursor, len(m.eventLogs), pageStep(m.height))
+	case "home", "g":
+		m.eventLogCursor = 0
+	case "end", "G":
+		m.eventLogCursor = maxInt(0, len(m.eventLogs)-1)
 	case " ":
 		if len(m.eventLogs) > 0 {
 			m.selectedEventLogs[m.eventLogCursor] = !m.selectedEventLogs[m.eventLogCursor]
@@ -469,6 +581,11 @@ func (m menuModel) updateEventLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("Selected all %d EVTX files.", len(m.eventLogs))
 		}
 	case "esc":
+		if m.needsBrowserProfiles() {
+			m.phase = phaseProfiles
+			m.status = fmt.Sprintf("%d browser profiles selected.", len(m.profileResults()))
+			return m, nil
+		}
 		m.phase = phaseCollectors
 		m.status = fmt.Sprintf("%d modules selected.", len(m.moduleResults()))
 	case "enter":
@@ -483,31 +600,44 @@ func (m menuModel) updateEventLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m menuModel) View() string {
-	width := m.width
-	if width <= 0 {
-		width = 80
+	totalWidth := m.width
+	if totalWidth <= 0 {
+		totalWidth = 80
 	}
-	width = maxInt(24, width)
+	totalWidth = maxInt(24, totalWidth)
+	width := totalWidth
 	height := m.height
 	if height <= 0 {
 		height = 24
 	}
 
 	header := m.headerView(width)
-	layout := MeasureScreenLayout(width, height, header)
+	footer := m.footerView(width)
+	layout := MeasureRootLayout(width, height, header, footer)
 	body := m.bodyView(width, layout.ContentHeight)
-	return RenderScreen(layout, header, body)
+	return RenderRootLayout(layout, header, body, footer)
 }
 
 func (m menuModel) headerView(width int) string {
 	sections := []string{
 		m.bannerView(width),
 		"",
-		titleStyle.Render("Module Selection"),
-		subtleStyle.Render(wrapMessage(m.status, width)),
-		helpStyle.Render(wrapMessage("Controls: up/down move, space toggle, a select all, enter continue, esc/q quit.", width)),
+		titleStyle.Render(m.screenTitle()),
+		subtleStyle.Render(trimToWidth(m.status, width)),
 	}
 	return strings.Join(sections, "\n")
+}
+
+func (m menuModel) footerView(width int) string {
+	helpModel := m.help
+	helpModel.Width = maxInt(1, width-menuFooterStyle.GetHorizontalFrameSize())
+
+	lines := make([]string, 0, 1)
+	if helpView := helpModel.View(m.keyMap()); helpView != "" {
+		lines = append(lines, helpView)
+	}
+	innerWidth := maxInt(1, width-menuFooterStyle.GetHorizontalFrameSize())
+	return menuFooterStyle.Width(innerWidth).Render(strings.Join(lines, "\n"))
 }
 
 func (m menuModel) renderCollectors(width, height int) string {
@@ -542,7 +672,7 @@ func (m menuModel) renderLoadingProfiles(width, _ int) string {
 	lines := []string{
 		fmt.Sprintf("%s Discovering browser profiles...", m.spinner.View()),
 		"",
-		wrapMessage("Press esc to return to collector selection.", width),
+		trimToWidth("Scanning detected browser data roots and enumerating available profiles.", width),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -566,7 +696,7 @@ func (m menuModel) renderLoadingEventLogs(width, _ int) string {
 	lines := []string{
 		fmt.Sprintf("%s Discovering EVTX files...", m.spinner.View()),
 		"",
-		wrapMessage("Press esc to return to module selection.", width),
+		trimToWidth("Enumerating EVTX candidates so the parser only targets files you explicitly choose.", width),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -717,30 +847,35 @@ func (m menuModel) bodyRowsAvailable(height int) int {
 
 func renderSelectableRow(cursor, selected bool, title, detail, category string, width, titleWidth int) string {
 	cursorText := " "
+	cursorTextStyle := lipgloss.NewStyle()
 	if cursor {
-		cursorText = cursorStyle.Render(">")
+		cursorTextStyle = focusedCursorStyle
+		cursorText = ">"
 	}
 
 	check := "[ ]"
 	checkStyle := lipgloss.NewStyle()
+	itemStyle := menuItemStyle
+	detailStyle := subtleStyle
 	if selected {
 		check = "[x]"
 		checkStyle = selectedStyle
+		itemStyle = selectedStyle
+	}
+	if cursor {
+		checkStyle = focusedCheckStyle
+		itemStyle = focusedRowStyle
+		detailStyle = focusedDetailStyle
 	}
 
-	style, ok := categoryStyles[category]
-	if !ok {
-		style = lipgloss.NewStyle()
-	}
-
-	prefix := fmt.Sprintf("%s %s ", cursorText, checkStyle.Render(check))
+	prefix := fmt.Sprintf("%s %s ", cursorTextStyle.Render(cursorText), checkStyle.Render(check))
 	available := maxInt(1, width-lipgloss.Width(prefix))
 	if available < 16 {
-		return prefix + style.Render(trimToWidth(title, available))
+		return prefix + itemStyle.Render(trimToWidth(title, available))
 	}
 
 	if strings.TrimSpace(detail) == "" {
-		return prefix + style.Render(trimToWidth(title, available))
+		return prefix + itemStyle.Render(trimToWidth(title, available))
 	}
 
 	if titleWidth > available-5 {
@@ -750,25 +885,40 @@ func renderSelectableRow(cursor, selected bool, title, detail, category string, 
 		titleWidth = 8
 	}
 
-	titleText := padRight(trimToWidth(title, titleWidth), titleWidth)
-	row := prefix + style.Render(titleText)
+	titleText := trimToWidth(title, titleWidth)
+	titlePadding := titleWidth - lipgloss.Width(titleText)
+	if titlePadding < 0 {
+		titlePadding = 0
+	}
+	row := prefix + itemStyle.Render(titleText) + strings.Repeat(" ", titlePadding)
 
 	detailWidth := available - titleWidth - 1
 	if detailWidth > 4 && detail != "" {
-		row += " " + subtleStyle.Render("-- "+trimToWidth(detail, detailWidth-3))
+		row += " " + detailStyle.Render("-- "+trimToWidth(detail, detailWidth-3))
 	}
 	return row
 }
 
-func shortMenuDescription(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
+func pollTerminalSizeCmd() tea.Cmd {
+	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg {
+		console.SyncBufferToWindow()
+		width, height, ok := console.CurrentSize()
+		if !ok {
+			return nil
+		}
+		return sizePollMsg{width: width, height: height}
+	})
+}
+
+func syncTerminalSizeCmd() tea.Cmd {
+	return func() tea.Msg {
+		console.SyncBufferToWindow()
+		width, height, ok := console.CurrentSize()
+		if !ok {
+			return nil
+		}
+		return sizePollMsg{width: width, height: height}
 	}
-	if len(value) <= 44 {
-		return value
-	}
-	return strings.TrimSpace(value[:41]) + "..."
 }
 
 func (m menuModel) bodyView(width, height int) string {
@@ -792,10 +942,8 @@ func (m menuModel) bannerView(width int) string {
 	return RenderAppBanner(width, BannerContent{
 		Version:     output.Version,
 		Subtitle:    "Interactive module launcher",
-		CenterTitle: "Welcome",
-		CenterLines: []string{"Choose modules", "Review browser profiles", "Run collection"},
-		RightTitle:  "Controls",
-		RightLines:  []string{"up/down  move", "space    toggle", "a        all", "enter    continue", "esc/q    quit"},
+		CenterTitle: "Interactive Flow",
+		CenterLines: m.bannerWorkflowLines(),
 	})
 }
 
@@ -861,20 +1009,81 @@ func discoverEventLogsCmd() tea.Cmd {
 	}
 }
 
-func pollTerminalSizeCmd() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg {
-		width, height, err := term.GetSize(int(os.Stdout.Fd()))
-		if err != nil {
-			return nil
-		}
-		return sizePollMsg{width: width, height: height}
-	})
+func moveCursorUp(cursor, step int) int {
+	if step < 1 {
+		step = 1
+	}
+	cursor -= step
+	if cursor < 0 {
+		return 0
+	}
+	return cursor
 }
 
-func padRight(value string, width int) string {
-	padding := width - lipgloss.Width(value)
-	if padding <= 0 {
-		return value
+func moveCursorDown(cursor, total, step int) int {
+	if total <= 0 {
+		return 0
 	}
-	return value + strings.Repeat(" ", padding)
+	if step < 1 {
+		step = 1
+	}
+	cursor += step
+	maxCursor := total - 1
+	if cursor > maxCursor {
+		return maxCursor
+	}
+	return cursor
+}
+
+func pageStep(height int) int {
+	step := height / 3
+	if step < 5 {
+		return 5
+	}
+	return step
+}
+
+func (m menuModel) keyMap() menuKeyMap {
+	keys := newMenuKeyMap()
+	switch m.phase {
+	case phaseCollectors:
+		keys.Back.SetEnabled(false)
+	case phaseLoadingProfiles, phaseLoadingEventLogs:
+		keys.Up.SetEnabled(false)
+		keys.Down.SetEnabled(false)
+		keys.Toggle.SetEnabled(false)
+		keys.ToggleAll.SetEnabled(false)
+		keys.Continue.SetEnabled(false)
+	case phaseProfiles, phaseEventLogs:
+		// All bindings remain enabled.
+	default:
+		keys.Back.SetEnabled(false)
+	}
+	return keys
+}
+
+func (m menuModel) bannerWorkflowLines() []string {
+	switch m.phase {
+	case phaseLoadingProfiles, phaseProfiles:
+		return []string{"Choose modules", "Review browser profiles", "Prepare collection"}
+	case phaseLoadingEventLogs, phaseEventLogs:
+		return []string{"Choose modules", "Review EVTX selection", "Prepare collection"}
+	default:
+		return []string{"Choose modules", "Review browser profiles", "Run collection"}
+	}
+}
+
+func (m menuModel) screenTitle() string {
+	switch m.phase {
+	case phaseLoadingProfiles:
+		return "Loading Browser Profiles"
+	case phaseProfiles:
+		return "Browser Profile Selection"
+	case phaseLoadingEventLogs:
+		return "Loading EVTX Files"
+	case phaseEventLogs:
+		return "EVTX File Selection"
+	default:
+		return "Module Selection"
+	}
 }

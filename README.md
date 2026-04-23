@@ -1,149 +1,228 @@
 # FIR - Freedom Incident Response
 
-A production-grade Windows DFIR (Digital Forensics & Incident Response) artifact collection tool written in Go. Designed for first-response triage scenarios with a focus on minimal system impact, forensic integrity, and extensibility.
+FIR is a Windows DFIR artifact collection tool written in Go for fast triage, responder-friendly workflows, and low-friction extension. It supports both an interactive terminal UI and a flag-driven CLI so the same binary works for hands-on response and repeatable scripted collection.
 
-## Features
+## Highlights
 
-- **Dual CLI Modes**: Bubble Tea interactive flow or flag-driven batch collection
-- **Built-in Modules**: Collector modules for Browser, Event Logs, Execution, Live Response, Memory, NTFS, Registry, and System artifacts, plus analyzer modules for parsed triage output
-- **Forensic Safety**: Read-only access, SHA-256 integrity hashing, no artifact modification
-- **Windows Privilege Handling**: Auto-detects admin status and enables backup, restore, security, and debug privileges when available
-- **Native Windows Collection**: Uses backup semantics, registry hive save APIs, and raw NTFS access where needed
-- **Concurrent Collection**: Configurable parallelism with per-module timeouts
-- **Structured Output**: Organized collection output with summary reports and structured logs
-- **Extensible Modules**: Add collection or analyzer modules behind a shared module contract with minimal integration work
+- Interactive Bubble Tea workflow for module selection, browser profile review, EVTX targeting, and live progress tracking
+- Flag-driven collection mode for automation and repeatable runs
+- Built-in collectors and analyzers across `browser`, `eventlog`, `execution`, `live`, `memory`, `ntfs`, `registry`, and `system`
+- Forensic-minded collection with SHA-256 hashing, structured output, and minimal artifact modification
+- Native Windows handling for privileges, raw NTFS access, registry hives, and backup semantics where needed
+- Concurrent execution with configurable per-module timeout and concurrency limits
+
+## Requirements
+
+- Windows 10/11 or Windows Server 2016+
+- Administrator privileges for full collection coverage
+- Go 1.21+ if building from source
 
 ## Build
 
 ```powershell
-# Build the binary
+# Basic build
 go build -ldflags "-s -w" -o fir.exe .
 
-# Or with version info
+# Build with version metadata
 go build -ldflags "-s -w -X github.com/Liuchijang/FIR/internal/output.Version=1.2.0" -o fir.exe .
 ```
 
-**Requirements**: Go 1.21+ and Windows target platform.
+## Quick Start
 
-## Usage
-
-### Interactive Mode (default)
+### Interactive mode
 
 ```powershell
-# Run as Administrator for full access
 .\fir.exe
 ```
 
-This launches a Bubble Tea interface where you can:
-- Browse and toggle modules in a keyboard-driven menu
-- Show a spinner while browser profiles are being discovered
-- Watch modules move through waiting, running, success, and failed states during execution
+Interactive mode is the default entry point. FIR opens a full-screen terminal UI where you can:
 
-After collection finishes, FIR prints a run summary table and writes the same report to `summary.txt`.
+- Choose collector and analyzer modules from grouped lists
+- Review browser profiles only when a browser module is selected
+- Review EVTX targets only when the EVTX parser is selected
+- Expand or collapse footer help with `?`
+- Watch live module progress with waiting, running, success, and failed states
+- Review a rendered terminal summary when the run completes
 
-### Flag Mode
+### Flag mode
 
 ```powershell
-# Collect specific artifacts
+# Specific modules
 .\fir.exe collect --artifact registry,eventlog,prefetch
 
-# Collect by category
+# By category
 .\fir.exe collect --artifact ntfs,execution
 
-# Collect everything
+# Everything
 .\fir.exe collect --artifact all
 
 # Custom output directory and timeout
 .\fir.exe collect --artifact registry,eventlog --output C:\triage --timeout 10m
 
-# Verbose mode with higher concurrency
-.\fir.exe collect --artifact all --output E:\evidence -v --concurrency 4
+# Verbose run with higher concurrency
+.\fir.exe collect --artifact all --output E:\evidence --concurrency 4 -v
 ```
 
-### Available Artifacts
+## Interactive UI Samples
+
+These examples are illustrative terminal snapshots of the current UI flow.
+
+### Module selection
+
+```text
++------------------------------------------------------------------------------+
+|  |-----||   O    |----\\                                                    |
+|  |    --| |----| |   x  <|'                                                 |
+|  |__|--'  |____| |__|\\__/                                                  |
+|                                                                            |
+|  FIR v1.2.0                                                                |
+|  Freedom Incident Response                                                 |
+|  Interactive module launcher                                               |
+|                                                                            |
+|                            Interactive Flow                                |
+|                            Choose modules                                  |
+|                            Review browser profiles                         |
+|                            Run collection                                  |
++------------------------------------------------------------------------------+
+
+Module Selection
+3 modules selected.
+
+Collector
+  [x] [browser] browser                 -- Collects browser forensic artifacts...
+> [x] [eventlog] eventlog               -- Collects Windows Event Log files...
+  [ ] [execution] prefetch              -- Collects Windows Prefetch files...
+  [ ] [execution] amcache               -- Collects Amcache.hve and logs...
+
+Analyzer
+  [ ] [browser] browser_history_parser  -- Parse browser history...
+  [ ] [eventlog] eventlog_parser        -- Parse EVTX logs...
+
+------------------------------------------------------------------------------
+up/k move | pgdn page down | space toggle | ? toggle help | q quit
+```
+
+### Live collection progress
+
+```text
++------------------------------------------------------------------------------+
+|  |-----||   O    |----\\                                                    |
+|  |    --| |----| |   x  <|'                                                 |
+|  |__|--'  |____| |__|\\__/                                                  |
+|                                                                            |
+|  FIR v1.2.0                                                                |
+|  Freedom Incident Response                                                 |
+|  Interactive collection runner                                             |
+|                                                                            |
+|                              Collection                                    |
+|                       * Running: 1 | Waiting: 3                            |
+|                         Finished: 2/6 | Concurrency: 2                     |
+|                       Monitor module progress                              |
++------------------------------------------------------------------------------+
+
+Collecting Artifacts
+
+[OK] SUCCESS  [eventlog]  eventlog            files=397  size=323.9 MiB  duration=3.4s
+[OK] SUCCESS  [execution] prefetch            files=271  size=7.4 MiB    duration=8.0s
+[-] FAILED   [memory]    ram                 duration=32ms  error=winpmem not found
+| RUNNING    [live]      process_explorer
+... WAITING  [registry]  registry
+... WAITING  [system]    wmi
+
+------------------------------------------------------------------------------
+Live progress is streamed from running modules. 6 collectors loaded with
+concurrency=2.
+up/k scroll up | pgdn page down | ? toggle help | ctrl+c abort
+```
+
+After the run finishes, FIR writes a session summary to `summary.txt` and metadata to `metadata.json` in the generated output directory.
+
+## Available Artifact Modules
 
 | Name | Category | Description |
 |---|---|---|
-| `browser` | `browser` | Collects browser forensic artifacts from detected Chrome, Edge, Brave, Vivaldi, Firefox, Opera, and Opera GX profiles |
-| `eventlog` | `eventlog` | Collects Windows Event Log files (`.evtx`) with forensic priority ordering |
-| `amcache` | `execution` | Collects `Amcache.hve` plus `Amcache.hve.LOG1/.LOG2` via native file access with hive-save and raw-volume fallback |
-| `prefetch` | `execution` | Collects Windows Prefetch files (`.pf`) from `C:\Windows\Prefetch` |
-| `autoruns` | `live` | Generates live autoruns-style triage CSV for services, Run keys, startup folders, and scheduled tasks |
-| `process_explorer` | `live` | Generates live process, module, and network triage CSV from the running system |
-| `ram` | `memory` | Acquires physical memory using `winpmem` |
-| `mft` | `ntfs` | Collects the `$MFT` (Master File Table) via raw disk access |
+| `browser` | `browser` | Collect browser forensic artifacts from detected Chrome, Edge, Brave, Vivaldi, Firefox, Opera, and Opera GX profiles |
+| `eventlog` | `eventlog` | Collect Windows Event Log files (`.evtx`) with forensic-priority ordering |
+| `amcache` | `execution` | Collect `Amcache.hve` plus `Amcache.hve.LOG1/.LOG2` via native file access with hive-save and raw-volume fallback |
+| `prefetch` | `execution` | Collect Windows Prefetch files (`.pf`) from `C:\Windows\Prefetch` |
+| `autoruns` | `live` | Generate live autoruns-style triage CSV for services, Run keys, startup folders, and scheduled tasks |
+| `process_explorer` | `live` | Generate live process, module, and network triage CSV from the running system |
+| `ram` | `memory` | Acquire physical memory using `winpmem` |
+| `mft` | `ntfs` | Collect the `$MFT` (Master File Table) via raw disk access |
 | `secure_sds` | `ntfs` | Best-effort collection of the `$Secure:$SDS` stream via raw NTFS record parsing |
-| `usnjrnl` | `ntfs` | Collects the `$UsnJrnl:$J` USN Change Journal via FSCTL |
-| `registry` | `registry` | Collects primary registry hives plus `.LOG1/.LOG2` via backup semantics with hive-save fallback |
-| `srum` | `system` | Collects the SRUM database (`SRUDB.dat`) via native Windows file access |
-| `wmi` | `system` | Collects WMI repository files (`OBJECTS.DATA`, `INDEX.BTR`, `MAPPING*.MAP`) |
+| `usnjrnl` | `ntfs` | Collect the `$UsnJrnl:$J` USN Change Journal via FSCTL |
+| `registry` | `registry` | Collect primary registry hives plus `.LOG1/.LOG2` via backup semantics with hive-save fallback |
+| `srum` | `system` | Collect the SRUM database (`SRUDB.dat`) via native Windows file access |
+| `wmi` | `system` | Collect WMI repository files such as `OBJECTS.DATA`, `INDEX.BTR`, and `MAPPING*.MAP` |
 
-### Available Analyzer Modules
+## Available Analyzer Modules
 
 | Name | Category | Description |
 |---|---|---|
 | `amcache_parser` | `execution` | Parse Amcache |
 | `browser_history_parser` | `browser` | Parse browser history from collected browser profiles |
 | `eventlog_parser` | `eventlog` | Parse EVTX logs |
-| `mft_parser` | `ntfs` | Parse `$MFT` to full CSV |
+| `mft_parser` | `ntfs` | Parse `$MFT` to CSV |
 | `prefetch_parser` | `execution` | Parse Prefetch |
 | `recentdocs_parser` | `registry` | Parse RecentDocs |
 | `runmru_parser` | `registry` | Parse RunMRU |
 | `secure_sds_parser` | `ntfs` | Parse Secure SDS |
 | `shimcache_parser` | `registry` | Parse ShimCache |
 | `userassist_parser` | `registry` | Parse UserAssist |
-| `usnjrnl_parser` | `ntfs` | Parse USN, enrich with MFT if selected |
+| `usnjrnl_parser` | `ntfs` | Parse USN and enrich with MFT data when selected |
 | `wmi_parser` | `system` | Parse WMI |
 
-**Category shortcuts**: Use `browser`, `eventlog`, `execution`, `live`, `memory`, `ntfs`, `registry`, `system`, or `all`.
+Category shortcuts supported by `--artifact`:
 
-## CLI Output Example
+- `all`
+- `browser`
+- `eventlog`
+- `execution`
+- `live`
+- `memory`
+- `ntfs`
+- `registry`
+- `system`
 
-Interactive mode now shows a Bubble Tea screen for selection, live execution status, and a final summary report. A typical run looks like this:
+## Output Layout
+
+Each run creates a session directory under the selected output root. FIR writes:
+
+- Collected artifacts into category/module folders
+- `collector.log` for the session log
+- `metadata.json` for machine-readable run metadata
+- `summary.txt` for the final run summary
+
+A typical layout looks like this:
 
 ```text
-+--------------------------------------------------------------+
-|  |-----||   O    |----\\                                     |
-|  |    --| |----| |   x  <|'                                  |
-|  |__|--'  |____| |__|\\__/                                   |
-|  FIR v1.0.0                                                  |
-|  Freedom Incident Response                                   |
-+--------------------------------------------------------------+
-
-Collecting Artifacts
-
-[OK] SUCCESS [eventlog] eventlog           files=397  size=323.9 MiB  duration=3.4s
-[OK] SUCCESS [execution] prefetch          files=271  size=7.4 MiB    duration=8s
-[-] FAILED  [memory] ram                   duration=32ms  error=winpmem not found
-| RUNNING   [live] process_explorer
-
-Collection Summary
-
-+------------+-------------------+----------+-------+-----------+----------+
-| Category   | Module            | Status   | Files | Size      | Duration |
-+------------+-------------------+----------+-------+-----------+----------+
-| eventlog   | eventlog          | SUCCESS  | 397   | 323.9 MiB | 3.4s     |
-| execution  | prefetch          | SUCCESS  | 271   | 7.4 MiB   | 8s       |
-| memory     | ram               | FAILED   | 0     | 0 B       | 32ms     |
-+------------+-------------------+----------+-------+-----------+----------+
-
-Failure Details
-! [memory] ram duration=32ms
-  error: winpmem not found: winpmem executable not found
+triage/
+  FIR_20260423_104512/
+    collector.log
+    metadata.json
+    summary.txt
+    browser/
+    eventlog/
+    execution/
+    live/
+    memory/
+    ntfs/
+    registry/
+    system/
+    Analyzer/
 ```
 
-## RAM Acquisition (winpmem)
+## RAM Acquisition
 
-FIR does **not** bundle winpmem due to licensing. Place `winpmem_mini_x64.exe` in:
-- Same directory as `fir.exe` (recommended)
-- Current working directory
-- System PATH
+FIR does not bundle `winpmem` due to licensing. Place `winpmem_mini_x64.exe` in one of these locations:
 
-If winpmem is not found, the RAM collector will fail gracefully with a clear error message.
+- The same directory as `fir.exe`
+- The current working directory
+- A directory listed in `PATH`
 
-## Package Layout
+If `winpmem` is missing, the RAM module fails cleanly and the error is shown in both the terminal UI and the run summary.
 
-The project now follows the runtime flow more directly:
+## Project Layout
 
 ```text
 cmd/
@@ -152,26 +231,30 @@ cmd/
   interactive_progress.go
 
 internal/
-  module/        shared module contract + registry
-  collectors/    artifact acquisition modules grouped by category
-  analyzers/     parsed / enriched output modules
-  tui/           Bubble Tea menu + shared terminal UI helpers
   acquisition/   low-level Windows and NTFS access helpers
-  output/        summary + metadata rendering
+  analyzers/     parsed and enriched output modules
+  collectors/    artifact acquisition modules grouped by category
+  console/       console and window handling
   logging/       session logging
-  console/       console/window handling
-  utils/         remaining generic helpers
+  module/        shared module contract and registry
+  output/        summary and metadata rendering
+  tui/           Bubble Tea menu and terminal UI helpers
+  utils/         generic helpers
 ```
 
-This keeps the practical path easy to follow:
-`main -> cmd -> module registry -> collectors/analyzers -> output/logging`
+Runtime flow:
 
-## Requirements
+```text
+main -> cmd -> module registry -> collectors/analyzers -> output/logging
+```
 
-- **OS**: Windows 10/11, Server 2016+
-- **Privileges**: Administrator (right-click -> Run as Administrator)
-- **Go**: 1.21+ (for building from source)
+## Operational Notes
+
+- Run as Administrator for best coverage, especially for raw NTFS, registry, memory, and protected system files.
+- Collector modules run before analyzer modules in the same session.
+- Timeouts are applied per module via `--timeout`.
+- Parallelism is controlled with `--concurrency`.
 
 ## License
 
-This tool is intended for authorized forensic investigation and incident response only.
+This project is intended for authorized forensic investigation and incident response only.

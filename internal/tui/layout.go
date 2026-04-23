@@ -35,12 +35,6 @@ func MeasureRootLayout(totalWidth, totalHeight int, header, footer string) RootL
 	}
 }
 
-// MeasureScreenLayout keeps the previous helper name for callers that only
-// need a fixed header and responsive content area.
-func MeasureScreenLayout(totalWidth, totalHeight int, header string) RootLayout {
-	return MeasureRootLayout(totalWidth, totalHeight, header, "")
-}
-
 // AvailableContentSize returns the usable size for the content area after
 // subtracting any border, margin, or padding applied by the content style.
 func AvailableContentSize(layout RootLayout, style lipgloss.Style) (int, int) {
@@ -79,13 +73,7 @@ func RenderRootLayout(layout RootLayout, header, content, footer string) string 
 	}
 
 	screen = trimToHeight(screen, layout.TotalHeight)
-	return padBottomToHeight(screen, layout.TotalHeight)
-}
-
-// RenderScreen keeps the previous helper name for callers that do not render a
-// footer section.
-func RenderScreen(layout RootLayout, header, content string) string {
-	return RenderRootLayout(layout, header, content, "")
+	return padToViewport(screen, layout.TotalWidth, layout.TotalHeight)
 }
 
 // RenderSection clamps a section to its assigned viewport and pads any missing
@@ -95,7 +83,7 @@ func RenderSection(width, height int, content string) string {
 		return ""
 	}
 	if width <= 0 {
-		return padBottomToHeight("", height)
+		return padToViewport("", width, height)
 	}
 
 	content = trimToHeight(trimTrailingNewlines(content), height)
@@ -106,7 +94,7 @@ func RenderSection(width, height int, content string) string {
 		MaxHeight(height).
 		Render(content)
 
-	return padBottomToHeight(trimToHeight(rendered, height), height)
+	return padToViewport(trimToHeight(rendered, height), width, height)
 }
 
 func trimTrailingNewlines(value string) string {
@@ -125,25 +113,40 @@ func trimToHeight(value string, height int) string {
 	return strings.Join(lines[:height], "\n")
 }
 
-func padBottomToHeight(value string, height int) string {
+func padToViewport(value string, width, height int) string {
 	if height <= 0 {
 		return value
 	}
 
 	contentHeight := lipgloss.Height(value)
+	lines := make([]string, 0, maxInt(contentHeight, height))
+	if value != "" {
+		for _, line := range strings.Split(value, "\n") {
+			lines = append(lines, padLineToWidth(line, width))
+		}
+	}
+
 	if contentHeight >= height {
-		return value
+		return strings.Join(lines, "\n")
 	}
 
 	padding := height - contentHeight
-	lines := make([]string, 0, contentHeight+padding)
-	if value != "" {
-		lines = append(lines, strings.Split(value, "\n")...)
-	}
+	blank := padLineToWidth("", width)
 	for idx := 0; idx < padding; idx++ {
-		lines = append(lines, "")
+		lines = append(lines, blank)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func padLineToWidth(value string, width int) string {
+	if width <= 0 {
+		return value
+	}
+	padding := width - lipgloss.Width(value)
+	if padding <= 0 {
+		return value
+	}
+	return value + strings.Repeat(" ", padding)
 }
 
 func clampInt(value, minValue, maxValue int) int {

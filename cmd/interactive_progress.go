@@ -2,15 +2,15 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"golang.org/x/term"
 
 	"github.com/Liuchijang/FIR/internal/console"
 	"github.com/Liuchijang/FIR/internal/module"
@@ -57,8 +57,79 @@ type progressSizePollMsg struct {
 	height int
 }
 
+type progressKeyMap struct {
+	Up       key.Binding
+	Down     key.Binding
+	PageUp   key.Binding
+	PageDown key.Binding
+	Top      key.Binding
+	Bottom   key.Binding
+	Help     key.Binding
+	Abort    key.Binding
+	Close    key.Binding
+}
+
+func newProgressKeyMap(completed bool) progressKeyMap {
+	keys := progressKeyMap{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("up/k", "scroll up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("down/j", "scroll down"),
+		),
+		PageUp: key.NewBinding(
+			key.WithKeys("pgup", "b"),
+			key.WithHelp("pgup", "page up"),
+		),
+		PageDown: key.NewBinding(
+			key.WithKeys("pgdown", "f", " "),
+			key.WithHelp("pgdn", "page down"),
+		),
+		Top: key.NewBinding(
+			key.WithKeys("g", "home"),
+			key.WithHelp("g", "top"),
+		),
+		Bottom: key.NewBinding(
+			key.WithKeys("G", "end"),
+			key.WithHelp("G", "bottom"),
+		),
+		Help: key.NewBinding(
+			key.WithKeys("?"),
+			key.WithHelp("?", "toggle help"),
+		),
+		Abort: key.NewBinding(
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "abort"),
+		),
+		Close: key.NewBinding(
+			key.WithKeys("enter", "q", "esc", "ctrl+c"),
+			key.WithHelp("enter", "close"),
+		),
+	}
+	if completed {
+		keys.Abort.SetEnabled(false)
+	} else {
+		keys.Close.SetEnabled(false)
+	}
+	return keys
+}
+
+func (k progressKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Up, k.PageDown, k.Help, k.Abort, k.Close}
+}
+
+func (k progressKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Up, k.Down, k.PageUp, k.PageDown},
+		{k.Top, k.Bottom, k.Help, k.Abort, k.Close},
+	}
+}
+
 type collectionProgressModel struct {
 	spinner  spinner.Model
+	help     help.Model
 	viewport viewport.Model
 	updates  chan tea.Msg
 
@@ -105,7 +176,7 @@ func newCollectionProgressModel(collectors []module.Module, updates chan tea.Msg
 	} else {
 		spin.Spinner = spinner.Dot
 	}
-	spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("217")).Bold(true)
 
 	rows := make([]progressRow, 0, len(collectors))
 	for _, col := range collectors {
@@ -118,6 +189,7 @@ func newCollectionProgressModel(collectors []module.Module, updates chan tea.Msg
 
 	return collectionProgressModel{
 		spinner:     spin,
+		help:        help.New(),
 		viewport:    viewport.New(0, 0),
 		updates:     updates,
 		collectors:  collectors,
@@ -131,6 +203,7 @@ func (m collectionProgressModel) Init() tea.Cmd {
 		m.spinner.Tick,
 		startCollectionCmd(m.collectors, m.updates),
 		waitForCollectionUpdate(m.updates),
+		syncProgressTerminalSizeCmd(),
 		pollProgressTerminalSizeCmd(),
 	)
 }
@@ -142,6 +215,7 @@ func (m collectionProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Width > 0 {
 			sizeChanged = sizeChanged || msg.Width != m.width
 			m.width = msg.Width
+			m.help.Width = msg.Width
 		}
 		if msg.Height > 0 {
 			sizeChanged = sizeChanged || msg.Height != m.height
@@ -159,6 +233,7 @@ func (m collectionProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.width > 0 {
 			sizeChanged = sizeChanged || msg.width != m.width
 			m.width = msg.width
+			m.help.Width = msg.width
 		}
 		if msg.height > 0 {
 			sizeChanged = sizeChanged || msg.height != m.height
@@ -172,14 +247,16 @@ func (m collectionProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, pollProgressTerminalSizeCmd()
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "enter", "q", "esc", "ctrl+c":
-			if m.completed {
-				return m, tea.Quit
-			}
-			if msg.String() == "ctrl+c" {
-				return m, tea.Quit
-			}
+		keys := m.keyMap()
+		switch {
+		case key.Matches(msg, keys.Help):
+			m.help.ShowAll = !m.help.ShowAll
+			m.syncViewport()
+			return m, nil
+		case m.completed && key.Matches(msg, keys.Close):
+			return m, tea.Quit
+		case !m.completed && key.Matches(msg, keys.Abort):
+			return m, tea.Quit
 		}
 
 		var cmd tea.Cmd
@@ -240,11 +317,10 @@ func (m collectionProgressModel) View() string {
 	}
 
 	header := m.headerView()
+	footer := m.footerView()
+	layout := tui.MeasureRootLayout(m.width, m.height, header, footer)
 	body := m.viewport.View()
-	if strings.TrimSpace(body) == "" {
-		return header
-	}
-	return strings.Join([]string{header, "", body}, "\n")
+	return tui.RenderRootLayout(layout, header, body, footer)
 }
 
 func (m collectionProgressModel) headerView() string {
@@ -276,6 +352,24 @@ func (m collectionProgressModel) headerView() string {
 	return strings.Join(lines, "\n")
 }
 
+func (m collectionProgressModel) footerView() string {
+	width := maxCmd(1, m.width)
+	helpWidth := maxCmd(1, width-progressFooterStyle.GetHorizontalFrameSize())
+
+	helpModel := m.help
+	helpModel.Width = helpWidth
+
+	lines := make([]string, 0, 2)
+	if hint := m.footerHint(); hint != "" {
+		lines = append(lines, subtleStyleCmd.Render(trimToWidthCmd(hint, helpWidth)))
+	}
+	if helpView := helpModel.View(m.keyMap()); helpView != "" {
+		lines = append(lines, helpView)
+	}
+	innerWidth := maxCmd(1, width-progressFooterStyle.GetHorizontalFrameSize())
+	return progressFooterStyle.Width(innerWidth).Render(strings.Join(lines, "\n"))
+}
+
 func (m collectionProgressModel) bannerView(width int) string {
 	content := tui.BannerContent{
 		Version:  output.Version,
@@ -289,27 +383,12 @@ func (m collectionProgressModel) bannerView(width int) string {
 			"Inspect failure details",
 			"Close with enter, esc, or q",
 		}
-		content.RightTitle = "Navigation"
-		content.RightLines = []string{
-			"mouse/up-down scroll",
-			"pgup/pgdn fast scroll",
-			"g/G jump top/bottom",
-			"enter    exit",
-			"esc/q    exit",
-		}
 	} else {
 		content.CenterTitle = "Collection"
 		content.CenterLines = []string{
 			trimToWidthCmd(m.statusLine(), maxCmd(12, width/3)),
 			"Monitor module progress",
 			"Wait for collection summary",
-		}
-		content.RightTitle = "Navigation"
-		content.RightLines = []string{
-			"mouse/up-down scroll",
-			"pgup/pgdn fast scroll",
-			"g/G jump top/bottom",
-			"ctrl+c   abort",
 		}
 	}
 
@@ -447,10 +526,14 @@ func waitForCollectionUpdate(updates <-chan tea.Msg) tea.Cmd {
 }
 
 var (
-	titleStyleCmd   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("87"))
-	subtleStyleCmd  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	successStyleCmd = lipgloss.NewStyle().Foreground(lipgloss.Color("79"))
-	errorStyleCmd   = lipgloss.NewStyle().Foreground(lipgloss.Color("204"))
+	titleStyleCmd       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("218"))
+	subtleStyleCmd      = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	successStyleCmd     = lipgloss.NewStyle().Foreground(lipgloss.Color("182"))
+	errorStyleCmd       = lipgloss.NewStyle().Foreground(lipgloss.Color("175"))
+	progressFooterStyle = lipgloss.NewStyle().
+				BorderTop(true).
+				BorderForeground(lipgloss.Color("246")).
+				Padding(0, 1)
 )
 
 func sanitizeErrorCmd(value string) string {
@@ -471,10 +554,9 @@ func (m *collectionProgressModel) syncViewport() {
 		return
 	}
 
-	m.viewport.Width = maxCmd(1, m.width)
-
-	headerHeight := lipgloss.Height(m.headerView())
-	m.viewport.Height = maxCmd(1, m.height-headerHeight-1)
+	layout := tui.MeasureRootLayout(m.width, m.height, m.headerView(), m.footerView())
+	m.viewport.Width = maxCmd(1, layout.TotalWidth)
+	m.viewport.Height = maxCmd(1, layout.ContentHeight)
 
 	if m.completed {
 		if m.err != nil {
@@ -562,10 +644,39 @@ func formatBytesCmd(size int64) string {
 
 func pollProgressTerminalSizeCmd() tea.Cmd {
 	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg {
-		width, height, err := term.GetSize(int(os.Stdout.Fd()))
-		if err != nil {
+		console.SyncBufferToWindow()
+		width, height, ok := console.CurrentSize()
+		if !ok {
 			return nil
 		}
 		return progressSizePollMsg{width: width, height: height}
 	})
+}
+
+func syncProgressTerminalSizeCmd() tea.Cmd {
+	return func() tea.Msg {
+		console.SyncBufferToWindow()
+		width, height, ok := console.CurrentSize()
+		if !ok {
+			return nil
+		}
+		return progressSizePollMsg{width: width, height: height}
+	}
+}
+
+func (m collectionProgressModel) keyMap() progressKeyMap {
+	return newProgressKeyMap(m.completed)
+}
+
+func (m collectionProgressModel) footerHint() string {
+	if m.completed {
+		if m.err != nil {
+			return "Collection stopped with an error. Review the message above, then close this screen."
+		}
+		if m.report != nil {
+			return fmt.Sprintf("Completed: %d succeeded, %d failed. Scroll to inspect the rendered summary report.", m.report.SuccessCount, m.report.FailureCount)
+		}
+		return "Collection completed. Close this screen when you are done reviewing the output."
+	}
+	return fmt.Sprintf("Live progress is streamed from running modules. %d collectors loaded with concurrency=%d.", len(m.rows), m.concurrency)
 }
