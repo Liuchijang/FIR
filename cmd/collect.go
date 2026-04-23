@@ -45,14 +45,15 @@ Examples:
 
 Available artifact names:
   ram, mft, usnjrnl, secure_sds, registry, eventlog,
-  prefetch, amcache, wmi, srum, browser_chromium,
+  prefetch, amcache, wmi, srum, browser,
   process_explorer, autoruns, mft_parser, usnjrnl_parser,
   secure_sds_parser, prefetch_parser, amcache_parser,
+  browser_history_parser,
   shimcache_parser, eventlog_parser, wmi_parser
 
 Category shortcuts:
   all       - All modules
-  browser   - Chromium browser forensic artifacts
+  browser   - Browser forensic artifacts from popular browsers
   live      - Live process and autoruns triage analysis
   memory    - RAM acquisition
   ntfs      - MFT, USN Journal, Secure SDS
@@ -234,6 +235,9 @@ func resolveModules(artifactStr string) ([]module.Module, error) {
 		name = strings.TrimSpace(strings.ToLower(name))
 		if name == "" {
 			continue
+		}
+		if name == "browser_chromium" {
+			name = "browser"
 		}
 
 		if name == "all" {

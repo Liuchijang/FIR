@@ -15,7 +15,15 @@ import (
 	"github.com/Liuchijang/FIR/internal/utils"
 )
 
-const ChromiumCollectorName = "browser_chromium"
+const BrowserCollectorName = "browser"
+
+// ChromiumCollectorName is kept as a compatibility alias for existing code.
+const ChromiumCollectorName = BrowserCollectorName
+
+const (
+	browserFamilyChromium = "chromium"
+	browserFamilyFirefox  = "firefox"
+)
 
 var chromiumEvidenceFiles = []string{
 	"Bookmarks",
@@ -41,53 +49,150 @@ var chromiumEvidenceDirs = []string{
 	"Sessions",
 }
 
-var chromiumBrowserRoots = []struct {
-	Browser string
-	RelPath string
-}{
-	{Browser: "Chrome", RelPath: filepath.Join("AppData", "Local", "Google", "Chrome", "User Data")},
-	{Browser: "Edge", RelPath: filepath.Join("AppData", "Local", "Microsoft", "Edge", "User Data")},
-	{Browser: "Brave", RelPath: filepath.Join("AppData", "Local", "BraveSoftware", "Brave-Browser", "User Data")},
-	{Browser: "Vivaldi", RelPath: filepath.Join("AppData", "Local", "Vivaldi", "User Data")},
+var firefoxEvidenceFiles = []string{
+	"addons.json",
+	"cert9.db",
+	"compatibility.ini",
+	"containers.json",
+	"content-prefs.sqlite",
+	"content-prefs.sqlite-shm",
+	"content-prefs.sqlite-wal",
+	"cookies.sqlite",
+	"cookies.sqlite-shm",
+	"cookies.sqlite-wal",
+	"extensions.json",
+	"favicons.sqlite",
+	"favicons.sqlite-shm",
+	"favicons.sqlite-wal",
+	"formhistory.sqlite",
+	"formhistory.sqlite-shm",
+	"formhistory.sqlite-wal",
+	"handlers.json",
+	"key4.db",
+	"logins.json",
+	"permissions.sqlite",
+	"permissions.sqlite-shm",
+	"permissions.sqlite-wal",
+	"persdict.dat",
+	"places.sqlite",
+	"places.sqlite-shm",
+	"places.sqlite-wal",
+	"prefs.js",
+	"search.json.mozlz4",
+	"sessionCheckpoints.json",
+	"sessionstore.jsonlz4",
+	"SiteSecurityServiceState.txt",
+	"storage.sqlite",
+	"storage.sqlite-shm",
+	"storage.sqlite-wal",
 }
 
-var chromiumSelection = struct {
+var firefoxEvidenceDirs = []string{
+	"bookmarkbackups",
+	"sessionstore-backups",
+}
+
+type browserDiscovery struct {
+	Browser string
+	Family  string
+	RelPath string
+	Layout  string
+}
+
+var browserRoots = []browserDiscovery{
+	{
+		Browser: "Chrome",
+		Family:  browserFamilyChromium,
+		RelPath: filepath.Join("AppData", "Local", "Google", "Chrome", "User Data"),
+		Layout:  "chromium_user_data",
+	},
+	{
+		Browser: "Edge",
+		Family:  browserFamilyChromium,
+		RelPath: filepath.Join("AppData", "Local", "Microsoft", "Edge", "User Data"),
+		Layout:  "chromium_user_data",
+	},
+	{
+		Browser: "Brave",
+		Family:  browserFamilyChromium,
+		RelPath: filepath.Join("AppData", "Local", "BraveSoftware", "Brave-Browser", "User Data"),
+		Layout:  "chromium_user_data",
+	},
+	{
+		Browser: "Vivaldi",
+		Family:  browserFamilyChromium,
+		RelPath: filepath.Join("AppData", "Local", "Vivaldi", "User Data"),
+		Layout:  "chromium_user_data",
+	},
+	{
+		Browser: "Opera",
+		Family:  browserFamilyChromium,
+		RelPath: filepath.Join("AppData", "Roaming", "Opera Software", "Opera Stable"),
+		Layout:  "direct_profile",
+	},
+	{
+		Browser: "Opera GX",
+		Family:  browserFamilyChromium,
+		RelPath: filepath.Join("AppData", "Roaming", "Opera Software", "Opera GX Stable"),
+		Layout:  "direct_profile",
+	},
+	{
+		Browser: "Firefox",
+		Family:  browserFamilyFirefox,
+		RelPath: filepath.Join("AppData", "Roaming", "Mozilla", "Firefox", "Profiles"),
+		Layout:  "firefox_profiles",
+	},
+}
+
+var browserSelection = struct {
 	mu    sync.RWMutex
 	paths []string
 }{}
 
-func init() { module.Register(&chromiumCollector{}) }
+func init() { module.Register(&browserCollector{}) }
 
-type chromiumCollector struct{}
+type browserCollector struct{}
 
-type ChromiumProfile struct {
+type BrowserProfile struct {
 	Browser string
+	Family  string
 	User    string
 	Name    string
 	Path    string
 }
 
-func (c *chromiumCollector) Name() string     { return ChromiumCollectorName }
-func (c *chromiumCollector) Category() string { return "browser" }
-func (c *chromiumCollector) Description() string {
-	return "Collect Chromium artifacts"
+// ChromiumProfile is kept as a compatibility alias for existing code.
+type ChromiumProfile = BrowserProfile
+
+func (c *browserCollector) Name() string     { return BrowserCollectorName }
+func (c *browserCollector) Category() string { return "browser" }
+func (c *browserCollector) Description() string {
+	return "Collect browser artifacts from Chrome, Edge, Brave, Vivaldi, Firefox, Opera, and Opera GX"
+}
+
+func ConfigureProfiles(paths []string) {
+	browserSelection.mu.Lock()
+	defer browserSelection.mu.Unlock()
+
+	browserSelection.paths = append([]string(nil), paths...)
 }
 
 func ConfigureChromiumProfiles(paths []string) {
-	chromiumSelection.mu.Lock()
-	defer chromiumSelection.mu.Unlock()
-
-	chromiumSelection.paths = append([]string(nil), paths...)
+	ConfigureProfiles(paths)
 }
 
-func DiscoverChromiumProfiles() ([]ChromiumProfile, error) {
+func ResolveProfiles() ([]BrowserProfile, error) {
+	return resolveSelectedProfiles()
+}
+
+func DiscoverProfiles() ([]BrowserProfile, error) {
 	usersRoot := filepath.Join(os.Getenv("SystemDrive")+`\`, "Users")
 	entries, err := os.ReadDir(usersRoot)
 	if err != nil {
 		return nil, fmt.Errorf("read Users directory: %w", err)
 	}
 
-	var profiles []ChromiumProfile
+	var profiles []BrowserProfile
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -99,23 +204,27 @@ func DiscoverChromiumProfiles() ([]ChromiumProfile, error) {
 		}
 
 		userRoot := filepath.Join(usersRoot, username)
-		for _, root := range chromiumBrowserRoots {
-			userDataDir := filepath.Join(userRoot, root.RelPath)
-			profiles = append(profiles, discoverProfilesInUserData(username, root.Browser, userDataDir)...)
+		for _, root := range browserRoots {
+			browserRoot := filepath.Join(userRoot, root.RelPath)
+			profiles = append(profiles, discoverProfilesForRoot(username, root, browserRoot)...)
 		}
 	}
 
 	return profiles, nil
 }
 
-func (c *chromiumCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+func DiscoverChromiumProfiles() ([]BrowserProfile, error) {
+	return DiscoverProfiles()
+}
+
+func (c *browserCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
 	log := logging.G()
 	profiles, err := resolveSelectedProfiles()
 	if err != nil {
 		return nil, err
 	}
 
-	outDir := filepath.Join(outputDir, "browser", "chromium")
+	outDir := filepath.Join(outputDir, "browser")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create browser output dir: %w", err)
 	}
@@ -130,7 +239,7 @@ func (c *chromiumCollector) Collect(ctx context.Context, outputDir string) ([]mo
 		}
 
 		log.Info(fmt.Sprintf("Browser profile selected: %s", profile.Path))
-		files, collectErr := collectChromiumProfile(ctx, outDir, profile)
+		files, collectErr := collectProfile(ctx, outDir, profile)
 		allFiles = append(allFiles, files...)
 		if collectErr != nil {
 			errors = append(errors, collectErr.Error())
@@ -140,35 +249,36 @@ func (c *chromiumCollector) Collect(ctx context.Context, outputDir string) ([]mo
 
 	if len(allFiles) == 0 {
 		if len(errors) == 0 {
-			return nil, fmt.Errorf("no Chromium browser artifacts collected")
+			return nil, fmt.Errorf("no browser artifacts collected")
 		}
-		return nil, fmt.Errorf("no Chromium browser artifacts collected: %s", strings.Join(errors, "; "))
+		return nil, fmt.Errorf("no browser artifacts collected: %s", strings.Join(errors, "; "))
 	}
 
 	return allFiles, nil
 }
 
-func resolveSelectedProfiles() ([]ChromiumProfile, error) {
-	chromiumSelection.mu.RLock()
-	selected := append([]string(nil), chromiumSelection.paths...)
-	chromiumSelection.mu.RUnlock()
+func resolveSelectedProfiles() ([]BrowserProfile, error) {
+	browserSelection.mu.RLock()
+	selected := append([]string(nil), browserSelection.paths...)
+	browserSelection.mu.RUnlock()
 
 	if len(selected) == 0 {
-		return DiscoverChromiumProfiles()
+		return DiscoverProfiles()
 	}
 
 	seen := make(map[string]bool)
-	var profiles []ChromiumProfile
+	var profiles []BrowserProfile
 	for _, path := range selected {
 		if path == "" || seen[path] {
 			continue
 		}
 		seen[path] = true
 
-		profile, ok := buildChromiumProfileFromPath(path)
+		profile, ok := buildProfileFromPath(path)
 		if !ok {
-			profile = ChromiumProfile{
-				Browser: "Chromium",
+			profile = BrowserProfile{
+				Browser: "Browser",
+				Family:  browserFamilyChromium,
 				User:    "unknown",
 				Name:    filepath.Base(path),
 				Path:    path,
@@ -180,7 +290,20 @@ func resolveSelectedProfiles() ([]ChromiumProfile, error) {
 	return profiles, nil
 }
 
-func discoverProfilesInUserData(username, browserName, userDataDir string) []ChromiumProfile {
+func discoverProfilesForRoot(username string, root browserDiscovery, browserRoot string) []BrowserProfile {
+	switch root.Layout {
+	case "chromium_user_data":
+		return discoverChromiumProfilesInUserData(username, root.Browser, browserRoot)
+	case "direct_profile":
+		return discoverDirectProfile(username, root.Browser, root.Family, browserRoot)
+	case "firefox_profiles":
+		return discoverFirefoxProfiles(username, root.Browser, browserRoot)
+	default:
+		return nil
+	}
+}
+
+func discoverChromiumProfilesInUserData(username, browserName, userDataDir string) []BrowserProfile {
 	info, err := os.Stat(userDataDir)
 	if err != nil || !info.IsDir() {
 		return nil
@@ -191,33 +314,80 @@ func discoverProfilesInUserData(username, browserName, userDataDir string) []Chr
 		return nil
 	}
 
-	var profiles []ChromiumProfile
+	var profiles []BrowserProfile
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 
 		name := entry.Name()
-		if !isChromiumProfileDir(name) {
+		profileDir := filepath.Join(userDataDir, name)
+		if !looksLikeChromiumProfile(profileDir, name) {
 			continue
 		}
 
-		profiles = append(profiles, ChromiumProfile{
+		profiles = append(profiles, BrowserProfile{
 			Browser: browserName,
+			Family:  browserFamilyChromium,
 			User:    username,
 			Name:    name,
-			Path:    filepath.Join(userDataDir, name),
+			Path:    profileDir,
 		})
 	}
 
 	return profiles
 }
 
-func buildChromiumProfileFromPath(path string) (ChromiumProfile, bool) {
+func discoverDirectProfile(username, browserName, family, profileDir string) []BrowserProfile {
+	info, err := os.Stat(profileDir)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+
+	return []BrowserProfile{{
+		Browser: browserName,
+		Family:  family,
+		User:    username,
+		Name:    filepath.Base(profileDir),
+		Path:    profileDir,
+	}}
+}
+
+func discoverFirefoxProfiles(username, browserName, profilesDir string) []BrowserProfile {
+	info, err := os.Stat(profilesDir)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+
+	entries, err := os.ReadDir(profilesDir)
+	if err != nil {
+		return nil
+	}
+
+	var profiles []BrowserProfile
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		profileDir := filepath.Join(profilesDir, entry.Name())
+		profiles = append(profiles, BrowserProfile{
+			Browser: browserName,
+			Family:  browserFamilyFirefox,
+			User:    username,
+			Name:    entry.Name(),
+			Path:    profileDir,
+		})
+	}
+
+	return profiles
+}
+
+func buildProfileFromPath(path string) (BrowserProfile, bool) {
 	clean := filepath.Clean(path)
 	parts := strings.Split(clean, string(os.PathSeparator))
-	if len(parts) < 7 {
-		return ChromiumProfile{}, false
+	if len(parts) < 4 {
+		return BrowserProfile{}, false
 	}
 
 	userIdx := -1
@@ -228,32 +398,39 @@ func buildChromiumProfileFromPath(path string) (ChromiumProfile, bool) {
 		}
 	}
 	if userIdx == -1 || userIdx+1 >= len(parts) {
-		return ChromiumProfile{}, false
+		return BrowserProfile{}, false
 	}
 
 	user := parts[userIdx+1]
-	browser := inferBrowserName(clean)
-	return ChromiumProfile{
+	browser, family := inferBrowserMetadata(clean)
+	return BrowserProfile{
 		Browser: browser,
+		Family:  family,
 		User:    user,
 		Name:    filepath.Base(clean),
 		Path:    clean,
 	}, true
 }
 
-func inferBrowserName(path string) string {
+func inferBrowserMetadata(path string) (browserName, family string) {
 	lower := strings.ToLower(path)
 	switch {
 	case strings.Contains(lower, `\google\chrome\user data\`):
-		return "Chrome"
+		return "Chrome", browserFamilyChromium
 	case strings.Contains(lower, `\microsoft\edge\user data\`):
-		return "Edge"
+		return "Edge", browserFamilyChromium
 	case strings.Contains(lower, `\bravesoftware\brave-browser\user data\`):
-		return "Brave"
+		return "Brave", browserFamilyChromium
 	case strings.Contains(lower, `\vivaldi\user data\`):
-		return "Vivaldi"
+		return "Vivaldi", browserFamilyChromium
+	case strings.Contains(lower, `\opera software\opera gx stable`):
+		return "Opera GX", browserFamilyChromium
+	case strings.Contains(lower, `\opera software\opera stable`):
+		return "Opera", browserFamilyChromium
+	case strings.Contains(lower, `\mozilla\firefox\profiles\`):
+		return "Firefox", browserFamilyFirefox
 	default:
-		return "Chromium"
+		return "Browser", browserFamilyChromium
 	}
 }
 
@@ -264,7 +441,30 @@ func isChromiumProfileDir(name string) bool {
 	if strings.EqualFold(name, "Guest Profile") {
 		return true
 	}
+	if strings.EqualFold(name, "System Profile") {
+		return true
+	}
 	return strings.HasPrefix(strings.ToLower(name), "profile ")
+}
+
+func looksLikeChromiumProfile(profileDir, name string) bool {
+	if isChromiumProfileDir(name) {
+		return true
+	}
+
+	markers := []string{
+		"Bookmarks",
+		"Cookies",
+		"History",
+		"Preferences",
+		"Web Data",
+	}
+	for _, marker := range markers {
+		if _, err := os.Stat(filepath.Join(profileDir, marker)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func isSkippedWindowsProfile(name string) bool {
@@ -276,7 +476,16 @@ func isSkippedWindowsProfile(name string) bool {
 	}
 }
 
-func collectChromiumProfile(ctx context.Context, outDir string, profile ChromiumProfile) ([]module.FileInfo, error) {
+func collectProfile(ctx context.Context, outDir string, profile BrowserProfile) ([]module.FileInfo, error) {
+	switch profile.Family {
+	case browserFamilyFirefox:
+		return collectFirefoxProfile(ctx, outDir, profile)
+	default:
+		return collectChromiumProfile(ctx, outDir, profile)
+	}
+}
+
+func collectChromiumProfile(ctx context.Context, outDir string, profile BrowserProfile) ([]module.FileInfo, error) {
 	profileRoot := filepath.Join(
 		outDir,
 		outputDirName(profile.User),
@@ -316,6 +525,68 @@ func collectChromiumProfile(ctx context.Context, outDir string, profile Chromium
 	}
 
 	for _, relDir := range chromiumEvidenceDirs {
+		select {
+		case <-ctx.Done():
+			return files, ctx.Err()
+		default:
+		}
+
+		srcDir := filepath.Join(profile.Path, relDir)
+		dstDir := filepath.Join(profileRoot, relDir)
+		dirFiles, err := copyBrowserDir(srcDir, dstDir, relDir)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				errors = append(errors, fmt.Sprintf("%s: %v", relDir, err))
+			}
+			continue
+		}
+		files = append(files, dirFiles...)
+	}
+
+	if len(files) == 0 {
+		if len(errors) == 0 {
+			return nil, fmt.Errorf("no browser artifacts copied from %s", profile.Path)
+		}
+		return nil, fmt.Errorf("no browser artifacts copied from %s: %s", profile.Path, strings.Join(errors, "; "))
+	}
+
+	return files, nil
+}
+
+func collectFirefoxProfile(ctx context.Context, outDir string, profile BrowserProfile) ([]module.FileInfo, error) {
+	profileRoot := filepath.Join(
+		outDir,
+		outputDirName(profile.User),
+		outputDirName(profile.Browser),
+		outputDirName(profile.Name),
+	)
+	if err := os.MkdirAll(profileRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create firefox profile output dir for %s: %w", profile.Path, err)
+	}
+
+	var files []module.FileInfo
+	var errors []string
+
+	for _, relPath := range firefoxEvidenceFiles {
+		select {
+		case <-ctx.Done():
+			return files, ctx.Err()
+		default:
+		}
+
+		src := filepath.Join(profile.Path, relPath)
+		dst := filepath.Join(profileRoot, relPath)
+		fi, err := copyBrowserFile(src, dst, relPath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				errors = append(errors, fmt.Sprintf("%s: %v", relPath, err))
+			}
+			continue
+		}
+		files = append(files, fi)
+	}
+
+	for _, relDir := range firefoxEvidenceDirs {
 		select {
 		case <-ctx.Done():
 			return files, ctx.Err()

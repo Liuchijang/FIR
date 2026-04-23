@@ -112,7 +112,7 @@ type menuModel struct {
 }
 
 func RunInteractiveMenu() ([]module.Module, error) {
-	browser.ConfigureChromiumProfiles(nil)
+	browser.ConfigureProfiles(nil)
 	eventlogpkg.ConfigureSelectedLogs(nil)
 	console.SyncBufferToWindow()
 
@@ -140,7 +140,7 @@ func RunInteractiveMenu() ([]module.Module, error) {
 		if len(paths) == 0 {
 			return nil, fmt.Errorf("browser module selected but no profile paths were chosen")
 		}
-		browser.ConfigureChromiumProfiles(paths)
+		browser.ConfigureProfiles(paths)
 	}
 	if finished.needsEventLogSelection() {
 		names := finished.eventLogResults()
@@ -267,12 +267,12 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.phase = phaseCollectors
-			m.status = fmt.Sprintf("Failed to discover Chromium profiles: %v", msg.err)
+			m.status = fmt.Sprintf("Failed to discover browser profiles: %v", msg.err)
 			return m, nil
 		}
 		if len(msg.profiles) == 0 {
 			m.phase = phaseCollectors
-			m.status = "No Chromium profiles found on this system."
+			m.status = "No browser profiles found on this system."
 			return m, nil
 		}
 
@@ -373,7 +373,7 @@ func (m menuModel) updateCollectors(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.needsBrowserProfiles() {
 			m.phase = phaseLoadingProfiles
-			m.status = "Discovering Chromium profiles..."
+			m.status = "Discovering browser profiles..."
 			return m, tea.Batch(m.spinner.Tick, discoverProfilesCmd())
 		}
 		if m.needsEventLogSelection() {
@@ -540,7 +540,7 @@ func (m menuModel) renderCollectors(width, height int) string {
 
 func (m menuModel) renderLoadingProfiles(width, _ int) string {
 	lines := []string{
-		fmt.Sprintf("%s Discovering Chromium profiles...", m.spinner.View()),
+		fmt.Sprintf("%s Discovering browser profiles...", m.spinner.View()),
 		"",
 		wrapMessage("Press esc to return to collector selection.", width),
 	}
@@ -831,7 +831,7 @@ func (m menuModel) eventLogResults() []string {
 
 func (m menuModel) needsBrowserProfiles() bool {
 	for _, mod := range m.moduleResults() {
-		if mod.Name() == browser.ChromiumCollectorName {
+		if mod.Category() == "browser" {
 			return true
 		}
 	}
@@ -849,7 +849,7 @@ func (m menuModel) needsEventLogSelection() bool {
 
 func discoverProfilesCmd() tea.Cmd {
 	return func() tea.Msg {
-		profiles, err := browser.DiscoverChromiumProfiles()
+		profiles, err := browser.DiscoverProfiles()
 		return profilesLoadedMsg{profiles: profiles, err: err}
 	}
 }

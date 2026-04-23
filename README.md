@@ -36,7 +36,7 @@ go build -ldflags "-s -w -X github.com/Liuchijang/FIR/internal/output.Version=1.
 
 This launches a Bubble Tea interface where you can:
 - Browse and toggle modules in a keyboard-driven menu
-- Show a spinner while Chromium profiles are being discovered
+- Show a spinner while browser profiles are being discovered
 - Watch modules move through waiting, running, success, and failed states during execution
 
 After collection finishes, FIR prints a run summary table and writes the same report to `summary.txt`.
@@ -64,7 +64,7 @@ After collection finishes, FIR prints a run summary table and writes the same re
 
 | Name | Category | Description |
 |---|---|---|
-| `browser_chromium` | `browser` | Collects Chromium browser forensic artifacts from selected Chrome, Edge, Brave, or Vivaldi profiles |
+| `browser` | `browser` | Collects browser forensic artifacts from detected Chrome, Edge, Brave, Vivaldi, Firefox, Opera, and Opera GX profiles |
 | `eventlog` | `eventlog` | Collects Windows Event Log files (`.evtx`) with forensic priority ordering |
 | `amcache` | `execution` | Collects `Amcache.hve` plus `Amcache.hve.LOG1/.LOG2` via native file access with hive-save and raw-volume fallback |
 | `prefetch` | `execution` | Collects Windows Prefetch files (`.pf`) from `C:\Windows\Prefetch` |
@@ -83,10 +83,12 @@ After collection finishes, FIR prints a run summary table and writes the same re
 | Name | Category | Description |
 |---|---|---|
 | `amcache_parser` | `execution` | Parse Amcache |
+| `browser_history_parser` | `browser` | Parse browser history from collected browser profiles |
 | `eventlog_parser` | `eventlog` | Parse EVTX logs |
 | `mft_parser` | `ntfs` | Parse `$MFT` to full CSV |
 | `prefetch_parser` | `execution` | Parse Prefetch |
 | `recentdocs_parser` | `registry` | Parse RecentDocs |
+| `runmru_parser` | `registry` | Parse RunMRU |
 | `secure_sds_parser` | `ntfs` | Parse Secure SDS |
 | `shimcache_parser` | `registry` | Parse ShimCache |
 | `userassist_parser` | `registry` | Parse UserAssist |

@@ -79,8 +79,8 @@ func ModuleDir(outputDir string, m Module) string {
 	}
 
 	switch m.Name() {
-	case "browser_chromium":
-		return filepath.Join(outputDir, "browser", "chromium")
+	case "browser":
+		return filepath.Join(outputDir, "browser")
 	case "process_explorer", "autoruns":
 		return filepath.Join(outputDir, "live", m.Name())
 	case "wmi":
