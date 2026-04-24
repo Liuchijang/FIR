@@ -4,11 +4,8 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"time"
 
-	"github.com/Liuchijang/FIR/internal/console"
 	"github.com/Liuchijang/FIR/internal/output"
-	"github.com/Liuchijang/FIR/internal/tui"
 	"github.com/Liuchijang/FIR/internal/utils"
 	"github.com/spf13/cobra"
 
@@ -56,23 +53,7 @@ func init() {
 func Execute() error { return rootCmd.Execute() }
 
 func runInteractive() error {
-	console.EnsureInteractive()
-
-	modules, err := tui.RunInteractiveMenu()
-	if err != nil {
-		return fmt.Errorf("interactive menu: %w", err)
-	}
-	if len(modules) == 0 {
-		fmt.Fprintf(os.Stderr, "\n[+] No modules selected. Exiting.\n")
-		return nil
-	}
-	if concurrencyFlag == 0 {
-		concurrencyFlag = 2
-	}
-	if timeoutFlag == 0 {
-		timeoutFlag = 5 * time.Minute
-	}
-	return runInteractiveCollection(modules)
+	return runUnifiedInteractive()
 }
 
 func preflightChecks() error {

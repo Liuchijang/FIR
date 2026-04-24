@@ -3,6 +3,7 @@ package tui
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -34,28 +35,14 @@ var (
 	titleStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("218"))
 	subtleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	helpStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	cursorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("217"))
 	selectedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("218"))
 	menuItemStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	focusedRowStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("175"))
 	focusedDetailStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("175"))
 	focusedCursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("175")).Bold(true)
 	focusedCheckStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("175")).Bold(true)
-	menuFooterStyle    = lipgloss.NewStyle().
-				BorderTop(true).
-				BorderForeground(lipgloss.Color("246")).
-				Padding(0, 1)
-
-	categoryStyles = map[string]lipgloss.Style{
-		"memory":    lipgloss.NewStyle().Foreground(lipgloss.Color("217")),
-		"ntfs":      lipgloss.NewStyle().Foreground(lipgloss.Color("218")),
-		"execution": lipgloss.NewStyle().Foreground(lipgloss.Color("182")),
-		"eventlog":  lipgloss.NewStyle().Foreground(lipgloss.Color("182")),
-		"live":      lipgloss.NewStyle().Foreground(lipgloss.Color("218")),
-		"registry":  lipgloss.NewStyle().Foreground(lipgloss.Color("217")),
-		"system":    lipgloss.NewStyle().Foreground(lipgloss.Color("218")),
-		"browser":   lipgloss.NewStyle().Foreground(lipgloss.Color("182")),
-	}
+	menuFooterStyle    = FooterBarStyle()
+	boxBorderStyle     = PanelBoxStyle()
 
 	safePinkSpinner = spinner.Spinner{
 		Frames: []string{"|", "/", "-", "\\"},
@@ -90,11 +77,6 @@ type profilesLoadedMsg struct {
 type eventLogsLoadedMsg struct {
 	logs []eventlogpkg.EventLogFile
 	err  error
-}
-
-type sizePollMsg struct {
-	width  int
-	height int
 }
 
 type menuKeyMap struct {
@@ -199,15 +181,15 @@ type menuModel struct {
 
 	status    string
 	cancelled bool
+	completed bool
 }
 
 func RunInteractiveMenu() ([]module.Module, error) {
 	browser.ConfigureProfiles(nil)
 	eventlogpkg.ConfigureSelectedLogs(nil)
-	console.SyncBufferToWindow()
 
 	model := newMenuModel()
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	finalModel, err := program.Run()
 	if err != nil {
 		return nil, err
@@ -217,30 +199,59 @@ func RunInteractiveMenu() ([]module.Module, error) {
 	if !ok {
 		return nil, fmt.Errorf("unexpected interactive model type: %T", finalModel)
 	}
-	if finished.cancelled {
+	selected, cancelled, err := resolveMenuResults(finished)
+	if err != nil {
+		return nil, err
+	}
+	if cancelled {
 		return nil, nil
+	}
+	return selected, nil
+}
+
+func NewInteractiveMenuTeaModel() tea.Model {
+	browser.ConfigureProfiles(nil)
+	eventlogpkg.ConfigureSelectedLogs(nil)
+	return newMenuModel()
+}
+
+func InteractiveMenuFinished(model tea.Model) (done bool, modules []module.Module, cancelled bool, err error) {
+	finished, ok := model.(menuModel)
+	if !ok {
+		return false, nil, false, fmt.Errorf("unexpected interactive model type: %T", model)
+	}
+	if !finished.completed && !finished.cancelled {
+		return false, nil, false, nil
+	}
+	modules, cancelled, err = resolveMenuResults(finished)
+	return true, modules, cancelled, err
+}
+
+func resolveMenuResults(finished menuModel) ([]module.Module, bool, error) {
+	if finished.cancelled {
+		return nil, true, nil
 	}
 
 	selected := finished.moduleResults()
 	if len(selected) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	if finished.needsBrowserProfiles() {
 		paths := finished.profileResults()
 		if len(paths) == 0 {
-			return nil, fmt.Errorf("browser module selected but no profile paths were chosen")
+			return nil, false, fmt.Errorf("browser module selected but no profile paths were chosen")
 		}
 		browser.ConfigureProfiles(paths)
 	}
 	if finished.needsEventLogSelection() {
 		names := finished.eventLogResults()
 		if len(names) == 0 {
-			return nil, fmt.Errorf("eventlog parser selected but no EVTX files were chosen")
+			return nil, false, fmt.Errorf("eventlog parser selected but no EVTX files were chosen")
 		}
 		eventlogpkg.ConfigureSelectedLogs(names)
 	}
 
-	return selected, nil
+	return selected, false, nil
 }
 
 func newMenuModel() menuModel {
@@ -279,7 +290,7 @@ func newMenuModel() menuModel {
 }
 
 func (m menuModel) Init() tea.Cmd {
-	return tea.Batch(syncTerminalSizeCmd(), pollTerminalSizeCmd())
+	return PollTerminalSizeCmd()
 }
 
 func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -295,28 +306,10 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			sizeChanged = sizeChanged || msg.Height != m.height
 			m.height = msg.Height
 		}
-		console.SyncBufferToWindow()
 		if sizeChanged {
-			return m, tea.ClearScreen
+			return m, tea.Batch(tea.ClearScreen, PollTerminalSizeCmd())
 		}
-		return m, nil
-
-	case sizePollMsg:
-		sizeChanged := false
-		if msg.width > 0 {
-			sizeChanged = sizeChanged || msg.width != m.width
-			m.width = msg.width
-			m.help.Width = msg.width
-		}
-		if msg.height > 0 {
-			sizeChanged = sizeChanged || msg.height != m.height
-			m.height = msg.height
-		}
-		console.SyncBufferToWindow()
-		if sizeChanged {
-			return m, tea.Batch(tea.ClearScreen, pollTerminalSizeCmd())
-		}
-		return m, pollTerminalSizeCmd()
+		return m, PollTerminalSizeCmd()
 
 	case tea.KeyMsg:
 		keys := m.keyMap()
@@ -349,6 +342,9 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case phaseEventLogs:
 			return m.updateEventLogs(msg)
 		}
+
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -485,6 +481,7 @@ func (m menuModel) updateCollectors(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Discovering EVTX files..."
 			return m, tea.Batch(m.spinner.Tick, discoverEventLogsCmd())
 		}
+		m.completed = true
 		return m, tea.Quit
 	}
 
@@ -539,6 +536,7 @@ func (m menuModel) updateProfiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Discovering EVTX files..."
 			return m, tea.Batch(m.spinner.Tick, discoverEventLogsCmd())
 		}
+		m.completed = true
 		return m, tea.Quit
 	}
 
@@ -593,6 +591,7 @@ func (m menuModel) updateEventLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Select at least one EVTX file."
 			return m, nil
 		}
+		m.completed = true
 		return m, tea.Quit
 	}
 
@@ -600,44 +599,76 @@ func (m menuModel) updateEventLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m menuModel) View() string {
-	totalWidth := m.width
-	if totalWidth <= 0 {
-		totalWidth = 80
+	if m.width <= 0 || m.height <= 0 {
+		return "Loading..."
 	}
-	totalWidth = maxInt(24, totalWidth)
-	width := totalWidth
-	height := m.height
-	if height <= 0 {
-		height = 24
-	}
+
+	marginX := 2
+	marginY := 1
+	width, height := RootViewportSize(m.width, m.height, marginX, marginY)
 
 	header := m.headerView(width)
 	footer := m.footerView(width)
-	layout := MeasureRootLayout(width, height, header, footer)
-	body := m.bodyView(width, layout.ContentHeight)
-	return RenderRootLayout(layout, header, body, footer)
+	bodyHeight := maxInt(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
+	body := m.bodyView(width, bodyHeight)
+
+	ui := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	ui = PadViewport(ui, width, height)
+
+	return lipgloss.NewStyle().
+		Padding(marginY, marginX).
+		Render(ui)
 }
 
 func (m menuModel) headerView(width int) string {
-	sections := []string{
-		m.bannerView(width),
-		"",
-		titleStyle.Render(m.screenTitle()),
-		subtleStyle.Render(trimToWidth(m.status, width)),
+	innerWidth := maxInt(10, width-boxBorderStyle.GetHorizontalFrameSize())
+	leftWidth, rightWidth := BannerColumnWidths(innerWidth)
+
+	leftLogo := BannerLogoLines()
+	rightLines := []string{
+		"Machine Info",
+		RenderBannerInfoRow("Host", MachineHostname(), rightWidth, menuItemStyle, bannerMutedStyle),
+		RenderBannerInfoRow("Platform", runtime.GOOS+"/"+runtime.GOARCH, rightWidth, menuItemStyle, bannerMutedStyle),
+		RenderBannerInfoRow("Phase", m.screenTitle(), rightWidth, menuItemStyle, bannerMutedStyle),
 	}
-	return strings.Join(sections, "\n")
+
+	left := lipgloss.NewStyle().
+		Width(leftWidth).
+		Align(lipgloss.Left, lipgloss.Top).
+		Render(strings.Join([]string{
+			bannerLogoStyle.Render(trimToWidth(leftLogo[0], leftWidth)),
+			bannerLogoStyle.Render(trimToWidth(leftLogo[1], leftWidth)),
+			bannerLogoStyle.Render(trimToWidth(leftLogo[2], leftWidth)),
+			bannerTitleStyle.Render(trimToWidth("FIR v"+output.Version, leftWidth)),
+			lipgloss.NewStyle().Bold(true).Render(trimToWidth("Freedom Incident Response", leftWidth)),
+			bannerMutedStyle.Render(trimToWidth("Interactive module launcher", leftWidth)),
+		}, "\n"))
+
+	right := lipgloss.NewStyle().
+		Width(rightWidth).
+		Align(lipgloss.Left, lipgloss.Top).
+		Render(strings.Join([]string{
+			bannerTitleStyle.Render(trimToWidth(rightLines[0], rightWidth)),
+			trimToWidth(rightLines[1], rightWidth),
+			trimToWidth(rightLines[2], rightWidth),
+			trimToWidth(rightLines[3], rightWidth),
+		}, "\n"))
+
+	row := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", BannerColumnGap), right)
+
+	return boxBorderStyle.
+		Width(maxInt(1, width-2)).
+		Height(6).
+		Render(row)
 }
 
 func (m menuModel) footerView(width int) string {
-	helpModel := m.help
-	helpModel.Width = maxInt(1, width-menuFooterStyle.GetHorizontalFrameSize())
-
-	lines := make([]string, 0, 1)
-	if helpView := helpModel.View(m.keyMap()); helpView != "" {
-		lines = append(lines, helpView)
-	}
 	innerWidth := maxInt(1, width-menuFooterStyle.GetHorizontalFrameSize())
-	return menuFooterStyle.Width(innerWidth).Render(strings.Join(lines, "\n"))
+	statusLine := subtleStyle.Render(trimToWidth(m.status, innerWidth))
+	helpLine := helpStyle.Render(trimToWidth(m.help.View(newMenuKeyMap()), innerWidth))
+	return menuFooterStyle.
+		Width(innerWidth).
+		Render(strings.Join([]string{statusLine, helpLine}, "\n"))
 }
 
 func (m menuModel) renderCollectors(width, height int) string {
@@ -899,52 +930,58 @@ func renderSelectableRow(cursor, selected bool, title, detail, category string, 
 	return row
 }
 
-func pollTerminalSizeCmd() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg {
-		console.SyncBufferToWindow()
-		width, height, ok := console.CurrentSize()
-		if !ok {
-			return nil
-		}
-		return sizePollMsg{width: width, height: height}
-	})
-}
-
-func syncTerminalSizeCmd() tea.Cmd {
-	return func() tea.Msg {
-		console.SyncBufferToWindow()
-		width, height, ok := console.CurrentSize()
-		if !ok {
-			return nil
-		}
-		return sizePollMsg{width: width, height: height}
-	}
-}
-
 func (m menuModel) bodyView(width, height int) string {
-	switch m.phase {
-	case phaseCollectors:
-		return m.renderCollectors(width, height)
-	case phaseLoadingProfiles:
-		return m.renderLoadingProfiles(width, height)
-	case phaseProfiles:
-		return m.renderProfiles(width, height)
-	case phaseLoadingEventLogs:
-		return m.renderLoadingEventLogs(width, height)
-	case phaseEventLogs:
-		return m.renderEventLogs(width, height)
-	default:
+	if height <= 0 {
 		return ""
 	}
+
+	innerWidth := maxInt(1, width-boxBorderStyle.GetHorizontalFrameSize())
+	innerHeight := maxInt(1, height-boxBorderStyle.GetVerticalFrameSize())
+	content := PadViewport(m.bodyContent(innerWidth, innerHeight), innerWidth, innerHeight)
+	return boxBorderStyle.
+		Width(maxInt(1, width-2)).
+		Height(maxInt(1, height-2)).
+		Render(content)
 }
 
-func (m menuModel) bannerView(width int) string {
-	return RenderAppBanner(width, BannerContent{
-		Version:     output.Version,
-		Subtitle:    "Interactive module launcher",
-		CenterTitle: "Interactive Flow",
-		CenterLines: m.bannerWorkflowLines(),
-	})
+func (m menuModel) bodyContent(width, height int) string {
+	if height <= 0 || width <= 0 {
+		return ""
+	}
+
+	lines := []string{
+		titleStyle.Render(trimToWidth(m.screenTitle(), width)),
+		subtleStyle.Render(trimToWidth(m.status, width)),
+		"",
+	}
+
+	availableRows := maxInt(0, height-len(lines))
+	if availableRows <= 0 {
+		if height < len(lines) {
+			return strings.Join(lines[:height], "\n")
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	var content string
+	switch m.phase {
+	case phaseLoadingProfiles:
+		content = m.renderLoadingProfiles(width, availableRows)
+	case phaseProfiles:
+		content = m.renderProfiles(width, availableRows)
+	case phaseLoadingEventLogs:
+		content = m.renderLoadingEventLogs(width, availableRows)
+	case phaseEventLogs:
+		content = m.renderEventLogs(width, availableRows)
+	default:
+		content = m.renderCollectors(width, availableRows)
+	}
+
+	if strings.TrimSpace(content) != "" {
+		lines = append(lines, content)
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func (m menuModel) moduleResults() []module.Module {
@@ -1043,6 +1080,31 @@ func pageStep(height int) int {
 	return step
 }
 
+func (m menuModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	step := 3
+	switch {
+	case msg.Button == tea.MouseButtonWheelUp || msg.Type == tea.MouseWheelUp:
+		switch m.phase {
+		case phaseCollectors:
+			m.collectorCursor = moveCursorUp(m.collectorCursor, step)
+		case phaseProfiles:
+			m.profileCursor = moveCursorUp(m.profileCursor, step)
+		case phaseEventLogs:
+			m.eventLogCursor = moveCursorUp(m.eventLogCursor, step)
+		}
+	case msg.Button == tea.MouseButtonWheelDown || msg.Type == tea.MouseWheelDown:
+		switch m.phase {
+		case phaseCollectors:
+			m.collectorCursor = moveCursorDown(m.collectorCursor, len(m.modules), step)
+		case phaseProfiles:
+			m.profileCursor = moveCursorDown(m.profileCursor, len(m.profiles), step)
+		case phaseEventLogs:
+			m.eventLogCursor = moveCursorDown(m.eventLogCursor, len(m.eventLogs), step)
+		}
+	}
+	return m, nil
+}
+
 func (m menuModel) keyMap() menuKeyMap {
 	keys := newMenuKeyMap()
 	switch m.phase {
@@ -1060,17 +1122,6 @@ func (m menuModel) keyMap() menuKeyMap {
 		keys.Back.SetEnabled(false)
 	}
 	return keys
-}
-
-func (m menuModel) bannerWorkflowLines() []string {
-	switch m.phase {
-	case phaseLoadingProfiles, phaseProfiles:
-		return []string{"Choose modules", "Review browser profiles", "Prepare collection"}
-	case phaseLoadingEventLogs, phaseEventLogs:
-		return []string{"Choose modules", "Review EVTX selection", "Prepare collection"}
-	default:
-		return []string{"Choose modules", "Review browser profiles", "Run collection"}
-	}
 }
 
 func (m menuModel) screenTitle() string {
