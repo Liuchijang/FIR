@@ -14,12 +14,11 @@ import (
 	"github.com/Liuchijang/FIR/internal/utils"
 )
 
-func init() { module.Register(&memoryCollector{}) }
+func init() { module.RegisterArtifact("memory", &memoryCollector{}) }
 
 type memoryCollector struct{}
 
-func (c *memoryCollector) Name() string     { return "ram" }
-func (c *memoryCollector) Category() string { return "memory" }
+func (c *memoryCollector) Name() string { return "ram" }
 func (c *memoryCollector) Description() string {
 	return "Collect memory"
 }
@@ -31,31 +30,34 @@ func winpmemBinaries() []string {
 	return []string{"winpmem_mini_x86.exe", "winpmem_x86.exe", "winpmem.exe"}
 }
 
-func (c *memoryCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+func (c *memoryCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := filepath.Join(outputDir, "memory")
+	outDir := req.ArtifactDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "memory")
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create memory output dir: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create memory output dir: %w", err).Error()}
 	}
 
 	winpmemPath, err := findWinpmem()
 	if err != nil {
-		return nil, fmt.Errorf("winpmem not found: %w\nPlace winpmem in the same directory as FIR or add it to PATH", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("winpmem not found: %w\nPlace winpmem in the same directory as FIR or add it to PATH", err).Error()}
 	}
 	log.Debug(fmt.Sprintf("Using winpmem: %s", winpmemPath))
 
 	outputPath := filepath.Join(outDir, "memory.raw")
 	cmd := exec.CommandContext(ctx, winpmemPath, outputPath)
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("winpmem execution failed: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("winpmem execution failed: %w", err).Error()}
 	}
 
 	stat, err := os.Stat(outputPath)
 	if err != nil {
-		return nil, fmt.Errorf("verify memory dump: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("verify memory dump: %w", err).Error()}
 	}
 	if stat.Size() == 0 {
-		return nil, fmt.Errorf("memory dump is empty (0 bytes)")
+		return module.CollectResult{OutputPath: outDir, Error: "memory dump is empty (0 bytes)"}
 	}
 
 	hash, err := utils.HashFile(outputPath)
@@ -65,7 +67,7 @@ func (c *memoryCollector) Collect(ctx context.Context, outputDir string) ([]modu
 	}
 
 	log.Debug(fmt.Sprintf("RAM acquired: %d bytes, SHA256: %s", stat.Size(), hash))
-	return []module.FileInfo{{Path: "memory.raw", SHA256: hash, Size: stat.Size()}}, nil
+	return module.CollectResult{Files: []module.FileInfo{{Path: "memory.raw", SHA256: hash, Size: stat.Size()}}, OutputPath: outDir}
 }
 
 func findWinpmem() (string, error) {

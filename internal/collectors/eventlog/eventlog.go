@@ -15,7 +15,7 @@ import (
 	"github.com/Liuchijang/FIR/internal/utils"
 )
 
-func init() { module.Register(&eventLogCollector{}) }
+func init() { module.RegisterArtifact("eventlog", &eventLogCollector{}) }
 
 type eventLogCollector struct{}
 
@@ -29,8 +29,7 @@ var eventLogSelection = struct {
 	names []string
 }{}
 
-func (c *eventLogCollector) Name() string     { return "eventlog" }
-func (c *eventLogCollector) Category() string { return "eventlog" }
+func (c *eventLogCollector) Name() string { return "eventlog" }
 func (c *eventLogCollector) Description() string {
 	return "Collect EVTX logs"
 }
@@ -85,17 +84,20 @@ func ResolveSelectedOrAllLogs(dir string) ([]string, error) {
 	return resolved, nil
 }
 
-func (c *eventLogCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+func (c *eventLogCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := filepath.Join(outputDir, "eventlog")
+	outDir := req.ArtifactDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "eventlog")
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create eventlog output dir: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create eventlog output dir: %w", err).Error()}
 	}
 
 	evtxDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
 	evtxFiles, err := ResolveSelectedOrAllLogs(evtxDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve event log files: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("resolve event log files: %w", err).Error()}
 	}
 
 	var allFiles []module.FileInfo
@@ -103,7 +105,7 @@ func (c *eventLogCollector) Collect(ctx context.Context, outputDir string) ([]mo
 	for _, name := range evtxFiles {
 		select {
 		case <-ctx.Done():
-			return allFiles, ctx.Err()
+			return module.CollectResult{Files: allFiles, OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 		src := filepath.Join(evtxDir, name)
@@ -118,9 +120,9 @@ func (c *eventLogCollector) Collect(ctx context.Context, outputDir string) ([]mo
 	}
 
 	if len(allFiles) == 0 {
-		return nil, fmt.Errorf("no event log files collected (%d errors)", errorCount)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Sprintf("no event log files collected (%d errors)", errorCount)}
 	}
-	return allFiles, nil
+	return module.CollectResult{Files: allFiles, OutputPath: outDir}
 }
 
 func getPriority(filename string) int {

@@ -15,7 +15,7 @@ import (
 	winreg "golang.org/x/sys/windows/registry"
 )
 
-func init() { module.Register(&recentDocsParser{}) }
+func init() { module.RegisterAnalyzer(&recentDocsParser{}) }
 
 type recentDocsParser struct{}
 
@@ -32,36 +32,38 @@ type recentDocsRow struct {
 
 func (c *recentDocsParser) Name() string     { return "recentdocs_parser" }
 func (c *recentDocsParser) Category() string { return "registry" }
-func (c *recentDocsParser) Mode() string     { return module.ModeAnalyzer }
 func (c *recentDocsParser) Description() string {
 	return "Parse RecentDocs"
 }
 
-func (c *recentDocsParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *recentDocsParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create recentdocs output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create recentdocs output dir: %w", err).Error()}
 	}
 
-	sources, err := collectedUserHiveSources(outputDir, "NTUSER.DAT")
+	sources, err := collectedUserHiveSources(req.OutputDir, "NTUSER.DAT")
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 	if len(sources) == 0 {
 		sources, err = liveUserNTUserSources()
 		if err != nil {
-			return nil, err
+			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 		}
 	}
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("no NTUSER.DAT sources found in collected registry output or live registry")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no NTUSER.DAT sources found in collected registry output or live registry"}
 	}
 
 	rows := make([]recentDocsRow, 0, 256)
 	for _, source := range sources {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 
@@ -78,7 +80,7 @@ func (c *recentDocsParser) Collect(ctx context.Context, outputDir string) ([]mod
 	}
 
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no RecentDocs entries parsed")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no RecentDocs entries parsed"}
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
@@ -118,14 +120,14 @@ func (c *recentDocsParser) Collect(ctx context.Context, outputDir string) ([]mod
 		"EntryName",
 		"KeyLastWriteTimestamp",
 	}, csvRows); err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
 	fi, err := utils.FileInfoFromPath(outCSV)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
-	return []module.FileInfo{fi}, nil
+	return module.AnalyzeResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
 }
 
 func parseRecentDocsFromRoot(root winreg.Key, source userHiveSource) ([]recentDocsRow, error) {

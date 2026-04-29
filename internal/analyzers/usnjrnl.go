@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func init() { module.Register(&usnJrnlParser{}) }
+func init() { module.RegisterAnalyzer(&usnJrnlParser{}) }
 
 const (
 	fsctlQueryUsnJournal = 0x000900F4
@@ -44,33 +44,35 @@ type usnJrnlParser struct{}
 
 func (c *usnJrnlParser) Name() string     { return "usnjrnl_parser" }
 func (c *usnJrnlParser) Category() string { return "ntfs" }
-func (c *usnJrnlParser) Mode() string     { return module.ModeAnalyzer }
 func (c *usnJrnlParser) Description() string {
 	return "Parse USN, enrich with MFT if selected"
 }
 
-func (c *usnJrnlParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create USN parser output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create USN parser output dir: %w", err).Error()}
 	}
 
-	journalData, _, err := readUSNJournalSource(ctx, outputDir)
+	journalData, _, err := readUSNJournalSource(ctx, req.OutputDir)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
-	recordMap, pathCache, enriched, err := loadMFTForUSN(ctx, outputDir)
+	recordMap, pathCache, enriched, err := loadMFTForUSN(ctx, req)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
 	header, rows, parsedCount, unsupportedCount, err := parseUSNJournalRows(journalData, recordMap, pathCache, enriched)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no USN records parsed")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no USN records parsed"}
 	}
 
 	recordsName := "usnjrnl_records.csv"
@@ -79,16 +81,16 @@ func (c *usnJrnlParser) Collect(ctx context.Context, outputDir string) ([]module
 	}
 	recordsCSV := filepath.Join(outDir, recordsName)
 	if err := writeCSVFile(recordsCSV, header, rows); err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
 	recordsInfo, err := utils.FileInfoFromPath(recordsCSV)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 	_ = parsedCount
 	_ = unsupportedCount
-	return []module.FileInfo{recordsInfo}, nil
+	return module.AnalyzeResult{Files: []module.FileInfo{recordsInfo}, OutputPath: outDir}
 }
 
 func readUSNJournalSource(ctx context.Context, outputDir string) ([]byte, string, error) {
@@ -160,8 +162,9 @@ func readLiveUSNJournal(ctx context.Context) ([]byte, error) {
 	return payload, nil
 }
 
-func loadMFTForUSN(ctx context.Context, outputDir string) (map[uint64]mftRecordRow, map[uint64]string, bool, error) {
-	shouldEnrich := module.IsSelected("mft") || module.IsSelected("mft_parser")
+func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (map[uint64]mftRecordRow, map[uint64]string, bool, error) {
+	outputDir := req.OutputDir
+	shouldEnrich := req.IsSelected("mft") || req.IsSelected("mft_parser")
 	if !shouldEnrich {
 		return nil, nil, false, nil
 	}

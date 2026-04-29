@@ -18,7 +18,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func init() { module.Register(&browserHistoryParser{}) }
+func init() { module.RegisterAnalyzer(&browserHistoryParser{}) }
 
 type browserHistoryParser struct{}
 
@@ -44,23 +44,25 @@ type browserHistoryRow struct {
 
 func (c *browserHistoryParser) Name() string     { return "browser_history_parser" }
 func (c *browserHistoryParser) Category() string { return "browser" }
-func (c *browserHistoryParser) Mode() string     { return module.ModeAnalyzer }
 func (c *browserHistoryParser) Description() string {
 	return "Parse browser history from collected or live selected browser profiles"
 }
 
-func (c *browserHistoryParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create browser history parser output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create browser history parser output dir: %w", err).Error()}
 	}
 
-	sources, err := resolveBrowserHistorySources(outputDir)
+	sources, err := resolveBrowserHistorySources(req)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("no browser profiles available for history analysis")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no browser profiles available for history analysis"}
 	}
 
 	var files []module.FileInfo
@@ -68,7 +70,7 @@ func (c *browserHistoryParser) Collect(ctx context.Context, outputDir string) ([
 	for _, source := range sources {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 
@@ -137,22 +139,23 @@ func (c *browserHistoryParser) Collect(ctx context.Context, outputDir string) ([
 
 	if len(files) == 0 {
 		if len(parseErrors) > 0 {
-			return nil, fmt.Errorf("no browser history entries parsed: %s", strings.Join(parseErrors, "; "))
+			return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no browser history entries parsed: %s", strings.Join(parseErrors, "; "))}
 		}
-		return nil, fmt.Errorf("no browser history entries parsed")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no browser history entries parsed"}
 	}
 
-	return files, nil
+	return module.AnalyzeResult{Files: files, OutputPath: outDir}
 }
 
-func resolveBrowserHistorySources(outputDir string) ([]browserHistorySource, error) {
-	if module.IsSelected(browsercollector.BrowserCollectorName) {
-		if sourceDir, ok := existingModuleDir(outputDir, browsercollector.BrowserCollectorName); ok {
+func resolveBrowserHistorySources(req module.AnalyzeRequest) ([]browserHistorySource, error) {
+	if req.IsSelected(browsercollector.BrowserCollectorName) {
+		if sourceDir, ok := existingModuleDir(req.OutputDir, browsercollector.BrowserCollectorName); ok {
 			sources, err := collectedBrowserHistorySources(sourceDir)
 			if err == nil && len(sources) > 0 {
 				return sources, nil
 			}
 		}
+		return nil, fmt.Errorf("browser collector was selected but collected browser history sources were not found")
 	}
 
 	profiles, err := browsercollector.ResolveProfiles()

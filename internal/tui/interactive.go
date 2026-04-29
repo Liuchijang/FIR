@@ -3,7 +3,6 @@ package tui
 
 import (
 	"fmt"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -628,7 +627,7 @@ func (m menuModel) headerView(width int) string {
 	rightLines := []string{
 		"Machine Info",
 		RenderBannerInfoRow("Host", MachineHostname(), rightWidth, menuItemStyle, bannerMutedStyle),
-		RenderBannerInfoRow("Platform", runtime.GOOS+"/"+runtime.GOARCH, rightWidth, menuItemStyle, bannerMutedStyle),
+		RenderBannerInfoRow("Platform", MachinePlatform(), rightWidth, menuItemStyle, bannerMutedStyle),
 		RenderBannerInfoRow("Phase", m.screenTitle(), rightWidth, menuItemStyle, bannerMutedStyle),
 	}
 

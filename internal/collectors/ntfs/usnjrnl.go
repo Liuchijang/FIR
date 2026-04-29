@@ -13,7 +13,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func init() { module.Register(&usnJrnlCollector{}) }
+func init() { module.RegisterArtifact("ntfs", &usnJrnlCollector{}) }
 
 const (
 	FSCTL_QUERY_USN_JOURNAL = 0x000900F4
@@ -41,26 +41,28 @@ type readUsnJournalData struct {
 
 type usnJrnlCollector struct{}
 
-func (c *usnJrnlCollector) Name() string     { return "usnjrnl" }
-func (c *usnJrnlCollector) Category() string { return "ntfs" }
+func (c *usnJrnlCollector) Name() string { return "usnjrnl" }
 func (c *usnJrnlCollector) Description() string {
 	return "Collect $UsnJrnl:$J"
 }
 
-func (c *usnJrnlCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+func (c *usnJrnlCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := filepath.Join(outputDir, "ntfs")
+	outDir := req.ArtifactDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "ntfs")
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create NTFS output dir: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create NTFS output dir: %w", err).Error()}
 	}
 
 	volPath, err := windows.UTF16PtrFromString(`\\.\C:`)
 	if err != nil {
-		return nil, fmt.Errorf("UTF16: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("UTF16: %w", err).Error()}
 	}
 	handle, err := windows.CreateFile(volPath, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open volume for USN journal: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("open volume for USN journal: %w", err).Error()}
 	}
 	defer windows.CloseHandle(handle)
 
@@ -68,7 +70,7 @@ func (c *usnJrnlCollector) Collect(ctx context.Context, outputDir string) ([]mod
 	var bytesReturned uint32
 	err = windows.DeviceIoControl(handle, FSCTL_QUERY_USN_JOURNAL, nil, 0, (*byte)(unsafe.Pointer(&journalData)), uint32(unsafe.Sizeof(journalData)), &bytesReturned, nil)
 	if err != nil {
-		return nil, fmt.Errorf("query USN journal: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("query USN journal: %w", err).Error()}
 	}
 
 	log.Debug(fmt.Sprintf("USN Journal: ID=%d, FirstUsn=%d, NextUsn=%d", journalData.UsnJournalID, journalData.FirstUsn, journalData.NextUsn))
@@ -76,7 +78,7 @@ func (c *usnJrnlCollector) Collect(ctx context.Context, outputDir string) ([]mod
 	outputPath := filepath.Join(outDir, "$UsnJrnl_J")
 	outFile, err := os.Create(outputPath)
 	if err != nil {
-		return nil, fmt.Errorf("create USN journal output: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create USN journal output: %w", err).Error()}
 	}
 	defer outFile.Close()
 
@@ -87,7 +89,7 @@ func (c *usnJrnlCollector) Collect(ctx context.Context, outputDir string) ([]mod
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return module.CollectResult{OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 		err = windows.DeviceIoControl(handle, FSCTL_READ_USN_JOURNAL, (*byte)(unsafe.Pointer(&readData)), uint32(unsafe.Sizeof(readData)), &buf[0], uint32(len(buf)), &bytesReturned, nil)
@@ -98,7 +100,7 @@ func (c *usnJrnlCollector) Collect(ctx context.Context, outputDir string) ([]mod
 		nextUsn := *(*int64)(unsafe.Pointer(&buf[0]))
 		n, writeErr := outFile.Write(buf[8:bytesReturned])
 		if writeErr != nil {
-			return nil, fmt.Errorf("write USN data: %w", writeErr)
+			return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("write USN data: %w", writeErr).Error()}
 		}
 		totalWritten += int64(n)
 		readData.StartUsn = nextUsn
@@ -109,5 +111,5 @@ func (c *usnJrnlCollector) Collect(ctx context.Context, outputDir string) ([]mod
 		log.Warn(fmt.Sprintf("Failed to hash $UsnJrnl: %v", err))
 	}
 	log.Debug(fmt.Sprintf("$UsnJrnl:$J collected: %d bytes, SHA256: %s", totalWritten, hash))
-	return []module.FileInfo{{Path: "$UsnJrnl_J", SHA256: hash, Size: totalWritten}}, nil
+	return module.CollectResult{Files: []module.FileInfo{{Path: "$UsnJrnl_J", SHA256: hash, Size: totalWritten}}, OutputPath: outDir}
 }

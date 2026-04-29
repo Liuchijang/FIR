@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/platform"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wordwrap"
 )
@@ -31,29 +31,31 @@ type SummaryReport struct {
 	CollectorsTotal     int
 	SuccessCount        int
 	FailureCount        int
+	SkippedCount        int
 	Results             []module.Result
 }
 
 func NewSummaryReport(outputDir string, startedAt time.Time, totalDuration time.Duration, timeout time.Duration, concurrency int, results []module.Result) SummaryReport {
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "UNKNOWN"
-	}
+	host := platform.DetectHost()
 
 	successCount := 0
 	failureCount := 0
+	skippedCount := 0
 	for _, result := range results {
-		if result.Success {
+		switch {
+		case result.Skipped:
+			skippedCount++
+		case result.Success:
 			successCount++
-		} else {
+		default:
 			failureCount++
 		}
 	}
 
 	return SummaryReport{
-		Hostname:            hostname,
-		OS:                  runtime.GOOS,
-		Architecture:        runtime.GOARCH,
+		Hostname:            host.Hostname,
+		OS:                  host.OS,
+		Architecture:        host.Architecture,
 		Version:             Version,
 		OutputDir:           outputDir,
 		StartedAt:           startedAt,
@@ -64,6 +66,7 @@ func NewSummaryReport(outputDir string, startedAt time.Time, totalDuration time.
 		CollectorsTotal:     len(results),
 		SuccessCount:        successCount,
 		FailureCount:        failureCount,
+		SkippedCount:        skippedCount,
 		Results:             results,
 	}
 }
@@ -79,6 +82,7 @@ func (r SummaryReport) Render() string {
 		{"Collectors", fmt.Sprintf("%d", r.CollectorsTotal)},
 		{"Succeeded", fmt.Sprintf("%d", r.SuccessCount)},
 		{"Failed", fmt.Sprintf("%d", r.FailureCount)},
+		{"Skipped", fmt.Sprintf("%d", r.SkippedCount)},
 		{"Concurrency", fmt.Sprintf("%d", r.Concurrency)},
 		{"Timeout per collector", r.TimeoutPerCollector.String()},
 		{"Total duration", formatDuration(r.TotalDuration)},
@@ -206,6 +210,7 @@ func renderTerminalInfoTable(report SummaryReport, width int) string {
 		{"Collectors", fmt.Sprintf("%d", report.CollectorsTotal)},
 		{"Succeeded", fmt.Sprintf("%d", report.SuccessCount)},
 		{"Failed", fmt.Sprintf("%d", report.FailureCount)},
+		{"Skipped", fmt.Sprintf("%d", report.SkippedCount)},
 		{"Concurrency", fmt.Sprintf("%d", report.Concurrency)},
 		{"Timeout per collector", report.TimeoutPerCollector.String()},
 		{"Total duration", formatDuration(report.TotalDuration)},
@@ -326,6 +331,12 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 }
 
 func resultStatus(result module.Result) string {
+	if result.Status != "" {
+		return strings.ToUpper(result.Status)
+	}
+	if result.Skipped {
+		return "SKIPPED"
+	}
 	if result.Success {
 		return "SUCCESS"
 	}

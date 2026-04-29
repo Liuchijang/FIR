@@ -14,7 +14,7 @@ import (
 	winreg "golang.org/x/sys/windows/registry"
 )
 
-func init() { module.Register(&shimCacheParser{}) }
+func init() { module.RegisterAnalyzer(&shimCacheParser{}) }
 
 type shimCacheParser struct{}
 
@@ -53,23 +53,25 @@ const (
 
 func (c *shimCacheParser) Name() string     { return "shimcache_parser" }
 func (c *shimCacheParser) Category() string { return "registry" }
-func (c *shimCacheParser) Mode() string     { return module.ModeAnalyzer }
 func (c *shimCacheParser) Description() string {
 	return "Parse ShimCache"
 }
 
-func (c *shimCacheParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *shimCacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create shimcache parser output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create shimcache parser output dir: %w", err).Error()}
 	}
 
-	sources, err := loadShimCacheSources(outputDir)
+	sources, err := loadShimCacheSources(req.OutputDir)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("no ShimCache sources found in collected SYSTEM hive or live registry")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no ShimCache sources found in collected SYSTEM hive or live registry"}
 	}
 
 	rows := make([]shimCacheRow, 0, 1024)
@@ -78,7 +80,7 @@ func (c *shimCacheParser) Collect(ctx context.Context, outputDir string) ([]modu
 	for _, source := range sources {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 
@@ -112,9 +114,9 @@ func (c *shimCacheParser) Collect(ctx context.Context, outputDir string) ([]modu
 
 	if len(rows) == 0 {
 		if len(parseErrors) > 0 {
-			return nil, fmt.Errorf("no ShimCache entries parsed: %s", strings.Join(parseErrors, "; "))
+			return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no ShimCache entries parsed: %s", strings.Join(parseErrors, "; "))}
 		}
-		return nil, fmt.Errorf("no ShimCache entries parsed")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no ShimCache entries parsed"}
 	}
 
 	outCSV := filepath.Join(outDir, "shimcache_entries.csv")
@@ -141,14 +143,14 @@ func (c *shimCacheParser) Collect(ctx context.Context, outputDir string) ([]modu
 		"Format",
 		"EntryPosition",
 	}, csvRows); err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
 	fi, err := utils.FileInfoFromPath(outCSV)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
-	return []module.FileInfo{fi}, nil
+	return module.AnalyzeResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
 }
 
 func loadShimCacheSources(outputDir string) ([]shimCacheSource, error) {

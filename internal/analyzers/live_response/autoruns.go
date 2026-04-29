@@ -4,25 +4,28 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/Liuchijang/FIR/internal/module"
 )
 
-func init() { module.Register(&autorunsAnalyzer{}) }
+func init() { module.RegisterAnalyzer(&autorunsAnalyzer{}) }
 
 type autorunsAnalyzer struct{}
 
 func (a *autorunsAnalyzer) Name() string     { return "autoruns" }
 func (a *autorunsAnalyzer) Category() string { return "live" }
-func (a *autorunsAnalyzer) Mode() string     { return module.ModeAnalyzer }
 func (a *autorunsAnalyzer) Description() string {
 	return "Live autoruns triage"
 }
 
-func (a *autorunsAnalyzer) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, a)
+func (a *autorunsAnalyzer) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", a.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create autoruns analyzer output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create autoruns analyzer output dir: %w", err).Error()}
 	}
 
 	script := `
@@ -126,8 +129,12 @@ $startupRows | Sort-Object Scope, Name | Export-Csv -Path $startupCsv -NoTypeInf
 `
 
 	if err := runPowerShell(ctx, script); err != nil {
-		return nil, fmt.Errorf("analyze live autoruns data: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("analyze live autoruns data: %w", err).Error()}
 	}
 
-	return collectGeneratedCSVs(outDir)
+	files, err := collectGeneratedCSVs(outDir)
+	if err != nil {
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+	}
+	return module.AnalyzeResult{Files: files, OutputPath: outDir}
 }

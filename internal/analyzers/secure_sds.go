@@ -13,34 +13,36 @@ import (
 	"github.com/Liuchijang/FIR/internal/utils"
 )
 
-func init() { module.Register(&secureSDSParser{}) }
+func init() { module.RegisterAnalyzer(&secureSDSParser{}) }
 
 type secureSDSParser struct{}
 
 func (c *secureSDSParser) Name() string     { return "secure_sds_parser" }
 func (c *secureSDSParser) Category() string { return "ntfs" }
-func (c *secureSDSParser) Mode() string     { return module.ModeAnalyzer }
 func (c *secureSDSParser) Description() string {
 	return "Parse Secure SDS"
 }
 
-func (c *secureSDSParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *secureSDSParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create secure_sds parser output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create secure_sds parser output dir: %w", err).Error()}
 	}
 
-	data, _, err := readSecureSDSSource(ctx, outputDir)
+	data, _, err := readSecureSDSSource(ctx, req.OutputDir)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
 	rows, parsedCount, skippedCount, err := parseSecureSDSRows(data)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no SDS entries parsed")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no SDS entries parsed"}
 	}
 
 	entriesCSV := filepath.Join(outDir, "secure_sds_entries.csv")
@@ -61,16 +63,16 @@ func (c *secureSDSParser) Collect(ctx context.Context, outputDir string) ([]modu
 		"SACLSize",
 		"SACLEntryCount",
 	}, rows); err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
 	entriesInfo, err := utils.FileInfoFromPath(entriesCSV)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 	_ = parsedCount
 	_ = skippedCount
-	return []module.FileInfo{entriesInfo}, nil
+	return module.AnalyzeResult{Files: []module.FileInfo{entriesInfo}, OutputPath: outDir}
 }
 
 func readSecureSDSSource(ctx context.Context, outputDir string) ([]byte, string, error) {

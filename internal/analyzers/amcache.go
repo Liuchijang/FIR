@@ -15,7 +15,7 @@ import (
 	winreg "golang.org/x/sys/windows/registry"
 )
 
-func init() { module.Register(&amcacheParser{}) }
+func init() { module.RegisterAnalyzer(&amcacheParser{}) }
 
 type amcacheParser struct{}
 
@@ -147,41 +147,43 @@ var amcacheShortcutHeaders = []string{
 
 func (c *amcacheParser) Name() string     { return "amcache_parser" }
 func (c *amcacheParser) Category() string { return "execution" }
-func (c *amcacheParser) Mode() string     { return module.ModeAnalyzer }
 func (c *amcacheParser) Description() string {
 	return "Parse Amcache"
 }
 
-func (c *amcacheParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create amcache parser output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create amcache parser output dir: %w", err).Error()}
 	}
 
 	var errs []string
 
-	if collected, ok := collectedAmcacheHive(outputDir); ok {
+	if collected, ok := collectedAmcacheHive(req.OutputDir); ok {
 		if results, err := parseAmcacheResultsFromHiveFile(collected); err == nil && len(results.Datasets) > 0 {
-			return writeAmcacheResults(outDir, results)
+			return writeAmcacheAnalyzeResult(outDir, results)
 		} else if err != nil {
 			errs = append(errs, "parse collected hive: "+err.Error())
 		}
 	}
 
 	if results, err := parseLiveAmcacheResults(); err == nil && len(results.Datasets) > 0 {
-		return writeAmcacheResults(outDir, results)
+		return writeAmcacheAnalyzeResult(outDir, results)
 	} else if err != nil {
 		errs = append(errs, "parse live registry: "+err.Error())
 	}
 
-	autoCollectedHive, cleanupAutoCollect, err := collectAmcacheSourceForParser(ctx, outputDir)
+	autoCollectedHive, cleanupAutoCollect, err := collectAmcacheSourceForParser(ctx, req)
 	if err == nil {
 		if cleanupAutoCollect != nil {
 			defer cleanupAutoCollect()
 		}
 		if autoCollectedHive != "" {
 			if results, err := parseAmcacheResultsFromHiveFile(autoCollectedHive); err == nil && len(results.Datasets) > 0 {
-				return writeAmcacheResults(outDir, results)
+				return writeAmcacheAnalyzeResult(outDir, results)
 			} else if err != nil {
 				errs = append(errs, "parse auto-collected hive: "+err.Error())
 			}
@@ -194,7 +196,7 @@ func (c *amcacheParser) Collect(ctx context.Context, outputDir string) ([]module
 	if err == nil {
 		defer cleanup()
 		if results, parseErr := parseAmcacheResultsFromHiveFile(hivePath); parseErr == nil && len(results.Datasets) > 0 {
-			return writeAmcacheResults(outDir, results)
+			return writeAmcacheAnalyzeResult(outDir, results)
 		} else if parseErr != nil {
 			errs = append(errs, "parse staged live hive: "+parseErr.Error())
 		}
@@ -203,9 +205,17 @@ func (c *amcacheParser) Collect(ctx context.Context, outputDir string) ([]module
 	}
 
 	if len(errs) == 0 {
-		return nil, fmt.Errorf("Amcache hive is not available")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "Amcache hive is not available"}
 	}
-	return nil, fmt.Errorf("Amcache hive is not available. %s", strings.Join(errs, "; "))
+	return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("Amcache hive is not available. %s", strings.Join(errs, "; "))}
+}
+
+func writeAmcacheAnalyzeResult(outDir string, results amcacheResults) module.AnalyzeResult {
+	files, err := writeAmcacheResults(outDir, results)
+	if err != nil {
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+	}
+	return module.AnalyzeResult{Files: files, OutputPath: outDir}
 }
 
 func writeAmcacheResults(outDir string, results amcacheResults) ([]module.FileInfo, error) {
@@ -888,15 +898,12 @@ func collectAmcacheSource(ctx context.Context, outputDir string) error {
 	return err
 }
 
-func collectAmcacheSourceForParser(ctx context.Context, outputDir string) (string, func(), error) {
-	if module.IsSelected("amcache") {
-		if err := collectAmcacheSource(ctx, outputDir); err != nil {
-			return "", nil, err
-		}
-		if collected, ok := collectedAmcacheHive(outputDir); ok {
+func collectAmcacheSourceForParser(ctx context.Context, req module.AnalyzeRequest) (string, func(), error) {
+	if req.IsSelected("amcache") {
+		if collected, ok := collectedAmcacheHive(req.OutputDir); ok {
 			return collected, nil, nil
 		}
-		return "", nil, fmt.Errorf("amcache collector completed but Amcache.hve was not found in run output")
+		return "", nil, fmt.Errorf("amcache collector was selected but Amcache.hve was not found in run output")
 	}
 
 	tempDir, err := os.MkdirTemp("", "fir-amcache-parser-source-")

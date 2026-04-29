@@ -11,33 +11,35 @@ import (
 	"github.com/Liuchijang/FIR/internal/module"
 )
 
-func init() { module.Register(&eventLogParser{}) }
+func init() { module.RegisterAnalyzer(&eventLogParser{}) }
 
 type eventLogParser struct{}
 
 func (c *eventLogParser) Name() string     { return "eventlog_parser" }
 func (c *eventLogParser) Category() string { return "eventlog" }
-func (c *eventLogParser) Mode() string     { return module.ModeAnalyzer }
 func (c *eventLogParser) Description() string {
 	return "Parse EVTX logs"
 }
 
-func (c *eventLogParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *eventLogParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create eventlog parser output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create eventlog parser output dir: %w", err).Error()}
 	}
 
 	sourceDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
-	if dir, ok := existingModuleDir(outputDir, "eventlog"); ok {
+	if dir, ok := existingModuleDir(req.OutputDir, "eventlog"); ok {
 		sourceDir = dir
 	}
 	selectedFiles, err := eventlogpkg.ResolveSelectedOrAllLogs(sourceDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve selected EVTX files: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("resolve selected EVTX files: %w", err).Error()}
 	}
 	if len(selectedFiles) == 0 {
-		return nil, fmt.Errorf("no selected or available EVTX files found in %s", sourceDir)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no selected or available EVTX files found in %s", sourceDir)}
 	}
 
 	quotedFiles := make([]string, 0, len(selectedFiles))
@@ -47,18 +49,18 @@ func (c *eventLogParser) Collect(ctx context.Context, outputDir string) ([]modul
 
 	script := `
 $ErrorActionPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
 $sourceDir = ` + psQuote(sourceDir) + `
 $outCsv = Join-Path ` + psQuote(outDir) + ` 'eventlog_records.csv'
 $selectedFiles = @(` + strings.Join(quotedFiles, ",\n") + `)
+if (Test-Path $outCsv) { Remove-Item -LiteralPath $outCsv -Force }
 
-$rows = foreach ($fileName in $selectedFiles) {
+$written = 0
+foreach ($fileName in $selectedFiles) {
     $path = Join-Path $sourceDir $fileName
     if (-not (Test-Path $path)) { continue }
 
-    foreach ($event in Get-WinEvent -Oldest -Path $path -ErrorAction SilentlyContinue) {
-        $message = ''
-        try { $message = $event.FormatDescription() } catch {}
-
+    $rows = foreach ($event in Get-WinEvent -Oldest -Path $path -ErrorAction SilentlyContinue) {
         [pscustomobject]@{
             SourceFile    = $fileName
             LogName       = $event.LogName
@@ -71,21 +73,36 @@ $rows = foreach ($fileName in $selectedFiles) {
             ThreadId      = $event.ThreadId
             MachineName   = $event.MachineName
             UserId        = [string]$event.UserId
-            Message       = $message
+            Message       = ''
         }
+    }
+
+    if ($rows -and $rows.Count -gt 0) {
+        if ($written -eq 0) {
+            $rows | Export-Csv -Path $outCsv -NoTypeInformation -Encoding UTF8
+        } else {
+            $rows | Export-Csv -Path $outCsv -NoTypeInformation -Encoding UTF8 -Append
+        }
+        $written += $rows.Count
     }
 }
 
-if (-not $rows -or $rows.Count -eq 0) {
+if ($written -eq 0) {
     throw 'no selected EVTX records could be parsed'
 }
-
-$rows | Export-Csv -Path $outCsv -NoTypeInformation -Encoding UTF8
 `
 
 	if err := runPowerShell(ctx, script); err != nil {
-		return nil, fmt.Errorf("parse event logs: %w", err)
+		files, fileErr := collectGeneratedCSVs(outDir)
+		if fileErr == nil && len(files) > 0 {
+			return module.AnalyzeResult{Files: files, OutputPath: outDir, Error: fmt.Errorf("parse event logs: %w", err).Error()}
+		}
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("parse event logs: %w", err).Error()}
 	}
 
-	return collectGeneratedCSVs(outDir)
+	files, err := collectGeneratedCSVs(outDir)
+	if err != nil {
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+	}
+	return module.AnalyzeResult{Files: files, OutputPath: outDir}
 }

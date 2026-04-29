@@ -27,7 +27,7 @@ const (
 	attrTypeData                = 0x80
 )
 
-func init() { module.Register(&mftParser{}) }
+func init() { module.RegisterAnalyzer(&mftParser{}) }
 
 type mftParser struct{}
 
@@ -75,24 +75,26 @@ type fileNameAttribute struct {
 
 func (c *mftParser) Name() string     { return "mft_parser" }
 func (c *mftParser) Category() string { return "ntfs" }
-func (c *mftParser) Mode() string     { return module.ModeAnalyzer }
 func (c *mftParser) Description() string {
 	return "Parse $MFT to full CSV"
 }
 
-func (c *mftParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create MFT parser output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create MFT parser output dir: %w", err).Error()}
 	}
 
 	var rows []mftRecordRow
-	if dir, ok := existingModuleDir(outputDir, "mft"); ok {
+	if dir, ok := existingModuleDir(req.OutputDir, "mft"); ok {
 		mftPath := filepath.Join(dir, "$MFT")
 		if _, err := os.Stat(mftPath); err == nil {
 			rows, err = parseCollectedMFT(ctx, mftPath)
 			if err != nil {
-				return nil, err
+				return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 			}
 		}
 	}
@@ -100,11 +102,11 @@ func (c *mftParser) Collect(ctx context.Context, outputDir string) ([]module.Fil
 		var err error
 		rows, err = parseLiveMFT(ctx)
 		if err != nil {
-			return nil, err
+			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 		}
 	}
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no MFT records parsed")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no MFT records parsed"}
 	}
 
 	sort.Slice(rows, func(i, j int) bool { return rows[i].RecordNumber < rows[j].RecordNumber })
@@ -176,14 +178,14 @@ func (c *mftParser) Collect(ctx context.Context, outputDir string) ([]module.Fil
 		"HasUnnamedData",
 		"HasAlternateDataStreams",
 	}, detailRows); err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
 	recordInfo, err := utils.FileInfoFromPath(recordCSV)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
-	return []module.FileInfo{recordInfo}, nil
+	return module.AnalyzeResult{Files: []module.FileInfo{recordInfo}, OutputPath: outDir}
 }
 
 func parseCollectedMFT(ctx context.Context, path string) ([]mftRecordRow, error) {

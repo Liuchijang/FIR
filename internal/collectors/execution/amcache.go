@@ -13,7 +13,7 @@ import (
 	winreg "golang.org/x/sys/windows/registry"
 )
 
-func init() { module.Register(&amcacheCollector{}) }
+func init() { module.RegisterArtifact("execution", &amcacheCollector{}) }
 
 type amcacheCollector struct{}
 
@@ -30,17 +30,19 @@ type amcacheRawContext struct {
 	volData *acquisition.NTFSVolumeData
 }
 
-func (c *amcacheCollector) Name() string     { return "amcache" }
-func (c *amcacheCollector) Category() string { return "execution" }
+func (c *amcacheCollector) Name() string { return "amcache" }
 func (c *amcacheCollector) Description() string {
 	return "Collect Amcache hive + logs"
 }
 
-func (c *amcacheCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+func (c *amcacheCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := filepath.Join(outputDir, "execution")
+	outDir := req.ArtifactDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "execution")
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create execution output dir: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create execution output dir: %w", err).Error()}
 	}
 
 	basePath := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve")
@@ -74,7 +76,7 @@ func (c *amcacheCollector) Collect(ctx context.Context, outputDir string) ([]mod
 	for _, spec := range specs {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return module.CollectResult{Files: files, OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 
@@ -82,7 +84,7 @@ func (c *amcacheCollector) Collect(ctx context.Context, outputDir string) ([]mod
 		fi, err := collectAmcacheFile(spec, &rawCtx)
 		if err != nil {
 			if spec.isPrimary {
-				return nil, fmt.Errorf("collect %s: %w", spec.relPath, err)
+				return module.CollectResult{Files: files, OutputPath: outDir, Error: fmt.Errorf("collect %s: %w", spec.relPath, err).Error()}
 			}
 
 			log.Debug(fmt.Sprintf("Skipping optional %s: %v", spec.relPath, err))
@@ -92,7 +94,7 @@ func (c *amcacheCollector) Collect(ctx context.Context, outputDir string) ([]mod
 		files = append(files, fi)
 	}
 
-	return files, nil
+	return module.CollectResult{Files: files, OutputPath: outDir}
 }
 
 func collectAmcacheFile(spec amcacheFileSpec, rawCtx **amcacheRawContext) (module.FileInfo, error) {

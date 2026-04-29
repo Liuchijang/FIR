@@ -149,7 +149,7 @@ var browserSelection = struct {
 	paths []string
 }{}
 
-func init() { module.Register(&browserCollector{}) }
+func init() { module.RegisterArtifact("browser", &browserCollector{}) }
 
 type browserCollector struct{}
 
@@ -164,8 +164,7 @@ type BrowserProfile struct {
 // ChromiumProfile is kept as a compatibility alias for existing code.
 type ChromiumProfile = BrowserProfile
 
-func (c *browserCollector) Name() string     { return BrowserCollectorName }
-func (c *browserCollector) Category() string { return "browser" }
+func (c *browserCollector) Name() string { return BrowserCollectorName }
 func (c *browserCollector) Description() string {
 	return "Collect browser artifacts from Chrome, Edge, Brave, Vivaldi, Firefox, Opera, and Opera GX"
 }
@@ -217,16 +216,19 @@ func DiscoverChromiumProfiles() ([]BrowserProfile, error) {
 	return DiscoverProfiles()
 }
 
-func (c *browserCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+func (c *browserCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
 	profiles, err := resolveSelectedProfiles()
 	if err != nil {
-		return nil, err
+		return module.CollectResult{Error: err.Error()}
 	}
 
-	outDir := filepath.Join(outputDir, "browser")
+	outDir := req.ArtifactDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "browser")
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create browser output dir: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create browser output dir: %w", err).Error()}
 	}
 
 	var allFiles []module.FileInfo
@@ -234,7 +236,7 @@ func (c *browserCollector) Collect(ctx context.Context, outputDir string) ([]mod
 	for _, profile := range profiles {
 		select {
 		case <-ctx.Done():
-			return allFiles, ctx.Err()
+			return module.CollectResult{Files: allFiles, OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 
@@ -249,12 +251,12 @@ func (c *browserCollector) Collect(ctx context.Context, outputDir string) ([]mod
 
 	if len(allFiles) == 0 {
 		if len(errors) == 0 {
-			return nil, fmt.Errorf("no browser artifacts collected")
+			return module.CollectResult{OutputPath: outDir, Error: "no browser artifacts collected"}
 		}
-		return nil, fmt.Errorf("no browser artifacts collected: %s", strings.Join(errors, "; "))
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Sprintf("no browser artifacts collected: %s", strings.Join(errors, "; "))}
 	}
 
-	return allFiles, nil
+	return module.CollectResult{Files: allFiles, OutputPath: outDir}
 }
 
 func resolveSelectedProfiles() ([]BrowserProfile, error) {

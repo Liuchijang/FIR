@@ -1,11 +1,11 @@
 package tui
 
 import (
-	"os"
 	"strings"
 	"time"
 
 	"github.com/Liuchijang/FIR/internal/console"
+	"github.com/Liuchijang/FIR/internal/platform"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -64,11 +64,12 @@ func BannerColumnWidths(innerWidth int) (int, int) {
 }
 
 func MachineHostname() string {
-	hostname, err := os.Hostname()
-	if err != nil || strings.TrimSpace(hostname) == "" {
-		return "UNKNOWN"
-	}
-	return hostname
+	return platform.DetectHost().Hostname
+}
+
+func MachinePlatform() string {
+	host := platform.DetectHost()
+	return host.OS + "/" + host.Architecture
 }
 
 func RenderBannerInfoRow(label, value string, width int, labelStyle, valueStyle lipgloss.Style) string {

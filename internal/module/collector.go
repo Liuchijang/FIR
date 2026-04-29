@@ -4,8 +4,9 @@ package module
 
 import (
 	"context"
-	"path/filepath"
 	"time"
+
+	"github.com/Liuchijang/FIR/internal/artifact"
 )
 
 const (
@@ -49,6 +50,10 @@ type Result struct {
 	FilesCollected []FileInfo    `json:"files_collected"`
 	Duration       time.Duration `json:"-"`
 	DurationSec    float64       `json:"duration_seconds"`
+	Status         string        `json:"status"`
+	ErrorKind      string        `json:"error_kind,omitempty"`
+	OutputPath     string        `json:"output_path,omitempty"`
+	Skipped        bool          `json:"skipped,omitempty"`
 	Error          string        `json:"error,omitempty"`
 	Success        bool          `json:"success"`
 }
@@ -64,42 +69,12 @@ func ModeOf(m Module) string {
 }
 
 func ModeDirName(mode string) string {
-	if mode == ModeAnalyzer {
-		return "Analyzer"
-	}
-	return "Collector"
+	return artifact.ModeDirName(mode)
 }
 
 // ModuleDir returns the default module directory for a collector or analyzer.
 // Collector paths stay compatible with the legacy on-disk layout so existing
 // collection code and analyzer fallbacks continue to work.
 func ModuleDir(outputDir string, m Module) string {
-	if ModeOf(m) == ModeAnalyzer {
-		return filepath.Join(outputDir, ModeDirName(ModeAnalyzer), m.Name())
-	}
-
-	switch m.Name() {
-	case "browser":
-		return filepath.Join(outputDir, "browser")
-	case "process_explorer", "autoruns":
-		return filepath.Join(outputDir, "live", m.Name())
-	case "wmi":
-		return filepath.Join(outputDir, "system", "wmi")
-	case "prefetch":
-		return filepath.Join(outputDir, "execution", "prefetch")
-	case "amcache":
-		return filepath.Join(outputDir, "execution")
-	case "eventlog":
-		return filepath.Join(outputDir, "eventlog")
-	case "ram":
-		return filepath.Join(outputDir, "memory")
-	case "registry":
-		return filepath.Join(outputDir, "registry")
-	case "srum":
-		return filepath.Join(outputDir, "system")
-	case "mft", "usnjrnl", "secure_sds":
-		return filepath.Join(outputDir, "ntfs")
-	default:
-		return filepath.Join(outputDir, m.Category())
-	}
+	return artifact.ModuleDir(outputDir, ModeOf(m), m.Name(), m.Category())
 }

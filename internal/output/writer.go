@@ -1,4 +1,4 @@
-﻿// Package output manages the output directory structure and file writing for FIR.
+// Package output manages the output directory structure and file writing for FIR.
 package output
 
 import (
@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Liuchijang/FIR/internal/platform"
 )
 
 // Manager handles output directory creation and path resolution.
@@ -20,10 +22,7 @@ type Manager struct {
 // NewManager creates a new output manager.
 // baseDir is the parent directory where the timestamped collection folder will be created.
 func NewManager(baseDir string) (*Manager, error) {
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "UNKNOWN"
-	}
+	hostname := platform.DetectHost().Hostname
 	// Sanitize hostname: remove characters invalid for directory names.
 	hostname = sanitizeDirName(hostname)
 

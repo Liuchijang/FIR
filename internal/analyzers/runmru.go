@@ -13,7 +13,7 @@ import (
 	winreg "golang.org/x/sys/windows/registry"
 )
 
-func init() { module.Register(&runMRUParser{}) }
+func init() { module.RegisterAnalyzer(&runMRUParser{}) }
 
 type runMRUParser struct{}
 
@@ -31,36 +31,38 @@ type runMRURow struct {
 
 func (c *runMRUParser) Name() string     { return "runmru_parser" }
 func (c *runMRUParser) Category() string { return "registry" }
-func (c *runMRUParser) Mode() string     { return module.ModeAnalyzer }
 func (c *runMRUParser) Description() string {
 	return "Parse RunMRU"
 }
 
-func (c *runMRUParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *runMRUParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create runmru output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create runmru output dir: %w", err).Error()}
 	}
 
-	sources, err := collectedUserHiveSources(outputDir, "NTUSER.DAT")
+	sources, err := collectedUserHiveSources(req.OutputDir, "NTUSER.DAT")
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 	if len(sources) == 0 {
 		sources, err = liveUserNTUserSources()
 		if err != nil {
-			return nil, err
+			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 		}
 	}
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("no NTUSER.DAT sources found in collected registry output or live registry")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no NTUSER.DAT sources found in collected registry output or live registry"}
 	}
 
 	rows := make([]runMRURow, 0, 128)
 	for _, source := range sources {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 
@@ -77,7 +79,7 @@ func (c *runMRUParser) Collect(ctx context.Context, outputDir string) ([]module.
 	}
 
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no RunMRU entries parsed")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no RunMRU entries parsed"}
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
@@ -121,14 +123,14 @@ func (c *runMRUParser) Collect(ctx context.Context, outputDir string) ([]module.
 		"MRUList",
 		"KeyLastWriteTimestamp",
 	}, csvRows); err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
 	fi, err := utils.FileInfoFromPath(outCSV)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
-	return []module.FileInfo{fi}, nil
+	return module.AnalyzeResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
 }
 
 func parseRunMRUFromRoot(root winreg.Key, source userHiveSource) ([]runMRURow, error) {

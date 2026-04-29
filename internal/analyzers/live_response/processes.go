@@ -4,25 +4,28 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/Liuchijang/FIR/internal/module"
 )
 
-func init() { module.Register(&processExplorerAnalyzer{}) }
+func init() { module.RegisterAnalyzer(&processExplorerAnalyzer{}) }
 
 type processExplorerAnalyzer struct{}
 
 func (a *processExplorerAnalyzer) Name() string     { return "process_explorer" }
 func (a *processExplorerAnalyzer) Category() string { return "live" }
-func (a *processExplorerAnalyzer) Mode() string     { return module.ModeAnalyzer }
 func (a *processExplorerAnalyzer) Description() string {
 	return "Live process triage"
 }
 
-func (a *processExplorerAnalyzer) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, a)
+func (a *processExplorerAnalyzer) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", a.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create process explorer analyzer output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create process explorer analyzer output dir: %w", err).Error()}
 	}
 
 	script := `
@@ -181,8 +184,12 @@ $connectionRows | Sort-Object Protocol, ProcessId, LocalAddress, LocalPort, Remo
 `
 
 	if err := runPowerShell(ctx, script); err != nil {
-		return nil, fmt.Errorf("analyze live process data: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("analyze live process data: %w", err).Error()}
 	}
 
-	return collectGeneratedCSVs(outDir)
+	files, err := collectGeneratedCSVs(outDir)
+	if err != nil {
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+	}
+	return module.AnalyzeResult{Files: files, OutputPath: outDir}
 }

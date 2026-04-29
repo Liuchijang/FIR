@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"time"
+	"context"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -22,6 +22,7 @@ type unifiedInteractiveModel struct {
 	menu      tea.Model
 	progress  tui.CollectionProgressModel
 	updates   chan tea.Msg
+	cancel    context.CancelFunc
 	cancelled bool
 	err       error
 }
@@ -57,6 +58,10 @@ func (m unifiedInteractiveModel) Init() tea.Cmd {
 func (m unifiedInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.stage {
 	case stageCollection:
+		if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "ctrl+c" && m.cancel != nil {
+			m.cancel()
+			m.cancel = nil
+		}
 		updated, cmd := m.progress.Update(msg)
 		progress, ok := updated.(tui.CollectionProgressModel)
 		if ok {
@@ -72,6 +77,10 @@ func (m unifiedInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmd, waitForCollectionUpdate(m.updates))
 			}
 		case tui.CollectionFinishedMsg:
+			if m.cancel != nil {
+				m.cancel()
+				m.cancel = nil
+			}
 			m.updates = nil
 		}
 		return m, cmd
@@ -110,22 +119,19 @@ func (m unifiedInteractiveModel) View() string {
 }
 
 func (m unifiedInteractiveModel) startCollection(modules []module.Module) (tea.Model, tea.Cmd) {
-	if concurrencyFlag == 0 {
-		concurrencyFlag = 2
-	}
-	if timeoutFlag == 0 {
-		timeoutFlag = 5 * time.Minute
-	}
+	runtimeCfg := runtimeConfigFromFlags()
 
-	updates := make(chan tea.Msg)
+	updates := make(chan tea.Msg, len(modules)*2+2)
+	ctx, cancel := context.WithCancel(context.Background())
 	console.SyncBufferToWindow()
 
 	m.stage = stageCollection
 	m.updates = updates
-	m.progress = tui.NewCollectionProgressModel(modules, concurrencyFlag)
+	m.cancel = cancel
+	m.progress = tui.NewCollectionProgressModel(modules, runtimeCfg.Concurrency)
 	return m, tea.Batch(
 		m.progress.Init(),
-		startCollectionCmd(modules, updates),
+		startCollectionCmd(ctx, modules, runtimeCfg, updates),
 		waitForCollectionUpdate(updates),
 	)
 }

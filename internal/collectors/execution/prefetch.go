@@ -13,27 +13,29 @@ import (
 	"github.com/Liuchijang/FIR/internal/utils"
 )
 
-func init() { module.Register(&prefetchCollector{}) }
+func init() { module.RegisterArtifact("execution", &prefetchCollector{}) }
 
 type prefetchCollector struct{}
 
-func (c *prefetchCollector) Name() string     { return "prefetch" }
-func (c *prefetchCollector) Category() string { return "execution" }
+func (c *prefetchCollector) Name() string { return "prefetch" }
 func (c *prefetchCollector) Description() string {
 	return "Collect Prefetch files"
 }
 
-func (c *prefetchCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+func (c *prefetchCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := filepath.Join(outputDir, "execution", "prefetch")
+	outDir := req.ArtifactDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "execution", "prefetch")
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create prefetch output dir: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create prefetch output dir: %w", err).Error()}
 	}
 
 	prefetchDir := filepath.Join(os.Getenv("SystemRoot"), "Prefetch")
 	entries, err := os.ReadDir(prefetchDir)
 	if err != nil {
-		return nil, fmt.Errorf("read Prefetch directory: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("read Prefetch directory: %w", err).Error()}
 	}
 
 	var allFiles []module.FileInfo
@@ -43,7 +45,7 @@ func (c *prefetchCollector) Collect(ctx context.Context, outputDir string) ([]mo
 		}
 		select {
 		case <-ctx.Done():
-			return allFiles, ctx.Err()
+			return module.CollectResult{Files: allFiles, OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 		if !strings.HasSuffix(strings.ToLower(e.Name()), ".pf") {
@@ -60,7 +62,7 @@ func (c *prefetchCollector) Collect(ctx context.Context, outputDir string) ([]mo
 	}
 
 	if len(allFiles) == 0 {
-		return nil, fmt.Errorf("no prefetch files found in %s", prefetchDir)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Sprintf("no prefetch files found in %s", prefetchDir)}
 	}
-	return allFiles, nil
+	return module.CollectResult{Files: allFiles, OutputPath: outDir}
 }

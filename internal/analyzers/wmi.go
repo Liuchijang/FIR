@@ -4,25 +4,28 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/Liuchijang/FIR/internal/module"
 )
 
-func init() { module.Register(&wmiParser{}) }
+func init() { module.RegisterAnalyzer(&wmiParser{}) }
 
 type wmiParser struct{}
 
 func (c *wmiParser) Name() string     { return "wmi_parser" }
 func (c *wmiParser) Category() string { return "system" }
-func (c *wmiParser) Mode() string     { return module.ModeAnalyzer }
 func (c *wmiParser) Description() string {
 	return "Parse WMI"
 }
 
-func (c *wmiParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *wmiParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create WMI parser output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create WMI parser output dir: %w", err).Error()}
 	}
 
 	script := `
@@ -92,8 +95,12 @@ Get-WmiNamespaceRows -Namespace 'root' |
 `
 
 	if err := runPowerShell(ctx, script); err != nil {
-		return nil, fmt.Errorf("parse WMI data: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("parse WMI data: %w", err).Error()}
 	}
 
-	return collectGeneratedCSVs(outDir)
+	files, err := collectGeneratedCSVs(outDir)
+	if err != nil {
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+	}
+	return module.AnalyzeResult{Files: files, OutputPath: outDir}
 }

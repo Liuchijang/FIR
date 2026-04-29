@@ -12,12 +12,11 @@ import (
 	"github.com/Liuchijang/FIR/internal/module"
 )
 
-func init() { module.Register(&registryCollector{}) }
+func init() { module.RegisterArtifact("registry", &registryCollector{}) }
 
 type registryCollector struct{}
 
-func (c *registryCollector) Name() string     { return "registry" }
-func (c *registryCollector) Category() string { return "registry" }
+func (c *registryCollector) Name() string { return "registry" }
 func (c *registryCollector) Description() string {
 	return "Collect registry hives"
 }
@@ -25,11 +24,14 @@ func (c *registryCollector) Description() string {
 var systemHives = []string{"SYSTEM", "SOFTWARE", "SAM", "SECURITY", "DEFAULT"}
 var hiveLogSuffixes = []string{"", ".LOG1", ".LOG2"}
 
-func (c *registryCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+func (c *registryCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := filepath.Join(outputDir, "registry")
+	outDir := req.ArtifactDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "registry")
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create registry output dir: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create registry output dir: %w", err).Error()}
 	}
 
 	var allFiles []module.FileInfo
@@ -43,7 +45,7 @@ func (c *registryCollector) Collect(ctx context.Context, outputDir string) ([]mo
 		allFiles = append(allFiles, files...)
 	}
 	if len(allFiles) == 0 {
-		return nil, fmt.Errorf("no registry hives collected: %s", strings.Join(errors, "; "))
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Sprintf("no registry hives collected: %s", strings.Join(errors, "; "))}
 	}
-	return allFiles, nil
+	return module.CollectResult{Files: allFiles, OutputPath: outDir}
 }

@@ -12,23 +12,25 @@ import (
 	"github.com/Liuchijang/FIR/internal/utils"
 )
 
-func init() { module.Register(&wmiCollector{}) }
+func init() { module.RegisterArtifact("system", &wmiCollector{}) }
 
 type wmiCollector struct{}
 
-func (c *wmiCollector) Name() string     { return "wmi" }
-func (c *wmiCollector) Category() string { return "system" }
+func (c *wmiCollector) Name() string { return "wmi" }
 func (c *wmiCollector) Description() string {
 	return "Collect WMI repository"
 }
 
 var wmiFiles = []string{"OBJECTS.DATA", "INDEX.BTR"}
 
-func (c *wmiCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+func (c *wmiCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := filepath.Join(outputDir, "system", "wmi")
+	outDir := req.ArtifactDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "system", "wmi")
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create WMI output dir: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create WMI output dir: %w", err).Error()}
 	}
 
 	wmiDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "wbem", "Repository")
@@ -36,7 +38,7 @@ func (c *wmiCollector) Collect(ctx context.Context, outputDir string) ([]module.
 	for _, name := range wmiFiles {
 		select {
 		case <-ctx.Done():
-			return allFiles, ctx.Err()
+			return module.CollectResult{Files: allFiles, OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 		src := filepath.Join(wmiDir, name)
@@ -58,7 +60,7 @@ func (c *wmiCollector) Collect(ctx context.Context, outputDir string) ([]module.
 		for _, match := range matches {
 			select {
 			case <-ctx.Done():
-				return allFiles, ctx.Err()
+				return module.CollectResult{Files: allFiles, OutputPath: outDir, Error: ctx.Err().Error()}
 			default:
 			}
 			name := filepath.Base(match)
@@ -73,7 +75,7 @@ func (c *wmiCollector) Collect(ctx context.Context, outputDir string) ([]module.
 	}
 
 	if len(allFiles) == 0 {
-		return nil, fmt.Errorf("no WMI repository files collected from %s", wmiDir)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Sprintf("no WMI repository files collected from %s", wmiDir)}
 	}
-	return allFiles, nil
+	return module.CollectResult{Files: allFiles, OutputPath: outDir}
 }

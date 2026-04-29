@@ -14,7 +14,7 @@ import (
 	winreg "golang.org/x/sys/windows/registry"
 )
 
-func init() { module.Register(&userAssistParser{}) }
+func init() { module.RegisterAnalyzer(&userAssistParser{}) }
 
 type userAssistParser struct{}
 
@@ -34,36 +34,38 @@ type userAssistRow struct {
 
 func (c *userAssistParser) Name() string     { return "userassist_parser" }
 func (c *userAssistParser) Category() string { return "registry" }
-func (c *userAssistParser) Mode() string     { return module.ModeAnalyzer }
 func (c *userAssistParser) Description() string {
 	return "Parse UserAssist"
 }
 
-func (c *userAssistParser) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
-	outDir := module.ModuleDir(outputDir, c)
+func (c *userAssistParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+	outDir := req.AnalyzerDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create userassist output dir: %w", err)
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create userassist output dir: %w", err).Error()}
 	}
 
-	sources, err := collectedUserHiveSources(outputDir, "NTUSER.DAT")
+	sources, err := collectedUserHiveSources(req.OutputDir, "NTUSER.DAT")
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 	if len(sources) == 0 {
 		sources, err = liveUserNTUserSources()
 		if err != nil {
-			return nil, err
+			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 		}
 	}
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("no NTUSER.DAT sources found in collected registry output or live registry")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no NTUSER.DAT sources found in collected registry output or live registry"}
 	}
 
 	rows := make([]userAssistRow, 0, 256)
 	for _, source := range sources {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
 		default:
 		}
 
@@ -80,7 +82,7 @@ func (c *userAssistParser) Collect(ctx context.Context, outputDir string) ([]mod
 	}
 
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no UserAssist entries parsed")
+		return module.AnalyzeResult{OutputPath: outDir, Error: "no UserAssist entries parsed"}
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
@@ -123,14 +125,14 @@ func (c *userAssistParser) Collect(ctx context.Context, outputDir string) ([]mod
 		"KeyLastWriteTimestamp",
 		"Format",
 	}, csvRows); err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
 	fi, err := utils.FileInfoFromPath(outCSV)
 	if err != nil {
-		return nil, err
+		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
-	return []module.FileInfo{fi}, nil
+	return module.AnalyzeResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
 }
 
 func parseUserAssistFromRoot(root winreg.Key, source userHiveSource) ([]userAssistRow, error) {

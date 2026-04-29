@@ -11,21 +11,23 @@ import (
 	"github.com/Liuchijang/FIR/internal/utils"
 )
 
-func init() { module.Register(&srumCollector{}) }
+func init() { module.RegisterArtifact("system", &srumCollector{}) }
 
 type srumCollector struct{}
 
-func (c *srumCollector) Name() string     { return "srum" }
-func (c *srumCollector) Category() string { return "system" }
+func (c *srumCollector) Name() string { return "srum" }
 func (c *srumCollector) Description() string {
 	return "Collect SRUM"
 }
 
-func (c *srumCollector) Collect(ctx context.Context, outputDir string) ([]module.FileInfo, error) {
+func (c *srumCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := filepath.Join(outputDir, "system")
+	outDir := req.ArtifactDir
+	if outDir == "" {
+		outDir = filepath.Join(req.OutputDir, "system")
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create system output dir: %w", err)
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create system output dir: %w", err).Error()}
 	}
 
 	srumPath := filepath.Join(os.Getenv("SystemRoot"), "System32", "sru", "SRUDB.dat")
@@ -36,8 +38,8 @@ func (c *srumCollector) Collect(ctx context.Context, outputDir string) ([]module
 		fi, err = utils.SafeCopyFileBackup(srumPath, dst)
 		if err != nil {
 			log.Debug(fmt.Sprintf("Backup-semantics copy of SRUDB.dat failed: %v", err))
-			return nil, fmt.Errorf("collect SRUDB.dat via native Windows copy: %w", err)
+			return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("collect SRUDB.dat via native Windows copy: %w", err).Error()}
 		}
 	}
-	return []module.FileInfo{fi}, nil
+	return module.CollectResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
 }
