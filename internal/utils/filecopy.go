@@ -78,7 +78,7 @@ func copyToDestination(srcFile *os.File, dst string) (module.FileInfo, error) {
 	hasher := sha256.New()
 	writer := io.MultiWriter(dstFile, hasher)
 	buf := make([]byte, copyBufferSize)
-	written, err := io.CopyBuffer(writer, srcFile, buf)
+	written, err := io.CopyBuffer(writer, diskLimitedReader(srcFile), buf)
 	if err != nil {
 		return module.FileInfo{}, fmt.Errorf("copy to %s: %w", dst, err)
 	}

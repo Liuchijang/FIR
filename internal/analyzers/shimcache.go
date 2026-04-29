@@ -154,13 +154,25 @@ func (c *shimCacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 }
 
 func loadShimCacheSources(outputDir string) ([]shimCacheSource, error) {
+	var collectedErr error
 	if dir, ok := existingModuleDir(outputDir, "registry"); ok {
 		collected := filepath.Join(dir, "SYSTEM")
 		if _, err := os.Stat(collected); err == nil {
-			return loadShimCacheSourcesFromHive(collected)
+			sources, err := loadShimCacheSourcesFromHive(collected)
+			if err == nil {
+				return sources, nil
+			}
+			collectedErr = err
 		}
 	}
-	return loadLiveShimCacheSources()
+	sources, liveErr := loadLiveShimCacheSources()
+	if liveErr != nil {
+		if collectedErr != nil {
+			return nil, fmt.Errorf("load collected SYSTEM hive: %v; load live SYSTEM hive: %w", collectedErr, liveErr)
+		}
+		return nil, liveErr
+	}
+	return sources, nil
 }
 
 func loadLiveShimCacheSources() ([]shimCacheSource, error) {

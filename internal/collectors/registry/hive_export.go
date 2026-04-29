@@ -128,6 +128,14 @@ func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInf
 }
 
 func collectHiveSpec(spec hiveSpec) (module.FileInfo, error) {
+	if spec.isPrimary && spec.root != 0 && spec.keyPath != "" {
+		fi, err := saveRegistryHive(spec)
+		if err == nil {
+			fi.Path = spec.relPath
+			return fi, nil
+		}
+	}
+
 	fi, err := copyRegistryFile(spec)
 	if err == nil {
 		fi.Path = spec.relPath

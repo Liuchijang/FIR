@@ -59,3 +59,16 @@ func clampInt(value, minValue, maxValue int) int {
 	}
 	return value
 }
+
+func clampInt64(value, minValue, maxValue int64) int64 {
+	if maxValue < minValue {
+		maxValue = minValue
+	}
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}

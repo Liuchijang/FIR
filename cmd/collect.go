@@ -15,6 +15,14 @@ var (
 	artifactFlag    string
 	timeoutFlag     time.Duration
 	concurrencyFlag int
+	workersFlag     int
+	cpuLimitFlag    int
+	ramCapFlag      string
+	diskIOFlag      string
+	ramCapBytesFlag int64
+	diskIOBytesFlag int64
+	compressFlag    bool
+	noCompressFlag  bool
 )
 
 var collectCmd = &cobra.Command{
@@ -25,7 +33,7 @@ var collectCmd = &cobra.Command{
 Examples:
   fir collect --artifact registry,eventlog,prefetch
   fir collect --artifact ram,mft,registry --output C:\triage --timeout 10m
-  fir collect --artifact all --concurrency 3
+  fir collect --artifact all --workers 3 --compress
 
 Available artifact names:
   ram, mft, usnjrnl, secure_sds, registry, eventlog,
@@ -52,14 +60,36 @@ Category shortcuts:
 
 func init() {
 	collectCmd.Flags().StringVarP(&artifactFlag, "artifact", "a", "", "Comma-separated list of artifacts or categories to collect (required)")
-	collectCmd.Flags().DurationVarP(&timeoutFlag, "timeout", "t", collection.DefaultTimeout, "Timeout per module")
-	collectCmd.Flags().IntVarP(&concurrencyFlag, "concurrency", "c", collection.DefaultConcurrency, "Maximum number of concurrent modules")
+	collectCmd.Flags().DurationVarP(&timeoutFlag, "timeout", "t", collection.DefaultTimeout, "Optional timeout per module (0 disables timeout)")
+	collectCmd.Flags().IntVarP(&concurrencyFlag, "concurrency", "c", 0, "Deprecated alias for --workers")
+	collectCmd.Flags().IntVar(&workersFlag, "workers", 0, "Maximum number of concurrent modules")
+	collectCmd.Flags().IntVar(&cpuLimitFlag, "cpu-limit", 0, "CPU limit percentage")
+	collectCmd.Flags().StringVar(&ramCapFlag, "ram-cap", "", "RAM cap, e.g. 2GB")
+	collectCmd.Flags().StringVar(&diskIOFlag, "disk-io", "", "Disk IO limit, e.g. 80MB")
+	collectCmd.Flags().BoolVar(&compressFlag, "compress", true, "Compress run directory after collection")
+	collectCmd.Flags().BoolVar(&noCompressFlag, "no-compress", false, "Disable run directory compression")
 	collectCmd.MarkFlagRequired("artifact")
 
 	rootCmd.AddCommand(collectCmd)
 }
 
 func runCollect() error {
+	var err error
+	ramCapBytesFlag, err = parseByteSize(ramCapFlag)
+	if err != nil {
+		return err
+	}
+	diskIOBytesFlag, err = parseByteSize(diskIOFlag)
+	if err != nil {
+		return err
+	}
+	if workersFlag <= 0 {
+		workersFlag = concurrencyFlag
+	}
+	if noCompressFlag {
+		compressFlag = false
+	}
+
 	modules, err := collection.ResolveModules(artifactFlag)
 	if err != nil {
 		return err

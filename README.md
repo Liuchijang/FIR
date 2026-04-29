@@ -9,8 +9,9 @@ A production-grade Windows DFIR (Digital Forensics & Incident Response) artifact
 - **Forensic Safety**: Read-only access, SHA-256 integrity hashing, no artifact modification
 - **Windows Privilege Handling**: Auto-detects admin status and enables backup, restore, security, and debug privileges when available
 - **Native Windows Collection**: Uses backup semantics, registry hive save APIs, and raw NTFS access where needed
-- **Concurrent Collection**: Configurable parallelism with per-module timeouts
-- **Structured Output**: Organized collection output with `manifest.json`, summary reports, and structured logs
+- **Concurrent Collection**: Configurable workers with cancellation support and optional per-module timeout
+- **Run Config**: CPU, RAM, worker, disk I/O, compression, and storage checks before collection
+- **Structured Output**: Organized collection output with `manifest.json`, optional zip archive, summary reports, and structured logs
 - **Extensible Modules**: Add collection or analyzer modules behind a shared module contract with minimal integration work
 
 ## Build
@@ -39,7 +40,9 @@ This launches a Bubble Tea interface where you can:
 - Show a spinner while Chromium profiles are being discovered
 - Watch modules move through waiting, running, success, and failed states during execution
 
-After collection finishes, FIR prints a run summary table and writes `manifest.json`, `summary.txt`, and `collector.log` into the run directory.
+After module selection, FIR shows a Run Config screen. Compression is ON by default and can be toggled off. Storage is checked against the selected modules before collection starts; if the estimate does not fit the output drive, FIR blocks the run.
+
+After collection finishes, FIR prints a run summary table and writes `manifest.json`, `summary.txt`, and `collector.log` into the run directory. When compression is enabled, FIR writes a sibling `HOST_time.zip` archive after raw collection and analysis finish, writes `HOST_time.zip.sha256`, then removes the raw `HOST_time` directory.
 
 ### Flag Mode
 
@@ -58,6 +61,12 @@ After collection finishes, FIR prints a run summary table and writes `manifest.j
 
 # Verbose mode with higher concurrency
 .\fir.exe collect --artifact all --output E:\evidence -v --concurrency 4
+
+# Resource config
+.\fir.exe collect --artifact eventlog,registry --workers 6 --cpu-limit 60 --ram-cap 2GB --disk-io 80MB
+
+# Disable compression
+.\fir.exe collect --artifact ntfs --no-compress
 ```
 
 ### Available Artifacts
@@ -155,7 +164,8 @@ internal/
   analyzers/     parsed / enriched output modules
   tui/           Bubble Tea menu + shared terminal UI helpers
   acquisition/   low-level Windows and NTFS access helpers
-  output/        manifest, summary, and output directory management
+  resource/      resource suggestions, disk free checks, and storage estimates
+  output/        manifest, archive, summary, and output directory management
   logging/       session logging
   console/       console/window handling
   utils/         remaining generic helpers
@@ -163,6 +173,14 @@ internal/
 
 This keeps the practical path easy to follow:
 `main -> cmd -> module registry -> collectors/analyzers -> output/logging`
+
+Runtime behavior:
+
+- Per-module timeout is disabled by default. `--timeout` can still be used when a bounded run is needed.
+- Collectors run before analyzers.
+- Compression runs after raw collection and analysis finish, so storage must fit raw output plus estimated archive plus safety margin.
+- When compression is enabled, raw output is removed after the archive and hash sidecar are written successfully.
+- `manifest.json` inside the archive is the source of truth for resource config, storage estimate, and module results. The archive SHA-256 is stored in the sibling `.zip.sha256` file.
 
 ## Requirements
 

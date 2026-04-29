@@ -18,6 +18,7 @@ import (
 	"github.com/Liuchijang/FIR/internal/console"
 	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/output"
+	"github.com/Liuchijang/FIR/internal/resource"
 )
 
 type phase int
@@ -28,6 +29,7 @@ const (
 	phaseProfiles
 	phaseLoadingEventLogs
 	phaseEventLogs
+	phaseRunConfig
 )
 
 var (
@@ -76,6 +78,11 @@ type profilesLoadedMsg struct {
 type eventLogsLoadedMsg struct {
 	logs []eventlogpkg.EventLogFile
 	err  error
+}
+
+type RunConfigResult struct {
+	Modules   []module.Module
+	Resources resource.Config
 }
 
 type menuKeyMap struct {
@@ -178,6 +185,11 @@ type menuModel struct {
 	selectedEventLogs map[int]bool
 	eventLogCursor    int
 
+	outputBaseDir   string
+	resourceConfig  resource.Config
+	storageEstimate resource.StorageEstimate
+	configCursor    int
+
 	status    string
 	cancelled bool
 	completed bool
@@ -209,21 +221,34 @@ func RunInteractiveMenu() ([]module.Module, error) {
 }
 
 func NewInteractiveMenuTeaModel() tea.Model {
+	return NewInteractiveMenuTeaModelWithConfig(".", resource.DefaultConfig())
+}
+
+func NewInteractiveMenuTeaModelWithConfig(outputBaseDir string, resources resource.Config) tea.Model {
 	browser.ConfigureProfiles(nil)
 	eventlogpkg.ConfigureSelectedLogs(nil)
-	return newMenuModel()
+	model := newMenuModel()
+	model.outputBaseDir = outputBaseDir
+	model.resourceConfig = resources.Normalized()
+	model.refreshStorageEstimate()
+	return model
 }
 
 func InteractiveMenuFinished(model tea.Model) (done bool, modules []module.Module, cancelled bool, err error) {
+	done, result, cancelled, err := InteractiveMenuFinishedWithConfig(model)
+	return done, result.Modules, cancelled, err
+}
+
+func InteractiveMenuFinishedWithConfig(model tea.Model) (done bool, result RunConfigResult, cancelled bool, err error) {
 	finished, ok := model.(menuModel)
 	if !ok {
-		return false, nil, false, fmt.Errorf("unexpected interactive model type: %T", model)
+		return false, RunConfigResult{}, false, fmt.Errorf("unexpected interactive model type: %T", model)
 	}
 	if !finished.completed && !finished.cancelled {
-		return false, nil, false, nil
+		return false, RunConfigResult{}, false, nil
 	}
-	modules, cancelled, err = resolveMenuResults(finished)
-	return true, modules, cancelled, err
+	modules, cancelled, err := resolveMenuResults(finished)
+	return true, RunConfigResult{Modules: modules, Resources: finished.resourceConfig.Normalized()}, cancelled, err
 }
 
 func resolveMenuResults(finished menuModel) ([]module.Module, bool, error) {
@@ -284,6 +309,8 @@ func newMenuModel() menuModel {
 		selectedCollectors: make(map[int]bool),
 		selectedProfiles:   make(map[int]bool),
 		selectedEventLogs:  make(map[int]bool),
+		outputBaseDir:      ".",
+		resourceConfig:     resource.DefaultConfig(),
 		status:             "Select modules, then press enter to continue.",
 	}
 }
@@ -340,6 +367,8 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case phaseEventLogs:
 			return m.updateEventLogs(msg)
+		case phaseRunConfig:
+			return m.updateRunConfig(msg)
 		}
 
 	case tea.MouseMsg:
@@ -480,8 +509,7 @@ func (m menuModel) updateCollectors(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Discovering EVTX files..."
 			return m, tea.Batch(m.spinner.Tick, discoverEventLogsCmd())
 		}
-		m.completed = true
-		return m, tea.Quit
+		return m.enterRunConfig()
 	}
 
 	return m, nil
@@ -535,8 +563,7 @@ func (m menuModel) updateProfiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Discovering EVTX files..."
 			return m, tea.Batch(m.spinner.Tick, discoverEventLogsCmd())
 		}
-		m.completed = true
-		return m, tea.Quit
+		return m.enterRunConfig()
 	}
 
 	return m, nil
@@ -590,11 +617,88 @@ func (m menuModel) updateEventLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Select at least one EVTX file."
 			return m, nil
 		}
-		m.completed = true
-		return m, tea.Quit
+		return m.enterRunConfig()
 	}
 
 	return m, nil
+}
+
+func (m menuModel) enterRunConfig() (tea.Model, tea.Cmd) {
+	m.phase = phaseRunConfig
+	m.configCursor = 0
+	m.resourceConfig = m.resourceConfig.Normalized()
+	m.refreshStorageEstimate()
+	if m.storageEstimate.Healthy {
+		m.status = "Review run config, then press enter to start."
+	} else {
+		m.status = "Storage alert. Change output drive, reduce selection, or adjust config before running."
+	}
+	return m, nil
+}
+
+func (m *menuModel) refreshStorageEstimate() {
+	m.storageEstimate = resource.EstimateStorage(m.outputBaseDir, m.moduleResults(), m.resourceConfig.Compress)
+}
+
+func (m menuModel) updateRunConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		m.configCursor = moveCursorUp(m.configCursor, 1)
+	case "down", "j":
+		m.configCursor = moveCursorDown(m.configCursor, 5, 1)
+	case "left", "h":
+		m.adjustRunConfig(-1)
+	case "right", "l":
+		m.adjustRunConfig(1)
+	case " ":
+		if m.configCursor == 4 {
+			m.resourceConfig.Compress = !m.resourceConfig.Compress
+			m.refreshStorageEstimate()
+		}
+	case "a":
+		m.resourceConfig = resource.DefaultConfig()
+		m.refreshStorageEstimate()
+	case "r":
+		m.refreshStorageEstimate()
+	case "esc":
+		m.phase = phaseCollectors
+		m.status = fmt.Sprintf("%d modules selected.", len(m.moduleResults()))
+	case "enter":
+		m.refreshStorageEstimate()
+		if !m.storageEstimate.Healthy {
+			m.status = "Storage alert. Not enough free space for selected modules."
+			return m, nil
+		}
+		m.completed = true
+		return m, tea.Quit
+	}
+	if m.phase == phaseRunConfig {
+		if m.storageEstimate.Healthy {
+			m.status = "Review run config, then press enter to start."
+		} else {
+			m.status = "Storage alert. Not enough free space for selected modules."
+		}
+	}
+	return m, nil
+}
+
+func (m *menuModel) adjustRunConfig(direction int) {
+	host := resource.DetectHostResources()
+	switch m.configCursor {
+	case 0:
+		m.resourceConfig.CPULimitPercent = clampInt(m.resourceConfig.CPULimitPercent+direction*10, resource.MinCPULimitPercent, resource.MaxCPULimitPercent)
+	case 1:
+		m.resourceConfig.RAMCapBytes += int64(direction) * 512 * 1024 * 1024
+		m.resourceConfig.RAMCapBytes = clampInt64(m.resourceConfig.RAMCapBytes, resource.MinRAMCapBytes, resource.MaxRAMCapBytes(host))
+	case 2:
+		m.resourceConfig.Workers = clampInt(m.resourceConfig.Workers+direction, resource.MinWorkers, resource.MaxWorkers(host))
+	case 3:
+		m.resourceConfig.DiskIOLimitBps += int64(direction) * 10 * 1024 * 1024
+		m.resourceConfig.DiskIOLimitBps = clampInt64(m.resourceConfig.DiskIOLimitBps, resource.MinDiskIOLimitBps, resource.MaxDiskIOLimitBps)
+	case 4:
+		m.resourceConfig.Compress = !m.resourceConfig.Compress
+	}
+	m.refreshStorageEstimate()
 }
 
 func (m menuModel) View() string {
@@ -744,6 +848,57 @@ func (m menuModel) renderEventLogs(width, height int) string {
 			titleWidth,
 		)
 	})
+}
+
+func (m menuModel) renderRunConfig(width, _ int) string {
+	rows := []struct {
+		label string
+		value string
+	}{
+		{"CPU Limit", fmt.Sprintf("%d%%", m.resourceConfig.CPULimitPercent)},
+		{"RAM Cap", resource.FormatBytes(m.resourceConfig.RAMCapBytes)},
+		{"Workers", fmt.Sprintf("%d", m.resourceConfig.Workers)},
+		{"Disk IO", fmt.Sprintf("%s/s", resource.FormatBytes(m.resourceConfig.DiskIOLimitBps))},
+		{"Compress", onOff(m.resourceConfig.Compress)},
+	}
+
+	lines := make([]string, 0, len(rows)+8)
+	for idx, row := range rows {
+		cursor := " "
+		style := menuItemStyle
+		if idx == m.configCursor {
+			cursor = ">"
+			style = focusedRowStyle
+		}
+		lines = append(lines, style.Render(trimToWidth(fmt.Sprintf("%s %-12s %s", cursor, row.label, row.value), width)))
+	}
+
+	storage := "Healthy"
+	storageStyle := selectedStyle
+	if !m.storageEstimate.Healthy {
+		storage = "ALERT"
+		storageStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("204")).Bold(true)
+	}
+	lines = append(lines, "")
+	lines = append(lines, storageStyle.Render(trimToWidth(fmt.Sprintf("Storage       %s", storage), width)))
+	lines = append(lines, trimToWidth(fmt.Sprintf("Raw Needed    %s", resource.FormatBytes(m.storageEstimate.EstimatedRawBytes)), width))
+	if m.resourceConfig.Compress {
+		lines = append(lines, trimToWidth(fmt.Sprintf("Archive Est   %s", resource.FormatBytes(m.storageEstimate.EstimatedArchiveBytes)), width))
+	}
+	lines = append(lines, trimToWidth(fmt.Sprintf("Required      %s", resource.FormatBytes(m.storageEstimate.RequiredBytes)), width))
+	lines = append(lines, trimToWidth(fmt.Sprintf("Free          %s", resource.FormatBytes(m.storageEstimate.FreeBytes)), width))
+	if !m.storageEstimate.Healthy && m.storageEstimate.Reason != "" {
+		lines = append(lines, "")
+		lines = append(lines, trimToWidth(m.storageEstimate.Reason, width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func onOff(value bool) string {
+	if value {
+		return "ON"
+	}
+	return "OFF"
 }
 
 func (m menuModel) collectorTitleWidth(width int) int {
@@ -972,6 +1127,8 @@ func (m menuModel) bodyContent(width, height int) string {
 		content = m.renderLoadingEventLogs(width, availableRows)
 	case phaseEventLogs:
 		content = m.renderEventLogs(width, availableRows)
+	case phaseRunConfig:
+		content = m.renderRunConfig(width, availableRows)
 	default:
 		content = m.renderCollectors(width, availableRows)
 	}
@@ -1117,6 +1274,8 @@ func (m menuModel) keyMap() menuKeyMap {
 		keys.Continue.SetEnabled(false)
 	case phaseProfiles, phaseEventLogs:
 		// All bindings remain enabled.
+	case phaseRunConfig:
+		keys.ToggleAll.SetHelp("a", "auto")
 	default:
 		keys.Back.SetEnabled(false)
 	}
@@ -1133,6 +1292,8 @@ func (m menuModel) screenTitle() string {
 		return "Loading EVTX Files"
 	case phaseEventLogs:
 		return "EVTX File Selection"
+	case phaseRunConfig:
+		return "Run Config"
 	default:
 		return "Module Selection"
 	}

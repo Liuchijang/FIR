@@ -9,21 +9,26 @@ import (
 
 	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/platform"
+	"github.com/Liuchijang/FIR/internal/resource"
 )
 
 type Manifest struct {
-	Hostname          string             `json:"hostname"`
-	StartTime         time.Time          `json:"start_time"`
-	EndTime           time.Time          `json:"end_time"`
-	OS                string             `json:"os"`
-	Architecture      string             `json:"architecture"`
-	CollectorVersion  string             `json:"collector_version"`
-	OutputDir         string             `json:"output_dir"`
-	SelectedArtifacts []string           `json:"selected_artifacts"`
-	SuccessCount      int                `json:"success_count"`
-	FailureCount      int                `json:"failure_count"`
-	SkippedCount      int                `json:"skipped_count"`
-	Artifacts         []ManifestArtifact `json:"artifacts"`
+	Hostname          string                   `json:"hostname"`
+	StartTime         time.Time                `json:"start_time"`
+	EndTime           time.Time                `json:"end_time"`
+	OS                string                   `json:"os"`
+	Architecture      string                   `json:"architecture"`
+	CollectorVersion  string                   `json:"collector_version"`
+	OutputDir         string                   `json:"output_dir"`
+	SelectedArtifacts []string                 `json:"selected_artifacts"`
+	SuccessCount      int                      `json:"success_count"`
+	FailureCount      int                      `json:"failure_count"`
+	SkippedCount      int                      `json:"skipped_count"`
+	Resources         resource.Config          `json:"resources"`
+	StorageEstimate   resource.StorageEstimate `json:"storage_estimate"`
+	CompressEnabled   bool                     `json:"compress_enabled"`
+	Archive           ArchiveInfo              `json:"archive,omitempty"`
+	Artifacts         []ManifestArtifact       `json:"artifacts"`
 }
 
 type ManifestArtifact struct {

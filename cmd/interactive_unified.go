@@ -7,6 +7,7 @@ import (
 
 	"github.com/Liuchijang/FIR/internal/console"
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/resource"
 	"github.com/Liuchijang/FIR/internal/tui"
 )
 
@@ -22,6 +23,7 @@ type unifiedInteractiveModel struct {
 	menu      tea.Model
 	progress  tui.CollectionProgressModel
 	updates   chan tea.Msg
+	resources resource.Config
 	cancel    context.CancelFunc
 	cancelled bool
 	err       error
@@ -31,8 +33,9 @@ func runUnifiedInteractive() error {
 	console.EnsureInteractive()
 
 	model := unifiedInteractiveModel{
-		stage: stageMenu,
-		menu:  tui.NewInteractiveMenuTeaModel(),
+		stage:     stageMenu,
+		menu:      tui.NewInteractiveMenuTeaModelWithConfig(runtimeConfigFromFlags().OutputBaseDir, runtimeConfigFromFlags().Resources),
+		resources: runtimeConfigFromFlags().Resources,
 	}
 
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
@@ -50,7 +53,8 @@ func runUnifiedInteractive() error {
 
 func (m unifiedInteractiveModel) Init() tea.Cmd {
 	if m.menu == nil {
-		m.menu = tui.NewInteractiveMenuTeaModel()
+		runtimeCfg := runtimeConfigFromFlags()
+		m.menu = tui.NewInteractiveMenuTeaModelWithConfig(runtimeCfg.OutputBaseDir, runtimeCfg.Resources)
 	}
 	return m.menu.Init()
 }
@@ -89,7 +93,7 @@ func (m unifiedInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, cmd := m.menu.Update(msg)
 		m.menu = updated
 
-		done, modules, cancelled, err := tui.InteractiveMenuFinished(updated)
+		done, result, cancelled, err := tui.InteractiveMenuFinishedWithConfig(updated)
 		if err != nil {
 			m.err = err
 			return m, tea.Quit
@@ -97,6 +101,8 @@ func (m unifiedInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !done {
 			return m, cmd
 		}
+		modules := result.Modules
+		m.resources = result.Resources
 		if cancelled || len(modules) == 0 {
 			m.cancelled = true
 			return m, tea.Quit
@@ -120,6 +126,8 @@ func (m unifiedInteractiveModel) View() string {
 
 func (m unifiedInteractiveModel) startCollection(modules []module.Module) (tea.Model, tea.Cmd) {
 	runtimeCfg := runtimeConfigFromFlags()
+	runtimeCfg.Resources = m.resources.Normalized()
+	runtimeCfg.Concurrency = runtimeCfg.Resources.Workers
 
 	updates := make(chan tea.Msg, len(modules)*2+2)
 	ctx, cancel := context.WithCancel(context.Background())

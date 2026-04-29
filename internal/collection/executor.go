@@ -104,7 +104,11 @@ func runModule(parent context.Context, mod module.Module, mgr *output.Manager, t
 	}
 
 	log.Progress(mod.Name(), fmt.Sprintf("Starting %s module", mod.Name()))
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	ctx := parent
+	cancel := func() {}
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(parent, timeout)
+	}
 	defer cancel()
 
 	startedAt := time.Now()

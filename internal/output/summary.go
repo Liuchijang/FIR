@@ -84,7 +84,7 @@ func (r SummaryReport) Render() string {
 		{"Failed", fmt.Sprintf("%d", r.FailureCount)},
 		{"Skipped", fmt.Sprintf("%d", r.SkippedCount)},
 		{"Concurrency", fmt.Sprintf("%d", r.Concurrency)},
-		{"Timeout per collector", r.TimeoutPerCollector.String()},
+		{"Timeout per collector", formatTimeout(r.TimeoutPerCollector)},
 		{"Total duration", formatDuration(r.TotalDuration)},
 	}
 
@@ -212,7 +212,7 @@ func renderTerminalInfoTable(report SummaryReport, width int) string {
 		{"Failed", fmt.Sprintf("%d", report.FailureCount)},
 		{"Skipped", fmt.Sprintf("%d", report.SkippedCount)},
 		{"Concurrency", fmt.Sprintf("%d", report.Concurrency)},
-		{"Timeout per collector", report.TimeoutPerCollector.String()},
+		{"Timeout per collector", formatTimeout(report.TimeoutPerCollector)},
 		{"Total duration", formatDuration(report.TotalDuration)},
 	}
 
@@ -438,6 +438,13 @@ func formatDuration(d time.Duration) string {
 		return d.Round(time.Millisecond).String()
 	}
 	return d.Round(100 * time.Millisecond).String()
+}
+
+func formatTimeout(d time.Duration) string {
+	if d <= 0 {
+		return "disabled"
+	}
+	return d.String()
 }
 
 func formatBytes(size int64) string {

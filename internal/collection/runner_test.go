@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/resource"
 )
 
 type fakeModule struct {
@@ -36,6 +37,13 @@ func TestRunWritesManifestAndKeepsModuleFailuresIsolated(t *testing.T) {
 		OutputBaseDir: baseDir,
 		SilentConsole: true,
 		Concurrency:   2,
+		Resources: resource.Config{
+			CPULimitPercent: 60,
+			RAMCapBytes:     512 * 1024 * 1024,
+			Workers:         2,
+			DiskIOLimitBps:  80 * 1024 * 1024,
+			Compress:        false,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -54,6 +62,36 @@ func TestRunWritesManifestAndKeepsModuleFailuresIsolated(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(report.OutputDir, "summary.txt")); err != nil {
 		t.Fatalf("summary not written: %v", err)
+	}
+}
+
+func TestRunCompressionRemovesRawOutput(t *testing.T) {
+	baseDir := t.TempDir()
+	report, err := Run(context.Background(), []module.Module{
+		fakeModule{name: "ok"},
+	}, Options{
+		OutputBaseDir: baseDir,
+		SilentConsole: true,
+		Concurrency:   1,
+		Resources: resource.Config{
+			CPULimitPercent: 60,
+			RAMCapBytes:     512 * 1024 * 1024,
+			Workers:         1,
+			DiskIOLimitBps:  80 * 1024 * 1024,
+			Compress:        true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if _, err := os.Stat(report.OutputDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("raw output should be removed, stat error = %v", err)
+	}
+	if _, err := os.Stat(report.OutputDir + ".zip"); err != nil {
+		t.Fatalf("archive not written: %v", err)
+	}
+	if _, err := os.Stat(report.OutputDir + ".zip.sha256"); err != nil {
+		t.Fatalf("archive hash sidecar not written: %v", err)
 	}
 }
 
