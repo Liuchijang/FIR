@@ -104,11 +104,10 @@ func newMenuKeyMap() menuKeyMap {
 	return menuKeyMap{
 		Up: key.NewBinding(
 			key.WithKeys("up", "k"),
-			key.WithHelp("up/k", "move"),
+			key.WithHelp("↑/↓/k/j", "move"),
 		),
 		Down: key.NewBinding(
 			key.WithKeys("down", "j"),
-			key.WithHelp("down/j", "move"),
 		),
 		PageUp: key.NewBinding(
 			key.WithKeys("pgup", "b"),
@@ -159,7 +158,7 @@ func (k menuKeyMap) ShortHelp() []key.Binding {
 
 func (k menuKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
+		{k.Up, k.PageUp, k.PageDown, k.Top, k.Bottom},
 		{k.Toggle, k.ToggleAll},
 		{k.Continue, k.Back, k.Help, k.Quit},
 	}

@@ -68,11 +68,10 @@ func newProgressKeyMap(completed bool) progressKeyMap {
 	keys := progressKeyMap{
 		Up: key.NewBinding(
 			key.WithKeys("up", "k"),
-			key.WithHelp("↑/↓", "scroll up"),
+			key.WithHelp("↑/↓/k/j", "scroll"),
 		),
 		Down: key.NewBinding(
 			key.WithKeys("down", "j"),
-			key.WithHelp("down/j", "scroll down"),
 		),
 		PageUp: key.NewBinding(
 			key.WithKeys("pgup", "b"),
@@ -117,7 +116,7 @@ func (k progressKeyMap) ShortHelp() []key.Binding {
 
 func (k progressKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.PageUp, k.PageDown},
+		{k.Up, k.PageUp, k.PageDown},
 		{k.Top, k.Bottom, k.Help, k.Abort, k.Close},
 	}
 }
