@@ -99,6 +99,18 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 	if err := output.WriteSummary(mgr.BaseDir(), report); err != nil {
 		log.Error(fmt.Sprintf("Failed to write summary: %v", err))
 	}
+	if !opts.SilentConsole {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, report.Render())
+	}
+	log.Info(fmt.Sprintf("Collection completed in %.1fs", totalDuration.Seconds()))
+	log.Success(fmt.Sprintf("Results: %d succeeded, %d failed, %d skipped", report.SuccessCount, report.FailureCount, report.SkippedCount))
+	log.Info(fmt.Sprintf("Output: %s", mgr.BaseDir()))
+	log.Info(fmt.Sprintf("Summary: %s", filepath.Join(mgr.BaseDir(), "summary.txt")))
+	log.Info(fmt.Sprintf("Manifest: %s", filepath.Join(mgr.BaseDir(), "manifest.json")))
+
+	// These log lines must be emitted before CompressRunDirectory runs below, or they
+	// would be missing from collector.log inside the archive that gets delivered as evidence.
 	archivePath := ""
 	if opts.Resources.Compress {
 		manifest.CompressEnabled = true
@@ -106,6 +118,7 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 		if err := output.WriteManifest(mgr.BaseDir(), manifest); err != nil {
 			log.Error(fmt.Sprintf("Failed to update manifest compression info: %v", err))
 		}
+		log.Info(fmt.Sprintf("Raw output will be removed after successful compression: %s", mgr.BaseDir()))
 		archive, err := output.CompressRunDirectory(mgr.BaseDir())
 		if err != nil {
 			log.Error(fmt.Sprintf("Failed to compress output: %v", err))
@@ -116,19 +129,6 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 			}
 			log.Info(fmt.Sprintf("Archive: %s", archivePath))
 		}
-	}
-
-	if !opts.SilentConsole {
-		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, report.Render())
-	}
-	log.Info(fmt.Sprintf("Collection completed in %.1fs", totalDuration.Seconds()))
-	log.Success(fmt.Sprintf("Results: %d succeeded, %d failed, %d skipped", report.SuccessCount, report.FailureCount, report.SkippedCount))
-	log.Info(fmt.Sprintf("Output: %s", mgr.BaseDir()))
-	log.Info(fmt.Sprintf("Summary: %s", filepath.Join(mgr.BaseDir(), "summary.txt")))
-	log.Info(fmt.Sprintf("Manifest: %s", filepath.Join(mgr.BaseDir(), "manifest.json")))
-	if archivePath != "" {
-		log.Info(fmt.Sprintf("Raw output will be removed after successful compression: %s", mgr.BaseDir()))
 	}
 
 	logging.Close()

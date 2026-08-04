@@ -58,14 +58,12 @@ func runInteractive() error {
 
 func preflightChecks() error {
 	if !utils.IsAdmin() {
-		fmt.Fprintf(os.Stderr, "\n%s[!] WARNING: Not running as Administrator.%s\n", "\033[33m", "\033[0m")
-		fmt.Fprintf(os.Stderr, "    Some modules may fail without elevated privileges.\n")
-		fmt.Fprintf(os.Stderr, "    Recommend: Right-click -> Run as Administrator\n\n")
-	} else {
-		errs := utils.EnableForensicPrivileges()
-		for _, err := range errs {
-			fmt.Fprintf(os.Stderr, "%s[!] Privilege warning: %v%s\n", "\033[33m", err, "\033[0m")
-		}
+		return fmt.Errorf("Administrator privileges required.\n    Right-click fir.exe and choose 'Run as Administrator', or launch from an elevated terminal.")
+	}
+
+	errs := utils.EnableForensicPrivileges()
+	for _, err := range errs {
+		fmt.Fprintf(os.Stderr, "%s[!] Privilege warning: %v%s\n", "\033[33m", err, "\033[0m")
 	}
 	return nil
 }

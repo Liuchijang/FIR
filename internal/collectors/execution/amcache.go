@@ -25,11 +25,6 @@ type amcacheFileSpec struct {
 	useHiveAPI bool
 }
 
-type amcacheRawContext struct {
-	vol     *acquisition.RawVolume
-	volData *acquisition.NTFSVolumeData
-}
-
 func (c *amcacheCollector) Name() string { return "amcache" }
 func (c *amcacheCollector) Description() string {
 	return "Collect Amcache hive + logs"
@@ -37,11 +32,8 @@ func (c *amcacheCollector) Description() string {
 
 func (c *amcacheCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := req.ArtifactDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "execution")
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir("execution")
+	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create execution output dir: %w", err).Error()}
 	}
 
@@ -67,12 +59,8 @@ func (c *amcacheCollector) Collect(ctx context.Context, req module.CollectReques
 	}
 
 	files := make([]module.FileInfo, 0, len(specs))
-	var rawCtx *amcacheRawContext
-	defer func() {
-		if rawCtx != nil && rawCtx.vol != nil {
-			rawCtx.vol.Close()
-		}
-	}()
+	rawPool := &acquisition.RawVolumePool{}
+	defer rawPool.Close()
 	for _, spec := range specs {
 		select {
 		case <-ctx.Done():
@@ -81,7 +69,7 @@ func (c *amcacheCollector) Collect(ctx context.Context, req module.CollectReques
 		}
 
 		log.Debug(fmt.Sprintf("Collecting %s via direct Windows file access", spec.relPath))
-		fi, err := collectAmcacheFile(spec, &rawCtx)
+		fi, err := collectAmcacheFile(spec, rawPool)
 		if err != nil {
 			if spec.isPrimary {
 				return module.CollectResult{Files: files, OutputPath: outDir, Error: fmt.Errorf("collect %s: %w", spec.relPath, err).Error()}
@@ -97,7 +85,7 @@ func (c *amcacheCollector) Collect(ctx context.Context, req module.CollectReques
 	return module.CollectResult{Files: files, OutputPath: outDir}
 }
 
-func collectAmcacheFile(spec amcacheFileSpec, rawCtx **amcacheRawContext) (module.FileInfo, error) {
+func collectAmcacheFile(spec amcacheFileSpec, rawPool *acquisition.RawVolumePool) (module.FileInfo, error) {
 	fi, err := utils.SafeCopyFile(spec.srcPath, spec.dstPath)
 	if err == nil {
 		fi.Path = spec.relPath
@@ -112,9 +100,9 @@ func collectAmcacheFile(spec amcacheFileSpec, rawCtx **amcacheRawContext) (modul
 
 	var fallbackErr error
 	if spec.useHiveAPI {
-		fallbackErr = collectAmcacheHiveFallback(spec.dstPath, spec.srcPath, rawCtx)
+		fallbackErr = collectAmcacheHiveFallback(spec.dstPath, spec.srcPath, rawPool)
 	} else {
-		fallbackErr = collectAmcacheRawFallback(spec.dstPath, spec.srcPath, rawCtx)
+		_, fallbackErr = rawPool.CopyFile(spec.srcPath, spec.dstPath)
 	}
 	if fallbackErr != nil {
 		return module.FileInfo{}, fmt.Errorf("direct copy failed: %v; fallback failed: %w", err, fallbackErr)
@@ -128,48 +116,12 @@ func collectAmcacheFile(spec amcacheFileSpec, rawCtx **amcacheRawContext) (modul
 	return fi, nil
 }
 
-func collectAmcacheHiveFallback(dst, src string, rawCtx **amcacheRawContext) error {
+func collectAmcacheHiveFallback(dst, src string, rawPool *acquisition.RawVolumePool) error {
 	if _, err := saveMountedAmcacheHive(dst); err == nil {
 		return nil
 	}
-	return collectAmcacheRawFallback(dst, src, rawCtx)
-}
-
-func collectAmcacheRawFallback(dst, src string, rawCtx **amcacheRawContext) error {
-	ctx, err := ensureAmcacheRawContext(rawCtx)
-	if err != nil {
-		return err
-	}
-	if _, copyErr := acquisition.CopyFileFromRawPath(ctx.vol, ctx.volData, src, dst); copyErr != nil {
-		return copyErr
-	}
-	return nil
-}
-
-func ensureAmcacheRawContext(rawCtx **amcacheRawContext) (*amcacheRawContext, error) {
-	if rawCtx != nil && *rawCtx != nil {
-		return *rawCtx, nil
-	}
-
-	vol, err := acquisition.OpenRawVolume("C")
-	if err != nil {
-		return nil, err
-	}
-
-	volData, err := vol.GetNTFSVolumeData()
-	if err != nil {
-		vol.Close()
-		return nil, err
-	}
-
-	ctx := &amcacheRawContext{
-		vol:     vol,
-		volData: volData,
-	}
-	if rawCtx != nil {
-		*rawCtx = ctx
-	}
-	return ctx, nil
+	_, err := rawPool.CopyFile(src, dst)
+	return err
 }
 
 func saveMountedAmcacheHive(dst string) (module.FileInfo, error) {

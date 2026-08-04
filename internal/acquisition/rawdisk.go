@@ -58,6 +58,20 @@ type ntfsVolumeDataRaw struct {
 type RawVolume struct {
 	handle windows.Handle
 	sector uint32
+
+	// pathIndex is a lazily-built, full-volume filename index cached for the
+	// life of this RawVolume — see ensurePathIndex.
+	pathIndex *mftPathIndex
+}
+
+// mftPathIndex maps every in-use MFT record to its parent directory's record
+// number, built by a single full-MFT scan and reused by every subsequent
+// FindRecordByPath call on the same RawVolume. Without this cache, resolving
+// N raw paths on one volume (e.g. a hive file plus its .LOG1/.LOG2
+// companions) costs N full linear MFT scans — measured at ~47s each on a
+// ~1M-record volume, i.e. minutes just to fetch a few KB of log files.
+type mftPathIndex struct {
+	childrenByParent map[uint64][]FileNameRef
 }
 
 type DataRun struct {
@@ -78,6 +92,46 @@ type FileNameRef struct {
 	ParentRef    uint64
 	Name         string
 	IsDirectory  bool
+}
+
+var (
+	modKernel32          = windows.NewLazySystemDLL("kernel32.dll")
+	procGetLogicalDrives = modKernel32.NewProc("GetLogicalDrives")
+	procGetDriveTypeW    = modKernel32.NewProc("GetDriveTypeW")
+)
+
+// driveTypeFixed is the Windows DRIVE_FIXED constant returned by GetDriveTypeW
+// for locally attached, non-removable volumes.
+const driveTypeFixed = 3
+
+// ListFixedDrives enumerates the drive letters (e.g. "C", "D") of all fixed
+// (non-removable, non-network, non-optical) volumes currently mounted on the
+// system, so collectors can operate across every local disk rather than a
+// single hard-coded drive.
+func ListFixedDrives() ([]string, error) {
+	r1, _, callErr := procGetLogicalDrives.Call()
+	if r1 == 0 {
+		return nil, fmt.Errorf("GetLogicalDrives: %w", callErr)
+	}
+	mask := uint32(r1)
+
+	var drives []string
+	for i := 0; i < 26; i++ {
+		if mask&(1<<uint(i)) == 0 {
+			continue
+		}
+		letter := string(rune('A' + i))
+		rootPath, err := windows.UTF16PtrFromString(letter + `:\`)
+		if err != nil {
+			continue
+		}
+		driveType, _, _ := procGetDriveTypeW.Call(uintptr(unsafe.Pointer(rootPath)))
+		if uint32(driveType) != driveTypeFixed {
+			continue
+		}
+		drives = append(drives, letter)
+	}
+	return drives, nil
 }
 
 // OpenRawVolume opens a raw volume handle for the specified drive letter (e.g., "C").
@@ -108,7 +162,6 @@ func OpenRawVolume(driveLetter string) (*RawVolume, error) {
 	}, nil
 }
 
-// Close releases the volume handle.
 func (v *RawVolume) Close() error {
 	return windows.CloseHandle(v.handle)
 }
@@ -157,23 +210,19 @@ func (v *RawVolume) GetNTFSVolumeData() (*NTFSVolumeData, error) {
 func (v *RawVolume) ReadAtOffset(offset int64, size int64) ([]byte, error) {
 	sectorSize := int64(v.sector)
 
-	// Align offset down to sector boundary.
 	alignedOffset := (offset / sectorSize) * sectorSize
 	leadingBytes := offset - alignedOffset
 
-	// Align total read size up to sector boundary.
 	totalRead := leadingBytes + size
 	if totalRead%sectorSize != 0 {
 		totalRead = ((totalRead / sectorSize) + 1) * sectorSize
 	}
 
-	// Seek to aligned offset.
 	_, err := windows.Seek(v.handle, alignedOffset, io.SeekStart)
 	if err != nil {
 		return nil, fmt.Errorf("seek to offset %d: %w", alignedOffset, err)
 	}
 
-	// Read sector-aligned buffer.
 	buf := make([]byte, totalRead)
 	var totalBytesRead uint32
 	for totalBytesRead < uint32(totalRead) {
@@ -189,7 +238,6 @@ func (v *RawVolume) ReadAtOffset(offset int64, size int64) ([]byte, error) {
 		totalBytesRead += n
 	}
 
-	// Return only the requested slice from within the aligned buffer.
 	return buf[leadingBytes : leadingBytes+size], nil
 }
 
@@ -199,7 +247,6 @@ func (v *RawVolume) CopyMFTToFile(volData *NTFSVolumeData, outputPath string) (i
 	mftOffset := int64(volData.MFTStartLCN) * int64(volData.BytesPerCluster)
 	mftSize := int64(volData.MFTValidDataLength)
 
-	// Seek to MFT start.
 	_, err := windows.Seek(v.handle, mftOffset, io.SeekStart)
 	if err != nil {
 		return 0, fmt.Errorf("seek to MFT offset %d: %w", mftOffset, err)
@@ -212,7 +259,7 @@ func (v *RawVolume) CopyMFTToFile(volData *NTFSVolumeData, outputPath string) (i
 	defer outFile.Close()
 
 	sectorSize := int64(v.sector)
-	bufSize := sectorSize * 1024 // Read 512KB chunks (1024 sectors).
+	bufSize := sectorSize * 1024
 	buf := make([]byte, bufSize)
 
 	var totalWritten int64
@@ -221,7 +268,6 @@ func (v *RawVolume) CopyMFTToFile(volData *NTFSVolumeData, outputPath string) (i
 	for remaining > 0 {
 		readSize := bufSize
 		if int64(readSize) > remaining {
-			// Round up to sector boundary.
 			readSize = ((remaining + sectorSize - 1) / sectorSize) * sectorSize
 		}
 
@@ -578,7 +624,7 @@ func collectDataAttributesForRecord(vol *RawVolume, volData *NTFSVolumeData, rec
 }
 
 func collectDataAttributesFromRecordWithExtensions(vol *RawVolume, volData *NTFSVolumeData, record []byte, recordNumber uint64, streamName string) ([]DataAttribute, error) {
-	baseAttrs, attrRefs, err := parseDataAttributes(record)
+	baseAttrs, attrRefs, pendingAttrList, err := parseDataAttributes(record)
 	if err != nil {
 		return nil, err
 	}
@@ -591,6 +637,18 @@ func collectDataAttributesFromRecordWithExtensions(vol *RawVolume, volData *NTFS
 	}
 	if len(matches) > 0 {
 		return matches, nil
+	}
+
+	if len(attrRefs) == 0 && pendingAttrList != nil {
+		data, err := vol.ReadDataRuns(volData, pendingAttrList.Runs, pendingAttrList.RealSize)
+		if err != nil {
+			return nil, fmt.Errorf("read non-resident attribute list for record %d: %w", recordNumber, err)
+		}
+		refs, err := parseAttributeList(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse non-resident attribute list for record %d: %w", recordNumber, err)
+		}
+		attrRefs = refs
 	}
 	if len(attrRefs) == 0 {
 		return nil, fmt.Errorf("named data stream %s not found", streamName)
@@ -610,7 +668,7 @@ func collectDataAttributesFromRecordWithExtensions(vol *RawVolume, volData *NTFS
 		if err != nil {
 			return nil, fmt.Errorf("read extension record %d: %w", ref.RecordNumber, err)
 		}
-		extAttrs, _, err := parseDataAttributes(extRecord)
+		extAttrs, _, _, err := parseDataAttributes(extRecord)
 		if err != nil {
 			return nil, fmt.Errorf("parse extension record %d: %w", ref.RecordNumber, err)
 		}
@@ -632,36 +690,54 @@ type attributeListRef struct {
 	Name         string
 }
 
-func parseDataAttributes(record []byte) ([]DataAttribute, []attributeListRef, error) {
+// nonResidentAttributeList holds the data runs for a record's $ATTRIBUTE_LIST
+// (type 0x20) when that attribute itself is non-resident. This happens once a
+// file accumulates enough extension records that the list of "which attribute
+// lives in which extension record" no longer fits inline — $Secure's
+// attribute list commonly grows into this on long-lived, heavily used
+// volumes (many unique security descriptors push $SDS/$SDH/$SII into extra
+// extension records). Reading it requires a volume read, so parseDataAttributes
+// (which only looks at bytes already in hand) hands the runs back to the
+// caller instead of resolving them itself.
+type nonResidentAttributeList struct {
+	Runs     []DataRun
+	RealSize int64
+}
+
+func parseDataAttributes(record []byte) ([]DataAttribute, []attributeListRef, *nonResidentAttributeList, error) {
 	if len(record) < 24 || string(record[:4]) != "FILE" {
-		return nil, nil, fmt.Errorf("invalid file record signature")
+		return nil, nil, nil, fmt.Errorf("invalid file record signature")
 	}
 	attrOff := int(binary.LittleEndian.Uint16(record[20:22]))
 	var attrs []DataAttribute
 	var attrRefs []attributeListRef
+	var pendingAttrList *nonResidentAttributeList
 	for attrOff+16 <= len(record) {
 		attrType := binary.LittleEndian.Uint32(record[attrOff : attrOff+4])
 		if attrType == 0xFFFFFFFF {
 			break
 		}
 		attrLen := int(binary.LittleEndian.Uint32(record[attrOff+4 : attrOff+8]))
-		if attrLen <= 0 || attrOff+attrLen > len(record) {
-			return nil, nil, fmt.Errorf("invalid attribute length")
+		if attrLen < 16 || attrOff+attrLen > len(record) {
+			return nil, nil, nil, fmt.Errorf("invalid attribute length")
 		}
 		attr := record[attrOff : attrOff+attrLen]
 		nonResident := attr[8] != 0
 		name := attributeName(attr)
 
 		if attrType == 0x80 && nonResident {
+			if len(attr) < 56 {
+				return nil, nil, nil, fmt.Errorf("truncated non-resident data attribute")
+			}
 			startVCN := int64(binary.LittleEndian.Uint64(attr[16:24]))
 			dataRunOff := int(binary.LittleEndian.Uint16(attr[32:34]))
 			if dataRunOff <= 0 || dataRunOff >= len(attr) {
-				return nil, nil, fmt.Errorf("invalid data run offset")
+				return nil, nil, nil, fmt.Errorf("invalid data run offset")
 			}
 			realSize := int64(binary.LittleEndian.Uint64(attr[48:56]))
 			runs, err := parseDataRuns(attr[dataRunOff:])
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			attrs = append(attrs, DataAttribute{
 				Name:     name,
@@ -671,21 +747,40 @@ func parseDataAttributes(record []byte) ([]DataAttribute, []attributeListRef, er
 			})
 		}
 
-		if attrType == 0x20 && !nonResident {
-			contentLen := int(binary.LittleEndian.Uint32(attr[16:20]))
-			contentOff := int(binary.LittleEndian.Uint16(attr[20:22]))
-			if contentOff <= 0 || contentOff+contentLen > len(attr) {
-				return nil, nil, fmt.Errorf("invalid attribute list content")
+		if attrType == 0x20 {
+			if !nonResident {
+				if len(attr) < 22 {
+					return nil, nil, nil, fmt.Errorf("truncated attribute list")
+				}
+				contentLen := int(binary.LittleEndian.Uint32(attr[16:20]))
+				contentOff := int(binary.LittleEndian.Uint16(attr[20:22]))
+				if contentOff <= 0 || contentOff+contentLen > len(attr) {
+					return nil, nil, nil, fmt.Errorf("invalid attribute list content")
+				}
+				refs, err := parseAttributeList(attr[contentOff : contentOff+contentLen])
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				attrRefs = append(attrRefs, refs...)
+			} else {
+				if len(attr) < 56 {
+					return nil, nil, nil, fmt.Errorf("truncated non-resident attribute list")
+				}
+				dataRunOff := int(binary.LittleEndian.Uint16(attr[32:34]))
+				if dataRunOff <= 0 || dataRunOff >= len(attr) {
+					return nil, nil, nil, fmt.Errorf("invalid attribute list data run offset")
+				}
+				realSize := int64(binary.LittleEndian.Uint64(attr[48:56]))
+				runs, err := parseDataRuns(attr[dataRunOff:])
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				pendingAttrList = &nonResidentAttributeList{Runs: runs, RealSize: realSize}
 			}
-			refs, err := parseAttributeList(attr[contentOff : contentOff+contentLen])
-			if err != nil {
-				return nil, nil, err
-			}
-			attrRefs = append(attrRefs, refs...)
 		}
 		attrOff += attrLen
 	}
-	return attrs, attrRefs, nil
+	return attrs, attrRefs, pendingAttrList, nil
 }
 
 func parseAttributeList(data []byte) ([]attributeListRef, error) {
@@ -730,38 +825,17 @@ func FindRecordByPath(vol *RawVolume, volData *NTFSVolumeData, path string) (uin
 		return 5, nil
 	}
 
-	totalRecords := int(volData.MFTValidDataLength / uint64(volData.BytesPerFileRecordSegment))
-	wanted := make(map[string]struct{}, len(components))
-	for _, component := range components {
-		wanted[strings.ToLower(component)] = struct{}{}
-	}
-
-	candidates := make(map[string][]FileNameRef)
-	for recordNumber := 0; recordNumber < totalRecords; recordNumber++ {
-		record, err := vol.ReadMFTRecord(volData, uint64(recordNumber))
-		if err != nil || !isRecordInUse(record) {
-			continue
-		}
-		refs, err := parseFileNameRefs(record, uint64(recordNumber))
-		if err != nil {
-			continue
-		}
-		for _, ref := range refs {
-			lower := strings.ToLower(ref.Name)
-			if _, ok := wanted[lower]; ok {
-				candidates[lower] = append(candidates[lower], ref)
-			}
-		}
+	index, err := vol.ensurePathIndex(volData)
+	if err != nil {
+		return 0, err
 	}
 
 	parent := uint64(5)
 	for idx, component := range components {
-		lower := strings.ToLower(component)
-		matches := candidates[lower]
 		isLast := idx == len(components)-1
 		found := false
-		for _, ref := range matches {
-			if ref.ParentRef != parent {
+		for _, ref := range index.childrenByParent[parent] {
+			if !strings.EqualFold(ref.Name, component) {
 				continue
 			}
 			if !isLast && !ref.IsDirectory {
@@ -781,6 +855,101 @@ func FindRecordByPath(vol *RawVolume, volData *NTFSVolumeData, path string) (uin
 	return parent, nil
 }
 
+// mftScanBatchRecords controls how many $MFT records ensurePathIndex reads
+// per underlying disk read. Reading one 1024-byte record at a time means one
+// Seek+ReadFile syscall pair per record — on a volume with millions of
+// records this is millions of syscalls, and on slower storage (VMs,
+// network-backed disks) syscall latency dominates: a run measured at ~47s on
+// a ~1M-record physical-disk volume took over 10 minutes on a similarly
+// sized VM. Reading records in large sequential batches turns that into a
+// handful of large reads instead.
+const mftScanBatchRecords = 8192
+
+// ensurePathIndex builds (on first use) or returns the cached full-volume
+// parent->children filename index used by FindRecordByPath.
+func (v *RawVolume) ensurePathIndex(volData *NTFSVolumeData) (*mftPathIndex, error) {
+	if v.pathIndex != nil {
+		return v.pathIndex, nil
+	}
+	if err := v.ensureMFTDataRuns(volData); err != nil {
+		return nil, err
+	}
+
+	recordSize := int64(volData.BytesPerFileRecordSegment)
+	totalRecords := int(volData.MFTValidDataLength / uint64(recordSize))
+	index := &mftPathIndex{childrenByParent: make(map[uint64][]FileNameRef)}
+
+	for start := 0; start < totalRecords; start += mftScanBatchRecords {
+		end := start + mftScanBatchRecords
+		if end > totalRecords {
+			end = totalRecords
+		}
+		count := end - start
+
+		batch, err := v.ReadLogicalFromRuns(volData, volData.mftDataRuns, int64(start)*recordSize, int64(count)*recordSize)
+		if err != nil {
+			// A batch read failure (e.g. a short run near the end of the MFT)
+			// shouldn't abort the whole index — fall back to one-at-a-time
+			// reads for just this batch.
+			for recordNumber := start; recordNumber < end; recordNumber++ {
+				record, err := v.ReadMFTRecord(volData, uint64(recordNumber))
+				if err != nil || !isRecordInUse(record) {
+					continue
+				}
+				indexMFTRecord(index, record, uint64(recordNumber))
+			}
+			continue
+		}
+
+		for i := 0; i < count; i++ {
+			record := batch[int64(i)*recordSize : int64(i+1)*recordSize]
+			if err := applyNTFSFixup(record, int(volData.BytesPerSector)); err != nil || !isRecordInUse(record) {
+				continue
+			}
+			indexMFTRecord(index, record, uint64(start+i))
+		}
+	}
+
+	v.pathIndex = index
+	return index, nil
+}
+
+// ReadMFTRecordsBatch reads count consecutive $MFT records starting at
+// startRecord using a single underlying disk read and applies the NTFS
+// update-sequence fixup to each, returning one slice per record (nil for any
+// record whose fixup failed). This is dramatically cheaper on volumes with
+// many records than reading one record at a time via ReadMFTRecord — see
+// ensurePathIndex's comment for why that matters.
+func (v *RawVolume) ReadMFTRecordsBatch(volData *NTFSVolumeData, startRecord uint64, count int) ([][]byte, error) {
+	if err := v.ensureMFTDataRuns(volData); err != nil {
+		return nil, err
+	}
+	recordSize := int64(volData.BytesPerFileRecordSegment)
+	batch, err := v.ReadLogicalFromRuns(volData, volData.mftDataRuns, int64(startRecord)*recordSize, int64(count)*recordSize)
+	if err != nil {
+		return nil, err
+	}
+
+	records := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		record := batch[int64(i)*recordSize : int64(i+1)*recordSize]
+		if err := applyNTFSFixup(record, int(volData.BytesPerSector)); err == nil {
+			records[i] = record
+		}
+	}
+	return records, nil
+}
+
+func indexMFTRecord(index *mftPathIndex, record []byte, recordNumber uint64) {
+	refs, err := parseFileNameRefs(record, recordNumber)
+	if err != nil {
+		return
+	}
+	for _, ref := range refs {
+		index.childrenByParent[ref.ParentRef] = append(index.childrenByParent[ref.ParentRef], ref)
+	}
+}
+
 func parseFileNameRefs(record []byte, recordNumber uint64) ([]FileNameRef, error) {
 	if len(record) < 24 || string(record[:4]) != "FILE" {
 		return nil, fmt.Errorf("invalid file record signature")
@@ -793,11 +962,15 @@ func parseFileNameRefs(record []byte, recordNumber uint64) ([]FileNameRef, error
 			break
 		}
 		attrLen := int(binary.LittleEndian.Uint32(record[attrOff+4 : attrOff+8]))
-		if attrLen <= 0 || attrOff+attrLen > len(record) {
+		if attrLen < 16 || attrOff+attrLen > len(record) {
 			return nil, fmt.Errorf("invalid attribute length")
 		}
 		attr := record[attrOff : attrOff+attrLen]
 		if attrType == 0x30 && attr[8] == 0 {
+			if len(attr) < 22 {
+				attrOff += attrLen
+				continue
+			}
 			contentLen := int(binary.LittleEndian.Uint32(attr[16:20]))
 			contentOff := int(binary.LittleEndian.Uint16(attr[20:22]))
 			if contentOff <= 0 || contentOff+contentLen > len(attr) || contentLen < 66 {
@@ -835,6 +1008,9 @@ func isRecordInUse(record []byte) bool {
 }
 
 func attributeName(attr []byte) string {
+	if len(attr) < 12 {
+		return ""
+	}
 	nameLen := int(attr[9])
 	nameOff := int(binary.LittleEndian.Uint16(attr[10:12]))
 	if nameLen <= 0 || nameOff <= 0 || nameOff+nameLen*2 > len(attr) {

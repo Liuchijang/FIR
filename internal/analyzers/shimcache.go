@@ -58,11 +58,8 @@ func (c *shimCacheParser) Description() string {
 }
 
 func (c *shimCacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
-	outDir := req.AnalyzerDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(c.Name())
+	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create shimcache parser output dir: %w", err).Error()}
 	}
 

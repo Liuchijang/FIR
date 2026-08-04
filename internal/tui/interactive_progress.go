@@ -13,7 +13,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Liuchijang/FIR/internal/console"
 	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/output"
 )
@@ -131,18 +130,14 @@ type CollectionProgressModel struct {
 	report      *output.SummaryReport
 	err         error
 	completed   bool
+	aborting    bool
 	concurrency int
 	width       int
 	height      int
 }
 
 func NewCollectionProgressModel(collectors []module.Module, concurrency int) CollectionProgressModel {
-	spin := spinner.New()
-	if console.LikelyExplorerLaunch() {
-		spin.Spinner = safePinkSpinner
-	} else {
-		spin.Spinner = spinner.Dot
-	}
+	spin := newAdaptiveSpinner()
 	spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("217")).Bold(true)
 
 	rows := make([]progressRow, 0, len(collectors))
@@ -203,7 +198,14 @@ func (m CollectionProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.completed && key.Matches(msg, keys.Close):
 			return m, tea.Quit
 		case !m.completed && key.Matches(msg, keys.Abort):
-			return m, tea.Quit
+			// Cancellation is signalled to the running collection via the outer model's
+			// context.CancelFunc. Do not quit here: collection.Run still needs to write the
+			// manifest/summary, compress the output, and remove the raw directory. Quitting
+			// immediately would exit the process mid-cleanup, corrupting the evidence archive.
+			// The screen stays up until CollectionFinishedMsg arrives and sets m.completed.
+			m.aborting = true
+			m.syncViewport()
+			return m, nil
 		}
 
 		var cmd tea.Cmd
@@ -400,6 +402,9 @@ func (m CollectionProgressModel) collectionPhaseTitle() string {
 		}
 		return "Collection Summary"
 	}
+	if m.aborting {
+		return "Aborting Collection..."
+	}
 	return "Collecting Artifacts"
 }
 
@@ -462,12 +467,16 @@ func (m CollectionProgressModel) progressDetails(row progressRow) string {
 		return ""
 	}
 	if row.result.Success {
-		return fmt.Sprintf(
+		details := fmt.Sprintf(
 			"files=%d  size=%s  duration=%s",
 			len(row.result.FilesCollected),
 			progressFormatBytes(progressTotalSize(row.result.FilesCollected)),
 			row.result.Duration.Round(100*time.Millisecond).String(),
 		)
+		if row.result.Error != "" {
+			details += "  warning=" + progressSanitizeError(row.result.Error)
+		}
+		return details
 	}
 	return fmt.Sprintf(
 		"duration=%s  error=%s",
@@ -553,6 +562,9 @@ func (m CollectionProgressModel) bannerStateSummary() string {
 		}
 		return "Completed"
 	}
+	if m.aborting {
+		return "Aborting..."
+	}
 	return m.statusLine()
 }
 
@@ -583,6 +595,9 @@ func (m CollectionProgressModel) footerHint() string {
 			return fmt.Sprintf("Completed: %d succeeded, %d failed. Scroll to inspect the rendered summary report.", m.report.SuccessCount, m.report.FailureCount)
 		}
 		return "Collection completed. Close this screen when you are done reviewing the output."
+	}
+	if m.aborting {
+		return "Aborting: waiting for in-progress modules and archive cleanup to finish before exiting."
 	}
 	return fmt.Sprintf("Live progress is streamed from running modules. %d collectors loaded with concurrency=%d.", len(m.rows), m.concurrency)
 }

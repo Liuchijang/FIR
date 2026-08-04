@@ -3,10 +3,9 @@ package live
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func init() { module.RegisterAnalyzer(&processExplorerAnalyzer{}) }
@@ -20,17 +19,14 @@ func (a *processExplorerAnalyzer) Description() string {
 }
 
 func (a *processExplorerAnalyzer) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
-	outDir := req.AnalyzerDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "Analyzer", a.Name())
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(a.Name())
+	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create process explorer analyzer output dir: %w", err).Error()}
 	}
 
 	script := `
 $ErrorActionPreference = 'SilentlyContinue'
-$outDir = ` + psQuote(outDir) + `
+$outDir = ` + utils.PSQuote(outDir) + `
 
 $processCsv = Join-Path $outDir 'processes.csv'
 $moduleCsv = Join-Path $outDir 'process_modules.csv'
@@ -183,11 +179,11 @@ if ($connectionRows.Count -eq 0) {
 $connectionRows | Sort-Object Protocol, ProcessId, LocalAddress, LocalPort, RemoteAddress, RemotePort | Export-Csv -Path $connCsv -NoTypeInformation -Encoding UTF8
 `
 
-	if err := runPowerShell(ctx, script); err != nil {
+	if err := utils.RunPowerShell(ctx, script); err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("analyze live process data: %w", err).Error()}
 	}
 
-	files, err := collectGeneratedCSVs(outDir)
+	files, err := utils.CollectGeneratedCSVs(outDir)
 	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}

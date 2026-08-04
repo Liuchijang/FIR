@@ -32,6 +32,7 @@ func init() { module.RegisterAnalyzer(&mftParser{}) }
 type mftParser struct{}
 
 type mftRecordRow struct {
+	Drive             string
 	RecordNumber      uint64
 	Sequence          uint16
 	HardLinkCount     uint16
@@ -80,21 +81,38 @@ func (c *mftParser) Description() string {
 }
 
 func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
-	outDir := req.AnalyzerDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(c.Name())
+	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create MFT parser output dir: %w", err).Error()}
 	}
 
 	var rows []mftRecordRow
+	var parseErrs []string
 	if dir, ok := existingModuleDir(req.OutputDir, "mft"); ok {
-		mftPath := filepath.Join(dir, "$MFT")
-		if _, err := os.Stat(mftPath); err == nil {
-			rows, err = parseCollectedMFT(ctx, mftPath)
+		for _, drive := range collectedMFTDrives(dir) {
+			mftPath := filepath.Join(dir, "$MFT_"+drive)
+			driveRows, err := parseCollectedMFT(ctx, mftPath)
 			if err != nil {
-				return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+				parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", drive, err))
+				continue
+			}
+			for i := range driveRows {
+				driveRows[i].Drive = drive
+			}
+			rows = append(rows, driveRows...)
+		}
+		if len(rows) == 0 {
+			// Fall back to the legacy single-drive filename for older collection runs.
+			if legacyPath := filepath.Join(dir, "$MFT"); fileExists(legacyPath) {
+				legacyRows, err := parseCollectedMFT(ctx, legacyPath)
+				if err != nil {
+					parseErrs = append(parseErrs, fmt.Sprintf("C: %v", err))
+				} else {
+					for i := range legacyRows {
+						legacyRows[i].Drive = "C"
+					}
+					rows = append(rows, legacyRows...)
+				}
 			}
 		}
 	}
@@ -106,22 +124,28 @@ func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) modu
 		}
 	}
 	if len(rows) == 0 {
-		return module.AnalyzeResult{OutputPath: outDir, Error: "no MFT records parsed"}
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no MFT records parsed: %s", strings.Join(parseErrs, "; "))}
 	}
 
-	sort.Slice(rows, func(i, j int) bool { return rows[i].RecordNumber < rows[j].RecordNumber })
-	pathCache := make(map[uint64]string, len(rows))
-	recordMap := make(map[uint64]mftRecordRow, len(rows))
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Drive != rows[j].Drive {
+			return rows[i].Drive < rows[j].Drive
+		}
+		return rows[i].RecordNumber < rows[j].RecordNumber
+	})
+	pathCache := make(map[mftKey]string, len(rows))
+	recordMap := make(map[mftKey]mftRecordRow, len(rows))
 	for _, row := range rows {
-		recordMap[row.RecordNumber] = row
+		recordMap[mftKey{Drive: row.Drive, Record: row.RecordNumber}] = row
 	}
 	for i := range rows {
-		rows[i].FullPath = resolveMFTPath(recordMap, pathCache, rows[i].RecordNumber)
+		rows[i].FullPath = resolveMFTPath(recordMap, pathCache, rows[i].Drive, rows[i].RecordNumber)
 	}
 
 	detailRows := make([][]string, 0, len(rows))
 	for _, row := range rows {
 		detailRows = append(detailRows, []string{
+			row.Drive,
 			fmt.Sprintf("%d", row.RecordNumber),
 			fmt.Sprintf("%d", row.Sequence),
 			fmt.Sprintf("%d", row.HardLinkCount),
@@ -152,6 +176,7 @@ func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) modu
 
 	recordCSV := filepath.Join(outDir, "mft_records.csv")
 	if err := writeCSVFile(recordCSV, []string{
+		"Drive",
 		"RecordNumber",
 		"SequenceNumber",
 		"HardLinkCount",
@@ -226,7 +251,36 @@ func parseCollectedMFT(ctx context.Context, path string) ([]mftRecordRow, error)
 }
 
 func parseLiveMFT(ctx context.Context) ([]mftRecordRow, error) {
-	vol, err := acquisition.OpenRawVolume("C")
+	drives, err := acquisition.ListFixedDrives()
+	if err != nil || len(drives) == 0 {
+		drives = []string{"C"}
+	}
+
+	var rows []mftRecordRow
+	var errs []string
+	for _, drive := range drives {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		driveRows, err := parseLiveMFTForDrive(ctx, drive)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", drive, err))
+			continue
+		}
+		rows = append(rows, driveRows...)
+	}
+
+	if len(rows) == 0 && len(errs) > 0 {
+		return nil, fmt.Errorf("live MFT parse failed for all drives: %s", strings.Join(errs, "; "))
+	}
+	return rows, nil
+}
+
+func parseLiveMFTForDrive(ctx context.Context, drive string) ([]mftRecordRow, error) {
+	vol, err := acquisition.OpenRawVolume(drive)
 	if err != nil {
 		return nil, fmt.Errorf("open raw volume for live MFT parse: %w", err)
 	}
@@ -237,30 +291,91 @@ func parseLiveMFT(ctx context.Context) ([]mftRecordRow, error) {
 		return nil, fmt.Errorf("get NTFS volume data: %w", err)
 	}
 
+	const liveMFTBatchRecords = 8192
 	totalRecords := int(volData.MFTValidDataLength / uint64(volData.BytesPerFileRecordSegment))
 	rows := make([]mftRecordRow, 0, totalRecords)
-	for i := 0; i < totalRecords; i++ {
+
+	appendRow := func(record []byte, recordNumber uint64) error {
+		if len(record) < 4 || string(record[:4]) != "FILE" {
+			return nil
+		}
+		row, ok, err := parseMFTRecord(record, recordNumber)
+		if err != nil {
+			return err
+		}
+		if ok {
+			row.Drive = drive
+			rows = append(rows, row)
+		}
+		return nil
+	}
+
+	for start := 0; start < totalRecords; start += liveMFTBatchRecords {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
 
-		record, err := vol.ReadMFTRecord(volData, uint64(i))
-		if err != nil || len(record) < 4 || string(record[:4]) != "FILE" {
+		count := liveMFTBatchRecords
+		if start+count > totalRecords {
+			count = totalRecords - start
+		}
+
+		records, err := vol.ReadMFTRecordsBatch(volData, uint64(start), count)
+		if err != nil {
+			// Fall back to one-at-a-time reads for this batch rather than
+			// aborting the whole live parse.
+			for i := 0; i < count; i++ {
+				recordNumber := uint64(start + i)
+				record, err := vol.ReadMFTRecord(volData, recordNumber)
+				if err != nil {
+					continue
+				}
+				if err := appendRow(record, recordNumber); err != nil {
+					return nil, err
+				}
+			}
 			continue
 		}
 
-		row, ok, err := parseMFTRecord(record, uint64(i))
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			rows = append(rows, row)
+		for i, record := range records {
+			if record == nil {
+				continue
+			}
+			if err := appendRow(record, uint64(start+i)); err != nil {
+				return nil, err
+			}
 		}
 	}
 
 	return rows, nil
+}
+
+// collectedMFTDrives lists the drive letters for which a per-drive $MFT_<drive>
+// file was collected into dir (e.g. "$MFT_C" -> "C"), sorted for determinism.
+func collectedMFTDrives(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var drives []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if drive, ok := strings.CutPrefix(name, "$MFT_"); ok && drive != "" {
+			drives = append(drives, drive)
+		}
+	}
+	sort.Strings(drives)
+	return drives
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func applyMFTFixup(record []byte) error {
@@ -520,32 +635,41 @@ func fileExtension(name string, isDirectory bool) string {
 	return strings.ToLower(ext)
 }
 
-func resolveMFTPath(records map[uint64]mftRecordRow, cache map[uint64]string, recordNumber uint64) string {
-	if cached, ok := cache[recordNumber]; ok {
+// mftKey uniquely identifies an MFT record across drives: record numbers are
+// only unique within a single volume, so resolving paths across multiple
+// collected drives requires scoping every lookup by drive letter as well.
+type mftKey struct {
+	Drive  string
+	Record uint64
+}
+
+func resolveMFTPath(records map[mftKey]mftRecordRow, cache map[mftKey]string, drive string, recordNumber uint64) string {
+	key := mftKey{Drive: drive, Record: recordNumber}
+	if cached, ok := cache[key]; ok {
 		return cached
 	}
 
-	row, ok := records[recordNumber]
+	row, ok := records[key]
 	if !ok {
 		return fmt.Sprintf(`\record_%d`, recordNumber)
 	}
 	if recordNumber == 5 {
-		cache[recordNumber] = `\`
+		cache[key] = `\`
 		return `\`
 	}
 	if row.ParentRef == 0 || row.ParentRef == recordNumber {
 		path := `\` + row.Name
-		cache[recordNumber] = path
+		cache[key] = path
 		return path
 	}
 
-	parent := resolveMFTPath(records, cache, row.ParentRef)
+	parent := resolveMFTPath(records, cache, drive, row.ParentRef)
 	if parent == `\` {
-		cache[recordNumber] = parent + row.Name
+		cache[key] = parent + row.Name
 		return parent + row.Name
 	}
 	path := strings.TrimRight(parent, `\`) + `\` + row.Name
-	cache[recordNumber] = path
+	cache[key] = path
 	return path
 }
 

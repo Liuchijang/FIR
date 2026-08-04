@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unsafe"
 
+	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/utils"
 	"golang.org/x/sys/windows"
@@ -49,31 +51,42 @@ func (c *usnJrnlParser) Description() string {
 }
 
 func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
-	outDir := req.AnalyzerDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(c.Name())
+	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create USN parser output dir: %w", err).Error()}
 	}
 
-	journalData, _, err := readUSNJournalSource(ctx, req.OutputDir)
-	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
+	sources, sourceErrs := readUSNJournalSources(ctx, req.OutputDir)
 
 	recordMap, pathCache, enriched, err := loadMFTForUSN(ctx, req)
 	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
 
-	header, rows, parsedCount, unsupportedCount, err := parseUSNJournalRows(journalData, recordMap, pathCache, enriched)
-	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+	var header []string
+	var rows [][]string
+	var parseErrs []string
+	for _, src := range sources {
+		select {
+		case <-ctx.Done():
+			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
+		default:
+		}
+
+		h, driveRows, _, _, err := parseUSNJournalRows(src.data, src.drive, recordMap, pathCache, enriched)
+		if err != nil {
+			parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", src.drive, err))
+			continue
+		}
+		header = h
+		for _, row := range driveRows {
+			rows = append(rows, append([]string{src.drive}, row...))
+		}
 	}
 	if len(rows) == 0 {
-		return module.AnalyzeResult{OutputPath: outDir, Error: "no USN records parsed"}
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no USN records parsed: %s", strings.Join(append(sourceErrs, parseErrs...), "; "))}
 	}
+	header = append([]string{"Drive"}, header...)
 
 	recordsName := "usnjrnl_records.csv"
 	if enriched {
@@ -88,32 +101,83 @@ func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
-	_ = parsedCount
-	_ = unsupportedCount
 	return module.AnalyzeResult{Files: []module.FileInfo{recordsInfo}, OutputPath: outDir}
 }
 
-func readUSNJournalSource(ctx context.Context, outputDir string) ([]byte, string, error) {
+type usnJournalSource struct {
+	drive string
+	data  []byte
+}
+
+// readUSNJournalSources loads $UsnJrnl:$J for every drive it can, preferring
+// already-collected $UsnJrnl_J_<drive> files, falling back to the legacy
+// single-drive filename, and finally to a live read across every fixed drive.
+func readUSNJournalSources(ctx context.Context, outputDir string) ([]usnJournalSource, []string) {
+	var sources []usnJournalSource
+	var errs []string
+
 	if dir, ok := existingModuleDir(outputDir, "usnjrnl"); ok {
-		path := filepath.Join(dir, "$UsnJrnl_J")
-		if _, err := os.Stat(path); err == nil {
+		for _, drive := range collectedUSNJournalDrives(dir) {
+			path := filepath.Join(dir, "$UsnJrnl_J_"+drive)
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return nil, "", fmt.Errorf("read collected $UsnJrnl:$J: %w", err)
+				errs = append(errs, fmt.Sprintf("%s: %v", drive, err))
+				continue
 			}
-			return data, path, nil
+			sources = append(sources, usnJournalSource{drive: drive, data: data})
+		}
+		if len(sources) == 0 {
+			if legacyPath := filepath.Join(dir, "$UsnJrnl_J"); fileExists(legacyPath) {
+				data, err := os.ReadFile(legacyPath)
+				if err != nil {
+					errs = append(errs, fmt.Sprintf("C: %v", err))
+				} else {
+					sources = append(sources, usnJournalSource{drive: "C", data: data})
+				}
+			}
 		}
 	}
 
-	data, err := readLiveUSNJournal(ctx)
-	if err != nil {
-		return nil, "", fmt.Errorf("read live $UsnJrnl:$J: %w", err)
+	if len(sources) == 0 {
+		drives, err := acquisition.ListFixedDrives()
+		if err != nil || len(drives) == 0 {
+			drives = []string{"C"}
+		}
+		for _, drive := range drives {
+			data, err := readLiveUSNJournal(ctx, drive)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", drive, err))
+				continue
+			}
+			sources = append(sources, usnJournalSource{drive: drive, data: data})
+		}
 	}
-	return data, `\\.\C: ($UsnJrnl live parse)`, nil
+
+	return sources, errs
 }
 
-func readLiveUSNJournal(ctx context.Context) ([]byte, error) {
-	volPath, err := windows.UTF16PtrFromString(`\\.\C:`)
+// collectedUSNJournalDrives lists the drive letters for which a per-drive
+// $UsnJrnl_J_<drive> file was collected into dir, sorted for determinism.
+func collectedUSNJournalDrives(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var drives []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if drive, ok := strings.CutPrefix(entry.Name(), "$UsnJrnl_J_"); ok && drive != "" {
+			drives = append(drives, drive)
+		}
+	}
+	sort.Strings(drives)
+	return drives
+}
+
+func readLiveUSNJournal(ctx context.Context, drive string) ([]byte, error) {
+	volPath, err := windows.UTF16PtrFromString(`\\.\` + drive + `:`)
 	if err != nil {
 		return nil, fmt.Errorf("UTF16: %w", err)
 	}
@@ -162,7 +226,7 @@ func readLiveUSNJournal(ctx context.Context) ([]byte, error) {
 	return payload, nil
 }
 
-func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (map[uint64]mftRecordRow, map[uint64]string, bool, error) {
+func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (map[mftKey]mftRecordRow, map[mftKey]string, bool, error) {
 	outputDir := req.OutputDir
 	shouldEnrich := req.IsSelected("mft") || req.IsSelected("mft_parser")
 	if !shouldEnrich {
@@ -170,13 +234,32 @@ func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (map[uint64]m
 	}
 
 	var rows []mftRecordRow
-	dir, ok := existingModuleDir(outputDir, "mft")
-	if ok {
-		path := filepath.Join(dir, "$MFT")
-		if _, err := os.Stat(path); err == nil {
-			rows, err = parseCollectedMFT(ctx, path)
+	var parseErrs []string
+	if dir, ok := existingModuleDir(outputDir, "mft"); ok {
+		for _, drive := range collectedMFTDrives(dir) {
+			mftPath := filepath.Join(dir, "$MFT_"+drive)
+			driveRows, err := parseCollectedMFT(ctx, mftPath)
 			if err != nil {
-				return nil, nil, false, fmt.Errorf("parse collected $MFT for USN enrichment: %w", err)
+				parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", drive, err))
+				continue
+			}
+			for i := range driveRows {
+				driveRows[i].Drive = drive
+			}
+			rows = append(rows, driveRows...)
+		}
+		if len(rows) == 0 {
+			// Fall back to the legacy single-drive filename for older collection runs.
+			if legacyPath := filepath.Join(dir, "$MFT"); fileExists(legacyPath) {
+				legacyRows, err := parseCollectedMFT(ctx, legacyPath)
+				if err != nil {
+					parseErrs = append(parseErrs, fmt.Sprintf("C: %v", err))
+				} else {
+					for i := range legacyRows {
+						legacyRows[i].Drive = "C"
+					}
+					rows = append(rows, legacyRows...)
+				}
 			}
 		}
 	}
@@ -187,15 +270,18 @@ func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (map[uint64]m
 			return nil, nil, false, fmt.Errorf("parse live $MFT for USN enrichment: %w", err)
 		}
 	}
-
-	recordMap := make(map[uint64]mftRecordRow, len(rows))
-	for _, row := range rows {
-		recordMap[row.RecordNumber] = row
+	if len(rows) == 0 {
+		return nil, nil, false, fmt.Errorf("no MFT records available for USN enrichment: %s", strings.Join(parseErrs, "; "))
 	}
-	return recordMap, make(map[uint64]string, len(recordMap)), true, nil
+
+	recordMap := make(map[mftKey]mftRecordRow, len(rows))
+	for _, row := range rows {
+		recordMap[mftKey{Drive: row.Drive, Record: row.RecordNumber}] = row
+	}
+	return recordMap, make(map[mftKey]string, len(recordMap)), true, nil
 }
 
-func parseUSNJournalRows(data []byte, recordMap map[uint64]mftRecordRow, pathCache map[uint64]string, enriched bool) ([]string, [][]string, int, int, error) {
+func parseUSNJournalRows(data []byte, drive string, recordMap map[mftKey]mftRecordRow, pathCache map[mftKey]string, enriched bool) ([]string, [][]string, int, int, error) {
 	header := []string{
 		"RecordOffset",
 		"RecordLength",
@@ -262,7 +348,7 @@ func parseUSNJournalRows(data []byte, recordMap map[uint64]mftRecordRow, pathCac
 
 		switch major {
 		case 2:
-			row, ok := parseUSNRecordV2(record, uint64(offset), recordMap, pathCache, enriched)
+			row, ok := parseUSNRecordV2(record, uint64(offset), drive, recordMap, pathCache, enriched)
 			if ok {
 				rows = append(rows, row)
 				parsedCount++
@@ -284,7 +370,7 @@ func parseUSNJournalRows(data []byte, recordMap map[uint64]mftRecordRow, pathCac
 	return header, rows, parsedCount, unsupportedCount, nil
 }
 
-func parseUSNRecordV2(record []byte, recordOffset uint64, recordMap map[uint64]mftRecordRow, pathCache map[uint64]string, enriched bool) ([]string, bool) {
+func parseUSNRecordV2(record []byte, recordOffset uint64, drive string, recordMap map[mftKey]mftRecordRow, pathCache map[mftKey]string, enriched bool) ([]string, bool) {
 	if len(record) < 60 {
 		return nil, false
 	}
@@ -335,12 +421,12 @@ func parseUSNRecordV2(record []byte, recordOffset uint64, recordMap map[uint64]m
 	fullPath := ""
 	mftRow := mftRecordRow{}
 	if len(recordMap) > 0 {
-		if _, ok := recordMap[parentRef]; ok {
-			parentPath = resolveMFTPath(recordMap, pathCache, parentRef)
+		if _, ok := recordMap[mftKey{Drive: drive, Record: parentRef}]; ok {
+			parentPath = resolveMFTPath(recordMap, pathCache, drive, parentRef)
 		}
-		if existing, ok := recordMap[fileRef]; ok {
+		if existing, ok := recordMap[mftKey{Drive: drive, Record: fileRef}]; ok {
 			mftRow = existing
-			fullPath = resolveMFTPath(recordMap, pathCache, fileRef)
+			fullPath = resolveMFTPath(recordMap, pathCache, drive, fileRef)
 		}
 	}
 	if fullPath == "" && parentPath != "" {

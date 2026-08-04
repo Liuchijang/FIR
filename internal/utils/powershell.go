@@ -1,4 +1,4 @@
-package live
+package utils
 
 import (
 	"context"
@@ -10,10 +10,11 @@ import (
 	"strings"
 
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 )
 
-func runPowerShell(ctx context.Context, script string) error {
+// RunPowerShell executes script via a non-interactive powershell.exe, returning
+// combined stdout/stderr on failure so callers can surface the real cause.
+func RunPowerShell(ctx context.Context, script string) error {
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -22,11 +23,15 @@ func runPowerShell(ctx context.Context, script string) error {
 	return nil
 }
 
-func psQuote(value string) string {
+// PSQuote single-quotes value for safe interpolation into a PowerShell script.
+func PSQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
-func collectGeneratedCSVs(dir string) ([]module.FileInfo, error) {
+// CollectGeneratedCSVs returns FileInfo for every .csv file directly inside
+// dir, sorted by path. Used by analyzers that let a PowerShell script write
+// its own CSV output via Export-Csv rather than through Go's csv package.
+func CollectGeneratedCSVs(dir string) ([]module.FileInfo, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("read output dir %s: %w", dir, err)
@@ -38,7 +43,7 @@ func collectGeneratedCSVs(dir string) ([]module.FileInfo, error) {
 			continue
 		}
 
-		fi, err := utils.FileInfoFromPath(filepath.Join(dir, entry.Name()))
+		fi, err := FileInfoFromPath(filepath.Join(dir, entry.Name()))
 		if err != nil {
 			return nil, err
 		}

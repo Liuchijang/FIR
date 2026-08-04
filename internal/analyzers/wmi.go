@@ -3,10 +3,9 @@ package analyzers
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func init() { module.RegisterAnalyzer(&wmiParser{}) }
@@ -20,17 +19,14 @@ func (c *wmiParser) Description() string {
 }
 
 func (c *wmiParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
-	outDir := req.AnalyzerDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(c.Name())
+	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create WMI parser output dir: %w", err).Error()}
 	}
 
 	script := `
 $ErrorActionPreference = 'SilentlyContinue'
-$outDir = ` + psQuote(outDir) + `
+$outDir = ` + utils.PSQuote(outDir) + `
 
 $filtersCsv = Join-Path $outDir 'wmi_event_filters.csv'
 $consumersCsv = Join-Path $outDir 'wmi_event_consumers.csv'
@@ -94,11 +90,11 @@ Get-WmiNamespaceRows -Namespace 'root' |
     Export-Csv -Path $namespacesCsv -NoTypeInformation -Encoding UTF8
 `
 
-	if err := runPowerShell(ctx, script); err != nil {
+	if err := utils.RunPowerShell(ctx, script); err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("parse WMI data: %w", err).Error()}
 	}
 
-	files, err := collectGeneratedCSVs(outDir)
+	files, err := utils.CollectGeneratedCSVs(outDir)
 	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}

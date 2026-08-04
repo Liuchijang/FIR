@@ -24,18 +24,19 @@ type hiveSpec struct {
 	isPrimary bool
 }
 
-func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInfo, error) {
+func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInfo, []string, error) {
 	configDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "config")
 	sidToProfile, err := loadProfileSIDMap()
 	if err != nil {
-		return nil, fmt.Errorf("load profile SID map: %w", err)
+		return nil, nil, fmt.Errorf("load profile SID map: %w", err)
 	}
 
+	// SECURITY is intentionally not collected here — see the comment on
+	// systemHives in registry.go for why it can never succeed as Administrator.
 	specs := []hiveSpec{
 		{name: "SYSTEM", srcPath: filepath.Join(configDir, "SYSTEM"), dstPath: filepath.Join(outDir, "SYSTEM"), root: winreg.LOCAL_MACHINE, keyPath: "SYSTEM", relPath: "SYSTEM", isPrimary: true},
 		{name: "SOFTWARE", srcPath: filepath.Join(configDir, "SOFTWARE"), dstPath: filepath.Join(outDir, "SOFTWARE"), root: winreg.LOCAL_MACHINE, keyPath: "SOFTWARE", relPath: "SOFTWARE", isPrimary: true},
 		{name: "SAM", srcPath: filepath.Join(configDir, "SAM"), dstPath: filepath.Join(outDir, "SAM"), root: winreg.LOCAL_MACHINE, keyPath: "SAM", relPath: "SAM", isPrimary: true},
-		{name: "SECURITY", srcPath: filepath.Join(configDir, "SECURITY"), dstPath: filepath.Join(outDir, "SECURITY"), root: winreg.LOCAL_MACHINE, keyPath: "SECURITY", relPath: "SECURITY", isPrimary: true},
 		{name: "DEFAULT", srcPath: filepath.Join(configDir, "DEFAULT"), dstPath: filepath.Join(outDir, "DEFAULT"), root: winreg.USERS, keyPath: ".DEFAULT", relPath: "DEFAULT", isPrimary: true},
 	}
 
@@ -54,14 +55,14 @@ func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInf
 	for sid, profileDir := range sidToProfile {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		default:
 		}
 
 		username := filepath.Base(profileDir)
 		userOutDir := filepath.Join(outDir, "users", username)
 		if err := os.MkdirAll(userOutDir, 0o755); err != nil {
-			return nil, fmt.Errorf("create dir for %s: %w", username, err)
+			return nil, nil, fmt.Errorf("create dir for %s: %w", username, err)
 		}
 
 		specs = append(specs, hiveSpec{
@@ -106,13 +107,18 @@ func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInf
 	for _, spec := range specs {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		default:
 		}
 
 		fi, err := collectHiveSpec(spec)
 		if err != nil {
-			if isNotFoundError(err) && !spec.isPrimary {
+			// .LOG1/.LOG2 transaction-log companion files (non-primary specs) have
+			// no registry-save fallback and are held open by the OS for the life
+			// of the hive, so a sharing violation on them is expected and
+			// unfixable while the system is live — not worth surfacing as a
+			// module failure alongside genuinely missing/inaccessible hives.
+			if (isNotFoundError(err) || isHandleBlockedError(err)) && !spec.isPrimary {
 				continue
 			}
 			errs = append(errs, fmt.Sprintf("%s: %v", spec.srcPath, err))
@@ -122,9 +128,9 @@ func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInf
 	}
 
 	if len(files) == 0 && len(errs) > 0 {
-		return nil, errors.New(strings.Join(errs, "; "))
+		return nil, errs, errors.New(strings.Join(errs, "; "))
 	}
-	return files, nil
+	return files, errs, nil
 }
 
 func collectHiveSpec(spec hiveSpec) (module.FileInfo, error) {

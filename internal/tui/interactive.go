@@ -51,6 +51,20 @@ var (
 	}
 )
 
+// newAdaptiveSpinner picks a spinner style that renders safely regardless of
+// launch context: Explorer-launched consoles are more likely to lack the
+// braille/dot glyphs the default spinner uses, so they get the plain-ASCII
+// safePinkSpinner instead.
+func newAdaptiveSpinner() spinner.Model {
+	spin := spinner.New()
+	if console.LikelyExplorerLaunch() {
+		spin.Spinner = safePinkSpinner
+	} else {
+		spin.Spinner = spinner.Dot
+	}
+	return spin
+}
+
 type moduleOption struct {
 	module module.Module
 	mode   string
@@ -278,12 +292,7 @@ func resolveMenuResults(finished menuModel) ([]module.Module, bool, error) {
 }
 
 func newMenuModel() menuModel {
-	spin := spinner.New()
-	if console.LikelyExplorerLaunch() {
-		spin.Spinner = safePinkSpinner
-	} else {
-		spin.Spinner = spinner.Dot
-	}
+	spin := newAdaptiveSpinner()
 	spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("217")).Bold(true)
 
 	var options []moduleOption

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"unsafe"
 
+	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/logging"
 	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/utils"
@@ -48,37 +50,69 @@ func (c *usnJrnlCollector) Description() string {
 
 func (c *usnJrnlCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := req.ArtifactDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "ntfs")
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir("ntfs")
+	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create NTFS output dir: %w", err).Error()}
 	}
 
-	volPath, err := windows.UTF16PtrFromString(`\\.\C:`)
+	drives, err := acquisition.ListFixedDrives()
 	if err != nil {
-		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("UTF16: %w", err).Error()}
+		log.Debug(fmt.Sprintf("Drive enumeration failed, falling back to C: %v", err))
+		drives = []string{"C"}
+	}
+
+	var files []module.FileInfo
+	var errs []string
+	for _, drive := range drives {
+		select {
+		case <-ctx.Done():
+			return module.CollectResult{Files: files, OutputPath: outDir, Error: ctx.Err().Error()}
+		default:
+		}
+
+		fi, err := collectUSNJournalForDrive(ctx, log, outDir, drive)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", drive, err))
+			log.Debug(fmt.Sprintf("USN journal collection skipped for drive %s: %v", drive, err))
+			continue
+		}
+		files = append(files, fi)
+	}
+
+	if len(files) == 0 {
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("no $UsnJrnl:$J collected from any drive (ensure running as Administrator): %s", strings.Join(errs, "; ")).Error()}
+	}
+	if len(errs) > 0 {
+		return module.CollectResult{Files: files, OutputPath: outDir, Error: fmt.Sprintf("collected $UsnJrnl:$J from %d drive(s) with %d failure(s): %s", len(files), len(errs), strings.Join(errs, "; "))}
+	}
+	return module.CollectResult{Files: files, OutputPath: outDir}
+}
+
+func collectUSNJournalForDrive(ctx context.Context, log *logging.Logger, outDir, drive string) (module.FileInfo, error) {
+	relName := "$UsnJrnl_J_" + drive
+	outputPath := filepath.Join(outDir, relName)
+
+	volPath, err := windows.UTF16PtrFromString(`\\.\` + drive + `:`)
+	if err != nil {
+		return module.FileInfo{}, fmt.Errorf("UTF16: %w", err)
 	}
 	handle, err := windows.CreateFile(volPath, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
 	if err != nil {
-		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("open volume for USN journal: %w", err).Error()}
+		return module.FileInfo{}, fmt.Errorf("open volume for USN journal: %w", err)
 	}
 	defer windows.CloseHandle(handle)
 
 	var journalData usnJournalData
 	var bytesReturned uint32
-	err = windows.DeviceIoControl(handle, FSCTL_QUERY_USN_JOURNAL, nil, 0, (*byte)(unsafe.Pointer(&journalData)), uint32(unsafe.Sizeof(journalData)), &bytesReturned, nil)
-	if err != nil {
-		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("query USN journal: %w", err).Error()}
+	if err := windows.DeviceIoControl(handle, FSCTL_QUERY_USN_JOURNAL, nil, 0, (*byte)(unsafe.Pointer(&journalData)), uint32(unsafe.Sizeof(journalData)), &bytesReturned, nil); err != nil {
+		return module.FileInfo{}, fmt.Errorf("query USN journal: %w", err)
 	}
 
-	log.Debug(fmt.Sprintf("USN Journal: ID=%d, FirstUsn=%d, NextUsn=%d", journalData.UsnJournalID, journalData.FirstUsn, journalData.NextUsn))
+	log.Debug(fmt.Sprintf("USN Journal %s: ID=%d, FirstUsn=%d, NextUsn=%d", drive, journalData.UsnJournalID, journalData.FirstUsn, journalData.NextUsn))
 
-	outputPath := filepath.Join(outDir, "$UsnJrnl_J")
 	outFile, err := os.Create(outputPath)
 	if err != nil {
-		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create USN journal output: %w", err).Error()}
+		return module.FileInfo{}, fmt.Errorf("create USN journal output: %w", err)
 	}
 	defer outFile.Close()
 
@@ -89,18 +123,17 @@ func (c *usnJrnlCollector) Collect(ctx context.Context, req module.CollectReques
 	for {
 		select {
 		case <-ctx.Done():
-			return module.CollectResult{OutputPath: outDir, Error: ctx.Err().Error()}
+			return module.FileInfo{}, ctx.Err()
 		default:
 		}
-		err = windows.DeviceIoControl(handle, FSCTL_READ_USN_JOURNAL, (*byte)(unsafe.Pointer(&readData)), uint32(unsafe.Sizeof(readData)), &buf[0], uint32(len(buf)), &bytesReturned, nil)
-		if err != nil || bytesReturned <= 8 {
+		if err := windows.DeviceIoControl(handle, FSCTL_READ_USN_JOURNAL, (*byte)(unsafe.Pointer(&readData)), uint32(unsafe.Sizeof(readData)), &buf[0], uint32(len(buf)), &bytesReturned, nil); err != nil || bytesReturned <= 8 {
 			break
 		}
 
 		nextUsn := *(*int64)(unsafe.Pointer(&buf[0]))
 		n, writeErr := outFile.Write(buf[8:bytesReturned])
 		if writeErr != nil {
-			return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("write USN data: %w", writeErr).Error()}
+			return module.FileInfo{}, fmt.Errorf("write USN data: %w", writeErr)
 		}
 		totalWritten += int64(n)
 		readData.StartUsn = nextUsn
@@ -108,8 +141,8 @@ func (c *usnJrnlCollector) Collect(ctx context.Context, req module.CollectReques
 
 	hash, err := utils.HashFile(outputPath)
 	if err != nil {
-		log.Warn(fmt.Sprintf("Failed to hash $UsnJrnl: %v", err))
+		log.Warn(fmt.Sprintf("Failed to hash $UsnJrnl for drive %s: %v", drive, err))
 	}
-	log.Debug(fmt.Sprintf("$UsnJrnl:$J collected: %d bytes, SHA256: %s", totalWritten, hash))
-	return module.CollectResult{Files: []module.FileInfo{{Path: "$UsnJrnl_J", SHA256: hash, Size: totalWritten}}, OutputPath: outDir}
+	log.Debug(fmt.Sprintf("$UsnJrnl:$J collected for drive %s: %d bytes, SHA256: %s", drive, totalWritten, hash))
+	return module.FileInfo{Path: relName, SHA256: hash, Size: totalWritten}, nil
 }

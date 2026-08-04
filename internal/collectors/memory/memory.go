@@ -32,11 +32,8 @@ func winpmemBinaries() []string {
 
 func (c *memoryCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := req.ArtifactDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "memory")
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir("memory")
+	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create memory output dir: %w", err).Error()}
 	}
 

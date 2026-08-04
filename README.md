@@ -23,11 +23,14 @@ The project is designed around a shared module registry, so collectors and analy
 ## Features
 
 - **Dual CLI modes**: Run an interactive Bubble Tea workflow or use `fir collect` for automation.
+- **Collect vs. analyze, explicitly**: `fir collect` runs collector modules only by default; pass `--analyze` to also run the matching analyzers.
 - **Modular collectors and analyzers**: Built-in modules cover Browser, Event Logs, Execution, Live Response, Memory, NTFS, Registry, and System artifacts.
+- **Multi-volume NTFS collection**: `$MFT`, `$UsnJrnl:$J`, and `$Secure:$SDS` are collected from every fixed drive, not just `C:`.
 - **Forensic-safe collection**: Uses read-only collection paths where possible and records SHA-256 integrity metadata.
-- **Windows privilege handling**: Detects Administrator context and enables backup, restore, security, and debug privileges when available.
+- **Administrator-only by design**: FIR refuses to run without elevated privileges and enables backup, restore, security, and debug privileges on startup.
 - **Native Windows acquisition**: Uses backup semantics, registry hive save APIs, raw NTFS access, and Windows event log collection.
 - **Resource-aware runs**: Supports workers, CPU limit, RAM cap, disk I/O limit, compression, storage estimates, and optional module timeouts.
+- **Partial-failure tolerant**: A module only reports failure if it collected nothing at all; partial errors are kept visible as warnings instead of masking the artifacts that did come through.
 - **Structured output**: Produces `manifest.json`, `summary.txt`, `collector.log`, optional ZIP archive, and `.zip.sha256` sidecar.
 - **Extensible layout**: Collectors and analyzers live under `internal/` with a shared module contract.
 
@@ -53,7 +56,7 @@ The project is designed around a shared module registry, so collectors and analy
 ### Prerequisites
 
 - **Operating system**: Windows 10/11 or Windows Server 2016+
-- **Privileges**: Administrator is recommended for complete artifact access
+- **Privileges**: Administrator is required — FIR exits immediately with an error if not run elevated
 - **Go**: 1.26+ for building from source
 
 ### Installation
@@ -85,6 +88,8 @@ Interactive mode lets you select modules, review runtime configuration, watch li
 
 ### Flag Mode
 
+`fir collect` runs collector modules only by default — analyzers (`*_parser`, `autoruns`, `process_explorer`, etc.) are skipped even if a category or `all` would otherwise include them.
+
 Collect specific artifacts:
 
 ```powershell
@@ -101,6 +106,12 @@ Collect everything:
 
 ```powershell
 .\fir.exe collect --artifact all
+```
+
+Collect and then run the matching analyzers:
+
+```powershell
+.\fir.exe collect --artifact eventlog --analyze
 ```
 
 Use a custom output directory and timeout:
@@ -128,6 +139,7 @@ Disable compression:
 | `-o, --output` | Base output directory for collected artifacts |
 | `-v, --verbose` | Enable verbose/debug output |
 | `-a, --artifact` | Comma-separated list of artifacts or categories |
+| `--analyze` | Also run the analyzer modules for the selected artifacts/categories (default: collect only) |
 | `-t, --timeout` | Optional timeout per module; `0` disables timeout |
 | `--workers` | Maximum number of concurrent modules |
 | `-c, --concurrency` | Deprecated alias for `--workers` |
@@ -148,10 +160,10 @@ Disable compression:
 | `amcache` | `execution` | Collects `Amcache.hve` and transaction logs |
 | `prefetch` | `execution` | Collects Windows Prefetch files (`.pf`) |
 | `ram` | `memory` | Acquires physical memory using `winpmem` |
-| `mft` | `ntfs` | Collects the `$MFT` via raw disk access |
-| `secure_sds` | `ntfs` | Collects the `$Secure:$SDS` stream where available |
-| `usnjrnl` | `ntfs` | Collects the `$UsnJrnl:$J` USN Change Journal |
-| `registry` | `registry` | Collects primary registry hives and transaction logs |
+| `mft` | `ntfs` | Collects the `$MFT` via raw disk access, from every fixed drive |
+| `secure_sds` | `ntfs` | Collects the `$Secure:$SDS` stream, from every fixed drive |
+| `usnjrnl` | `ntfs` | Collects the `$UsnJrnl:$J` USN Change Journal, from every fixed drive |
+| `registry` | `registry` | Collects primary registry hives and transaction logs (excludes `SECURITY`, which requires `SYSTEM`, not just Administrator) |
 | `srum` | `system` | Collects the SRUM database (`SRUDB.dat`) |
 | `wmi` | `system` | Collects WMI repository files |
 

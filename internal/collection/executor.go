@@ -134,12 +134,19 @@ func runModule(parent context.Context, mod module.Module, mgr *output.Manager, t
 	files, err := mod.Collect(ctx, mgr.BaseDir())
 	result.FilesCollected = files
 	if err != nil {
-		result.Success = false
 		result.Error = err.Error()
 		if ctx.Err() != nil {
 			result.Error = ctx.Err().Error() + ": " + err.Error()
 		}
-		log.Failed(mod.Name(), fmt.Errorf("%s", result.Error))
+		if len(files) == 0 {
+			result.Success = false
+			log.Failed(mod.Name(), fmt.Errorf("%s", result.Error))
+			return result
+		}
+		// Partial success — see applyModuleOutcome below for why.
+		result.Success = true
+		log.Warn(fmt.Sprintf("%s: %s", mod.Name(), result.Error))
+		log.Done(mod.Name(), len(files), "artifacts", time.Since(startedAt))
 		return result
 	}
 
@@ -197,9 +204,18 @@ func applyModuleOutcome(ctx context.Context, mod module.Module, result *module.R
 	result.OutputPath = outcome.outputPath
 	result.Skipped = outcome.skipped
 	if outcome.errMessage != "" {
-		result.Success = false
 		result.Error = errorWithContext(ctx, outcome.errMessage)
-		log.Failed(mod.Name(), fmt.Errorf("%s", result.Error))
+		if len(outcome.files) == 0 {
+			result.Success = false
+			log.Failed(mod.Name(), fmt.Errorf("%s", result.Error))
+			return
+		}
+		// Some files were still collected despite the error(s) — only a total
+		// loss (no files at all) counts as a failed run; a partial run keeps
+		// its success status, with the error kept visible as a warning.
+		result.Success = true
+		log.Warn(fmt.Sprintf("%s: %s", mod.Name(), result.Error))
+		log.Done(mod.Name(), len(outcome.files), "artifacts", time.Since(startedAt))
 		return
 	}
 	if outcome.skipped {

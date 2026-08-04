@@ -3,10 +3,9 @@ package live
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func init() { module.RegisterAnalyzer(&autorunsAnalyzer{}) }
@@ -20,17 +19,14 @@ func (a *autorunsAnalyzer) Description() string {
 }
 
 func (a *autorunsAnalyzer) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
-	outDir := req.AnalyzerDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "Analyzer", a.Name())
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(a.Name())
+	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create autoruns analyzer output dir: %w", err).Error()}
 	}
 
 	script := `
 $ErrorActionPreference = 'SilentlyContinue'
-$outDir = ` + psQuote(outDir) + `
+$outDir = ` + utils.PSQuote(outDir) + `
 
 $servicesCsv = Join-Path $outDir 'services.csv'
 $runKeysCsv = Join-Path $outDir 'run_keys.csv'
@@ -128,11 +124,11 @@ $startupRows = foreach ($loc in $startupLocations) {
 $startupRows | Sort-Object Scope, Name | Export-Csv -Path $startupCsv -NoTypeInformation -Encoding UTF8
 `
 
-	if err := runPowerShell(ctx, script); err != nil {
+	if err := utils.RunPowerShell(ctx, script); err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("analyze live autoruns data: %w", err).Error()}
 	}
 
-	files, err := collectGeneratedCSVs(outDir)
+	files, err := utils.CollectGeneratedCSVs(outDir)
 	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}

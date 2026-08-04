@@ -212,6 +212,18 @@ func PauseBeforeExit() {
 		return
 	}
 
+	// The interactive TUI runs with mouse-motion tracking on, which makes the
+	// terminal stream a MOUSE_EVENT for every pixel of cursor movement. Bubble
+	// Tea disables tracking as part of its own shutdown, but that disable
+	// sequence and the terminal actually honoring it both take a moment: any
+	// stray motion right as the program exits can still land in the console
+	// input buffer. waitForFreshConsoleKeypress has to read and discard every
+	// one of those before it reaches a real key press, so a burst of queued
+	// mouse events reads as "the window takes a few seconds to close after I
+	// press a key". Send the disable sequences again here — harmless if
+	// they're already off — so nothing further gets queued once we start
+	// waiting.
+	fmt.Fprint(os.Stdout, "\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l")
 	fmt.Fprint(os.Stderr, "\nPress any key to exit . . .")
 	waitForFreshConsoleKeypress()
 	fmt.Fprintln(os.Stderr)

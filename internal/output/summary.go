@@ -15,6 +15,7 @@ import (
 
 var (
 	failureHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("204"))
+	warningHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("221"))
 )
 
 type SummaryReport struct {
@@ -127,6 +128,17 @@ func (r SummaryReport) Render() string {
 			b.WriteString("\n")
 		}
 	}
+	warnings := r.WarningResults()
+	if len(warnings) > 0 {
+		b.WriteString("\n\nWarnings (succeeded with partial errors)\n")
+		b.WriteString(strings.Repeat("-", len("Warnings (succeeded with partial errors)")))
+		b.WriteString("\n")
+		for _, result := range warnings {
+			b.WriteString(fmt.Sprintf("* [%s] %s duration=%s\n", result.Category, result.CollectorName, formatDuration(result.Duration)))
+			b.WriteString(wrapText("warning: "+sanitizeCell(result.Error), 118, "  "))
+			b.WriteString("\n")
+		}
+	}
 	b.WriteString("\n")
 
 	return b.String()
@@ -140,6 +152,19 @@ func (r SummaryReport) FailedResults() []module.Result {
 		}
 	}
 	return failed
+}
+
+// WarningResults returns modules that finished successfully (some files were
+// collected) but still reported an error — e.g. a registry collector that
+// captured most hives but couldn't read one of them.
+func (r SummaryReport) WarningResults() []module.Result {
+	var warnings []module.Result
+	for _, result := range r.Results {
+		if result.Success && result.Error != "" {
+			warnings = append(warnings, result)
+		}
+	}
+	return warnings
 }
 
 func (r SummaryReport) RenderTerminal(width int) string {
@@ -163,6 +188,20 @@ func (r SummaryReport) RenderTerminal(width int) string {
 			b.WriteString(failureHeaderStyle.Render(trimToWidth(header, width)))
 			b.WriteString("\n")
 			b.WriteString(wrapText("error: "+sanitizeCell(result.Error), maxInt(12, width-2), "  "))
+			b.WriteString("\n")
+		}
+	}
+
+	warnings := r.WarningResults()
+	if len(warnings) > 0 {
+		b.WriteString("\n\nWarnings (succeeded with partial errors)\n")
+		b.WriteString(strings.Repeat("-", minInt(width, len("Warnings (succeeded with partial errors)"))))
+		b.WriteString("\n")
+		for _, result := range warnings {
+			header := fmt.Sprintf("* [%s] %s duration=%s", result.Category, result.CollectorName, formatDuration(result.Duration))
+			b.WriteString(warningHeaderStyle.Render(trimToWidth(header, width)))
+			b.WriteString("\n")
+			b.WriteString(wrapText("warning: "+sanitizeCell(result.Error), maxInt(12, width-2), "  "))
 			b.WriteString("\n")
 		}
 	}

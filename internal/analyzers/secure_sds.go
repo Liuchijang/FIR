@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Liuchijang/FIR/internal/acquisition"
@@ -24,29 +25,38 @@ func (c *secureSDSParser) Description() string {
 }
 
 func (c *secureSDSParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
-	outDir := req.AnalyzerDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(c.Name())
+	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create secure_sds parser output dir: %w", err).Error()}
 	}
 
-	data, _, err := readSecureSDSSource(ctx, req.OutputDir)
-	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
+	sources, sourceErrs := readSecureSDSSources(req.OutputDir)
 
-	rows, parsedCount, skippedCount, err := parseSecureSDSRows(data)
-	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+	var rows [][]string
+	var parseErrs []string
+	for _, src := range sources {
+		select {
+		case <-ctx.Done():
+			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
+		default:
+		}
+
+		driveRows, _, _, err := parseSecureSDSRows(src.data)
+		if err != nil {
+			parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", src.drive, err))
+			continue
+		}
+		for _, row := range driveRows {
+			rows = append(rows, append([]string{src.drive}, row...))
+		}
 	}
 	if len(rows) == 0 {
-		return module.AnalyzeResult{OutputPath: outDir, Error: "no SDS entries parsed"}
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no SDS entries parsed: %s", strings.Join(append(sourceErrs, parseErrs...), "; "))}
 	}
 
 	entriesCSV := filepath.Join(outDir, "secure_sds_entries.csv")
 	if err := writeCSVFile(entriesCSV, []string{
+		"Drive",
 		"StreamOffset",
 		"HeaderOffsetValue",
 		"EntryLength",
@@ -70,39 +80,98 @@ func (c *secureSDSParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
-	_ = parsedCount
-	_ = skippedCount
 	return module.AnalyzeResult{Files: []module.FileInfo{entriesInfo}, OutputPath: outDir}
 }
 
-func readSecureSDSSource(ctx context.Context, outputDir string) ([]byte, string, error) {
+type secureSDSSource struct {
+	drive string
+	data  []byte
+}
+
+// readSecureSDSSources loads $Secure:$SDS for every drive it can, preferring
+// already-collected $Secure_SDS_<drive> files, falling back to the legacy
+// single-drive filename, and finally to a live read across every fixed drive.
+func readSecureSDSSources(outputDir string) ([]secureSDSSource, []string) {
+	var sources []secureSDSSource
+	var errs []string
+
 	if dir, ok := existingModuleDir(outputDir, "secure_sds"); ok {
-		path := filepath.Join(dir, "$Secure_SDS")
-		if _, err := os.Stat(path); err == nil {
+		for _, drive := range collectedSecureSDSDrives(dir) {
+			path := filepath.Join(dir, "$Secure_SDS_"+drive)
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return nil, "", fmt.Errorf("read collected $Secure:$SDS: %w", err)
+				errs = append(errs, fmt.Sprintf("%s: %v", drive, err))
+				continue
 			}
-			return data, path, nil
+			sources = append(sources, secureSDSSource{drive: drive, data: data})
+		}
+		if len(sources) == 0 {
+			if legacyPath := filepath.Join(dir, "$Secure_SDS"); fileExists(legacyPath) {
+				data, err := os.ReadFile(legacyPath)
+				if err != nil {
+					errs = append(errs, fmt.Sprintf("C: %v", err))
+				} else {
+					sources = append(sources, secureSDSSource{drive: "C", data: data})
+				}
+			}
 		}
 	}
 
-	vol, err := acquisition.OpenRawVolume("C")
+	if len(sources) == 0 {
+		drives, err := acquisition.ListFixedDrives()
+		if err != nil || len(drives) == 0 {
+			drives = []string{"C"}
+		}
+		for _, drive := range drives {
+			data, err := readLiveSecureSDS(drive)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", drive, err))
+				continue
+			}
+			sources = append(sources, secureSDSSource{drive: drive, data: data})
+		}
+	}
+
+	return sources, errs
+}
+
+// collectedSecureSDSDrives lists the drive letters for which a per-drive
+// $Secure_SDS_<drive> file was collected into dir, sorted for determinism.
+func collectedSecureSDSDrives(dir string) []string {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, "", fmt.Errorf("open raw volume for live SDS parse: %w", err)
+		return nil
+	}
+	var drives []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if drive, ok := strings.CutPrefix(entry.Name(), "$Secure_SDS_"); ok && drive != "" {
+			drives = append(drives, drive)
+		}
+	}
+	sort.Strings(drives)
+	return drives
+}
+
+func readLiveSecureSDS(drive string) ([]byte, error) {
+	vol, err := acquisition.OpenRawVolume(drive)
+	if err != nil {
+		return nil, fmt.Errorf("open raw volume for live SDS parse: %w", err)
 	}
 	defer vol.Close()
 
 	volData, err := vol.GetNTFSVolumeData()
 	if err != nil {
-		return nil, "", fmt.Errorf("get NTFS volume data for live SDS parse: %w", err)
+		return nil, fmt.Errorf("get NTFS volume data for live SDS parse: %w", err)
 	}
 
 	data, err := acquisition.ReadNamedDataStreamFromMFTRecord(vol, volData, 9, "$SDS")
 	if err != nil {
-		return nil, "", fmt.Errorf("read live $Secure:$SDS: %w", err)
+		return nil, fmt.Errorf("read live $Secure:$SDS: %w", err)
 	}
-	return data, `\\.\C: ($Secure:$SDS live parse)`, nil
+	return data, nil
 }
 
 func parseSecureSDSRows(data []byte) ([][]string, int, int, error) {

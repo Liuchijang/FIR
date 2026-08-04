@@ -25,11 +25,8 @@ var wmiFiles = []string{"OBJECTS.DATA", "INDEX.BTR"}
 
 func (c *wmiCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := req.ArtifactDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "system", "wmi")
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(filepath.Join("system", "wmi"))
+	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create WMI output dir: %w", err).Error()}
 	}
 

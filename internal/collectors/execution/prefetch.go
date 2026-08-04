@@ -24,11 +24,8 @@ func (c *prefetchCollector) Description() string {
 
 func (c *prefetchCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := req.ArtifactDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "execution", "prefetch")
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(filepath.Join("execution", "prefetch"))
+	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create prefetch output dir: %w", err).Error()}
 	}
 

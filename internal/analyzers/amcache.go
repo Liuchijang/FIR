@@ -152,17 +152,16 @@ func (c *amcacheParser) Description() string {
 }
 
 func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
-	outDir := req.AnalyzerDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(c.Name())
+	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create amcache parser output dir: %w", err).Error()}
 	}
 
 	var errs []string
+	var collectedPath string
 
 	if collected, ok := collectedAmcacheHive(req.OutputDir); ok {
+		collectedPath = collected
 		if results, err := parseAmcacheResultsFromHiveFile(collected); err == nil && len(results.Datasets) > 0 {
 			return writeAmcacheAnalyzeResult(outDir, results)
 		} else if err != nil {
@@ -181,7 +180,11 @@ func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 		if cleanupAutoCollect != nil {
 			defer cleanupAutoCollect()
 		}
-		if autoCollectedHive != "" {
+		// collectAmcacheSourceForParser returns the same path already tried
+		// above whenever the amcache collector already ran (its "auto-collect"
+		// step is a no-op in that case) — retrying it can't produce a
+		// different result, so skip straight to the fresh staged-hive attempt.
+		if autoCollectedHive != "" && autoCollectedHive != collectedPath {
 			if results, err := parseAmcacheResultsFromHiveFile(autoCollectedHive); err == nil && len(results.Datasets) > 0 {
 				return writeAmcacheAnalyzeResult(outDir, results)
 			} else if err != nil {
@@ -842,6 +845,18 @@ func stageLiveAmcacheHive() (string, func(), error) {
 	cleanup := func() { _ = os.RemoveAll(tempDir) }
 	dst := filepath.Join(tempDir, "Amcache.hve")
 
+	// A raw file copy carries over whatever "dirty" (pending transaction) state
+	// the live hive currently has, so RegLoadAppKeyW needs the matching
+	// .LOG1/.LOG2 files next to it to replay and mount — without them it fails
+	// with "the configuration registry database is corrupt" even though the
+	// hive file itself copied fine. Stage them alongside on a best-effort
+	// basis; a clean hive with no pending transactions doesn't need them.
+	stageLogs := func(copyOne func(logSrc, logDst string) error) {
+		for _, suffix := range []string{".LOG1", ".LOG2"} {
+			_ = copyOne(src+suffix, dst+suffix)
+		}
+	}
+
 	var errs []string
 	if err := utils.SaveRegistryHive(winreg.LOCAL_MACHINE, "AMCACHE", dst); err == nil {
 		return dst, cleanup, nil
@@ -849,11 +864,19 @@ func stageLiveAmcacheHive() (string, func(), error) {
 		errs = append(errs, fmt.Sprintf("save mounted AMCACHE hive: %v", err))
 	}
 	if _, err := utils.SafeCopyFile(src, dst); err == nil {
+		stageLogs(func(logSrc, logDst string) error {
+			_, err := utils.SafeCopyFile(logSrc, logDst)
+			return err
+		})
 		return dst, cleanup, nil
 	} else {
 		errs = append(errs, fmt.Sprintf("copy file: %v", err))
 	}
 	if _, err := utils.SafeCopyFileBackup(src, dst); err == nil {
+		stageLogs(func(logSrc, logDst string) error {
+			_, err := utils.SafeCopyFileBackup(logSrc, logDst)
+			return err
+		})
 		return dst, cleanup, nil
 	} else {
 		errs = append(errs, fmt.Sprintf("copy file with backup semantics: %v", err))
@@ -864,6 +887,10 @@ func stageLiveAmcacheHive() (string, func(), error) {
 		defer vol.Close()
 		if volData, volErr := vol.GetNTFSVolumeData(); volErr == nil {
 			if _, copyErr := acquisition.CopyFileFromRawPath(vol, volData, src, dst); copyErr == nil {
+				stageLogs(func(logSrc, logDst string) error {
+					_, err := acquisition.CopyFileFromRawPath(vol, volData, logSrc, logDst)
+					return err
+				})
 				return dst, cleanup, nil
 			} else {
 				errs = append(errs, fmt.Sprintf("copy via raw volume: %v", copyErr))

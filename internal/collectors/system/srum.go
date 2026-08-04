@@ -22,11 +22,8 @@ func (c *srumCollector) Description() string {
 
 func (c *srumCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := req.ArtifactDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "system")
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir("system")
+	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create system output dir: %w", err).Error()}
 	}
 

@@ -23,7 +23,6 @@ type Manager struct {
 // baseDir is the parent directory where the timestamped collection folder will be created.
 func NewManager(baseDir string) (*Manager, error) {
 	hostname := platform.DetectHost().Hostname
-	// Sanitize hostname: remove characters invalid for directory names.
 	hostname = sanitizeDirName(hostname)
 
 	ts := time.Now().Format("20060102_150405")

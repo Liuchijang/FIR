@@ -78,13 +78,15 @@ func copyToDestination(srcFile *os.File, dst string) (module.FileInfo, error) {
 	hasher := sha256.New()
 	writer := io.MultiWriter(dstFile, hasher)
 	buf := make([]byte, copyBufferSize)
-	written, err := io.CopyBuffer(writer, diskLimitedReader(srcFile), buf)
-	if err != nil {
-		return module.FileInfo{}, fmt.Errorf("copy to %s: %w", dst, err)
+	written, copyErr := io.CopyBuffer(writer, diskLimitedReader(srcFile), buf)
+	if copyErr != nil {
+		err = fmt.Errorf("copy to %s: %w", dst, copyErr)
+		return module.FileInfo{}, err
 	}
 
-	if err := dstFile.Sync(); err != nil {
-		return module.FileInfo{}, fmt.Errorf("sync %s: %w", dst, err)
+	if syncErr := dstFile.Sync(); syncErr != nil {
+		err = fmt.Errorf("sync %s: %w", dst, syncErr)
+		return module.FileInfo{}, err
 	}
 
 	return module.FileInfo{Path: filepath.Base(dst), SHA256: hex.EncodeToString(hasher.Sum(nil)), Size: written}, nil

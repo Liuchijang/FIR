@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/logging"
 	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/output"
@@ -29,8 +30,6 @@ var chromiumEvidenceFiles = []string{
 	"Bookmarks",
 	"Cookies",
 	"Extension Cookies",
-	"Extension Rules",
-	"Extension State",
 	"Favicons",
 	"History",
 	"Last Session",
@@ -47,6 +46,11 @@ var chromiumEvidenceFiles = []string{
 
 var chromiumEvidenceDirs = []string{
 	"Sessions",
+	// Extension Rules and Extension State are LevelDB databases (directories
+	// containing CURRENT/MANIFEST/*.ldb files), not single files — copying them
+	// as a file fails with ERROR_INVALID_FUNCTION.
+	"Extension Rules",
+	"Extension State",
 }
 
 var firefoxEvidenceFiles = []string{
@@ -223,13 +227,19 @@ func (c *browserCollector) Collect(ctx context.Context, req module.CollectReques
 		return module.CollectResult{Error: err.Error()}
 	}
 
-	outDir := req.ArtifactDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "browser")
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir("browser")
+	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create browser output dir: %w", err).Error()}
 	}
+
+	// rawCtx is a last-resort read path when a browser file can't be copied
+	// through the normal Win32 file APIs (e.g. the browser holds it under a
+	// share-mode lock that backup semantics/SeBackupPrivilege cannot bypass —
+	// that privilege only bypasses ACL checks, not another process's exclusive
+	// lock). Reading the file straight off the volume's $MFT never opens a
+	// Win32 handle, so it is immune to any live share-mode lock.
+	rawCtx := &acquisition.RawVolumePool{}
+	defer rawCtx.Close()
 
 	var allFiles []module.FileInfo
 	var errors []string
@@ -241,11 +251,17 @@ func (c *browserCollector) Collect(ctx context.Context, req module.CollectReques
 		}
 
 		log.Info(fmt.Sprintf("Browser profile selected: %s", profile.Path))
-		files, collectErr := collectProfile(ctx, outDir, profile)
+		files, warnings, collectErr := collectProfile(ctx, outDir, profile, rawCtx)
 		allFiles = append(allFiles, files...)
 		if collectErr != nil {
 			errors = append(errors, collectErr.Error())
 			log.Warn(collectErr.Error())
+			continue
+		}
+		for _, w := range warnings {
+			msg := fmt.Sprintf("%s: %s", profile.Path, w)
+			errors = append(errors, msg)
+			log.Warn(msg)
 		}
 	}
 
@@ -254,6 +270,10 @@ func (c *browserCollector) Collect(ctx context.Context, req module.CollectReques
 			return module.CollectResult{OutputPath: outDir, Error: "no browser artifacts collected"}
 		}
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Sprintf("no browser artifacts collected: %s", strings.Join(errors, "; "))}
+	}
+
+	if len(errors) > 0 {
+		return module.CollectResult{Files: allFiles, OutputPath: outDir, Error: fmt.Sprintf("collected browser artifacts with %d partial failure(s): %s", len(errors), strings.Join(errors, "; "))}
 	}
 
 	return module.CollectResult{Files: allFiles, OutputPath: outDir}
@@ -478,16 +498,16 @@ func isSkippedWindowsProfile(name string) bool {
 	}
 }
 
-func collectProfile(ctx context.Context, outDir string, profile BrowserProfile) ([]module.FileInfo, error) {
+func collectProfile(ctx context.Context, outDir string, profile BrowserProfile, rawCtx *acquisition.RawVolumePool) ([]module.FileInfo, []string, error) {
 	switch profile.Family {
 	case browserFamilyFirefox:
-		return collectFirefoxProfile(ctx, outDir, profile)
+		return collectFirefoxProfile(ctx, outDir, profile, rawCtx)
 	default:
-		return collectChromiumProfile(ctx, outDir, profile)
+		return collectChromiumProfile(ctx, outDir, profile, rawCtx)
 	}
 }
 
-func collectChromiumProfile(ctx context.Context, outDir string, profile BrowserProfile) ([]module.FileInfo, error) {
+func collectChromiumProfile(ctx context.Context, outDir string, profile BrowserProfile, rawCtx *acquisition.RawVolumePool) ([]module.FileInfo, []string, error) {
 	profileRoot := filepath.Join(
 		outDir,
 		outputDirName(profile.User),
@@ -495,7 +515,7 @@ func collectChromiumProfile(ctx context.Context, outDir string, profile BrowserP
 		outputDirName(profile.Name),
 	)
 	if err := os.MkdirAll(profileRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create browser profile output dir for %s: %w", profile.Path, err)
+		return nil, nil, fmt.Errorf("create browser profile output dir for %s: %w", profile.Path, err)
 	}
 
 	var files []module.FileInfo
@@ -503,20 +523,20 @@ func collectChromiumProfile(ctx context.Context, outDir string, profile BrowserP
 
 	userDataDir := filepath.Dir(profile.Path)
 	localState := filepath.Join(userDataDir, "Local State")
-	if fi, err := copyBrowserFile(localState, filepath.Join(profileRoot, "Local State"), "Local State"); err == nil {
+	if fi, err := copyBrowserFile(localState, filepath.Join(profileRoot, "Local State"), "Local State", rawCtx); err == nil {
 		files = append(files, fi)
 	}
 
 	for _, relPath := range chromiumEvidenceFiles {
 		select {
 		case <-ctx.Done():
-			return files, ctx.Err()
+			return files, errors, ctx.Err()
 		default:
 		}
 
 		src := filepath.Join(profile.Path, relPath)
 		dst := filepath.Join(profileRoot, relPath)
-		fi, err := copyBrowserFile(src, dst, relPath)
+		fi, err := copyBrowserFile(src, dst, relPath, rawCtx)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				errors = append(errors, fmt.Sprintf("%s: %v", relPath, err))
@@ -529,13 +549,13 @@ func collectChromiumProfile(ctx context.Context, outDir string, profile BrowserP
 	for _, relDir := range chromiumEvidenceDirs {
 		select {
 		case <-ctx.Done():
-			return files, ctx.Err()
+			return files, errors, ctx.Err()
 		default:
 		}
 
 		srcDir := filepath.Join(profile.Path, relDir)
 		dstDir := filepath.Join(profileRoot, relDir)
-		dirFiles, err := copyBrowserDir(srcDir, dstDir, relDir)
+		dirFiles, err := copyBrowserDir(srcDir, dstDir, relDir, rawCtx)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				errors = append(errors, fmt.Sprintf("%s: %v", relDir, err))
@@ -547,15 +567,15 @@ func collectChromiumProfile(ctx context.Context, outDir string, profile BrowserP
 
 	if len(files) == 0 {
 		if len(errors) == 0 {
-			return nil, fmt.Errorf("no browser artifacts copied from %s", profile.Path)
+			return nil, nil, fmt.Errorf("no browser artifacts copied from %s", profile.Path)
 		}
-		return nil, fmt.Errorf("no browser artifacts copied from %s: %s", profile.Path, strings.Join(errors, "; "))
+		return nil, errors, fmt.Errorf("no browser artifacts copied from %s: %s", profile.Path, strings.Join(errors, "; "))
 	}
 
-	return files, nil
+	return files, errors, nil
 }
 
-func collectFirefoxProfile(ctx context.Context, outDir string, profile BrowserProfile) ([]module.FileInfo, error) {
+func collectFirefoxProfile(ctx context.Context, outDir string, profile BrowserProfile, rawCtx *acquisition.RawVolumePool) ([]module.FileInfo, []string, error) {
 	profileRoot := filepath.Join(
 		outDir,
 		outputDirName(profile.User),
@@ -563,7 +583,7 @@ func collectFirefoxProfile(ctx context.Context, outDir string, profile BrowserPr
 		outputDirName(profile.Name),
 	)
 	if err := os.MkdirAll(profileRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create firefox profile output dir for %s: %w", profile.Path, err)
+		return nil, nil, fmt.Errorf("create firefox profile output dir for %s: %w", profile.Path, err)
 	}
 
 	var files []module.FileInfo
@@ -572,13 +592,13 @@ func collectFirefoxProfile(ctx context.Context, outDir string, profile BrowserPr
 	for _, relPath := range firefoxEvidenceFiles {
 		select {
 		case <-ctx.Done():
-			return files, ctx.Err()
+			return files, errors, ctx.Err()
 		default:
 		}
 
 		src := filepath.Join(profile.Path, relPath)
 		dst := filepath.Join(profileRoot, relPath)
-		fi, err := copyBrowserFile(src, dst, relPath)
+		fi, err := copyBrowserFile(src, dst, relPath, rawCtx)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				errors = append(errors, fmt.Sprintf("%s: %v", relPath, err))
@@ -591,13 +611,13 @@ func collectFirefoxProfile(ctx context.Context, outDir string, profile BrowserPr
 	for _, relDir := range firefoxEvidenceDirs {
 		select {
 		case <-ctx.Done():
-			return files, ctx.Err()
+			return files, errors, ctx.Err()
 		default:
 		}
 
 		srcDir := filepath.Join(profile.Path, relDir)
 		dstDir := filepath.Join(profileRoot, relDir)
-		dirFiles, err := copyBrowserDir(srcDir, dstDir, relDir)
+		dirFiles, err := copyBrowserDir(srcDir, dstDir, relDir, rawCtx)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				errors = append(errors, fmt.Sprintf("%s: %v", relDir, err))
@@ -609,31 +629,44 @@ func collectFirefoxProfile(ctx context.Context, outDir string, profile BrowserPr
 
 	if len(files) == 0 {
 		if len(errors) == 0 {
-			return nil, fmt.Errorf("no browser artifacts copied from %s", profile.Path)
+			return nil, nil, fmt.Errorf("no browser artifacts copied from %s", profile.Path)
 		}
-		return nil, fmt.Errorf("no browser artifacts copied from %s: %s", profile.Path, strings.Join(errors, "; "))
+		return nil, errors, fmt.Errorf("no browser artifacts copied from %s: %s", profile.Path, strings.Join(errors, "; "))
 	}
 
-	return files, nil
+	return files, errors, nil
 }
 
-func copyBrowserFile(src, dst, relPath string) (module.FileInfo, error) {
+func copyBrowserFile(src, dst, relPath string, rawCtx *acquisition.RawVolumePool) (module.FileInfo, error) {
 	if _, err := os.Stat(src); err != nil {
 		return module.FileInfo{}, err
 	}
 
 	fi, err := utils.SafeCopyFile(src, dst)
-	if err != nil {
-		fi, err = utils.SafeCopyFileBackup(src, dst)
-		if err != nil {
-			return module.FileInfo{}, err
+	if err == nil {
+		fi.Path = relPath
+		return fi, nil
+	}
+
+	fi, err = utils.SafeCopyFileBackup(src, dst)
+	if err == nil {
+		fi.Path = relPath
+		return fi, nil
+	}
+
+	// Both Win32 copy paths failed (likely a share-mode lock — see rawCtx above).
+	if rawCtx != nil {
+		if _, rawErr := rawCtx.CopyFile(src, dst); rawErr == nil {
+			if rawFi, fiErr := utils.FileInfoFromPath(dst); fiErr == nil {
+				rawFi.Path = relPath
+				return rawFi, nil
+			}
 		}
 	}
-	fi.Path = relPath
-	return fi, nil
+	return module.FileInfo{}, err
 }
 
-func copyBrowserDir(srcDir, dstDir, relDir string) ([]module.FileInfo, error) {
+func copyBrowserDir(srcDir, dstDir, relDir string, rawCtx *acquisition.RawVolumePool) ([]module.FileInfo, error) {
 	info, err := os.Stat(srcDir)
 	if err != nil {
 		return nil, err
@@ -657,7 +690,7 @@ func copyBrowserDir(srcDir, dstDir, relDir string) ([]module.FileInfo, error) {
 		src := filepath.Join(srcDir, entry.Name())
 		relPath := filepath.Join(relDir, entry.Name())
 		dst := filepath.Join(dstDir, entry.Name())
-		fi, copyErr := copyBrowserFile(src, dst, relPath)
+		fi, copyErr := copyBrowserFile(src, dst, relPath, rawCtx)
 		if copyErr != nil {
 			continue
 		}

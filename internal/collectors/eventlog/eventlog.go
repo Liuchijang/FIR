@@ -86,11 +86,8 @@ func ResolveSelectedOrAllLogs(dir string) ([]string, error) {
 
 func (c *eventLogCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	log := logging.G()
-	outDir := req.ArtifactDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "eventlog")
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir("eventlog")
+	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create eventlog output dir: %w", err).Error()}
 	}
 

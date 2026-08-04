@@ -2,17 +2,20 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/Liuchijang/FIR/internal/collection"
+	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/spf13/cobra"
 )
 
 var (
 	artifactFlag    string
+	analyzeFlag     bool
 	timeoutFlag     time.Duration
 	concurrencyFlag int
 	workersFlag     int
@@ -34,6 +37,13 @@ Examples:
   fir collect --artifact registry,eventlog,prefetch
   fir collect --artifact ram,mft,registry --output C:\triage --timeout 10m
   fir collect --artifact all --workers 3 --compress
+  fir collect --artifact eventlog --analyze
+
+By default, --artifact only runs collector modules (the ones that acquire raw
+artifacts) — analyzer modules (*_parser, autoruns, process_explorer, etc.) are
+skipped even if a category or "all" would otherwise include them. Pass
+--analyze to also run the analyzer for each selected category, once its
+collector has finished.
 
 Available artifact names:
   ram, mft, usnjrnl, secure_sds, registry, eventlog,
@@ -60,6 +70,7 @@ Category shortcuts:
 
 func init() {
 	collectCmd.Flags().StringVarP(&artifactFlag, "artifact", "a", "", "Comma-separated list of artifacts or categories to collect (required)")
+	collectCmd.Flags().BoolVar(&analyzeFlag, "analyze", false, "Also run the analyzer modules for the selected artifacts/categories (default: collect only)")
 	collectCmd.Flags().DurationVarP(&timeoutFlag, "timeout", "t", collection.DefaultTimeout, "Optional timeout per module (0 disables timeout)")
 	collectCmd.Flags().IntVarP(&concurrencyFlag, "concurrency", "c", 0, "Deprecated alias for --workers")
 	collectCmd.Flags().IntVar(&workersFlag, "workers", 0, "Maximum number of concurrent modules")
@@ -94,6 +105,12 @@ func runCollect() error {
 	if err != nil {
 		return err
 	}
+	if !analyzeFlag {
+		modules = collectorsOnly(modules)
+		if len(modules) == 0 {
+			return fmt.Errorf("--artifact %s resolved only to analyzer modules; pass --analyze to run them", artifactFlag)
+		}
+	}
 	runtimeCfg := runtimeConfigFromFlags()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -101,4 +118,17 @@ func runCollect() error {
 
 	_, err = collection.Run(ctx, modules, runtimeCfg.CollectionOptions(false, collection.Callbacks{}))
 	return err
+}
+
+// collectorsOnly drops analyzer-mode modules, since --artifact/category/"all"
+// resolution otherwise mixes both collector and analyzer modules together
+// (they share the same Category) and --analyze is what opts into analyzers.
+func collectorsOnly(modules []module.Module) []module.Module {
+	result := make([]module.Module, 0, len(modules))
+	for _, mod := range modules {
+		if module.ModeOf(mod) == module.ModeCollector {
+			result = append(result, mod)
+		}
+	}
+	return result
 }

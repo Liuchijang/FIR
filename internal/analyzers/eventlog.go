@@ -9,6 +9,7 @@ import (
 
 	eventlogpkg "github.com/Liuchijang/FIR/internal/collectors/eventlog"
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func init() { module.RegisterAnalyzer(&eventLogParser{}) }
@@ -22,11 +23,8 @@ func (c *eventLogParser) Description() string {
 }
 
 func (c *eventLogParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
-	outDir := req.AnalyzerDir
-	if outDir == "" {
-		outDir = filepath.Join(req.OutputDir, "Analyzer", c.Name())
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	outDir, err := req.EnsureOutputDir(c.Name())
+	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create eventlog parser output dir: %w", err).Error()}
 	}
 
@@ -44,29 +42,45 @@ func (c *eventLogParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 
 	quotedFiles := make([]string, 0, len(selectedFiles))
 	for _, file := range selectedFiles {
-		quotedFiles = append(quotedFiles, psQuote(file))
+		quotedFiles = append(quotedFiles, utils.PSQuote(file))
 	}
 
+	// Perf notes (a full run measured 543.9s for 382 files / ~375k events):
+	//   1. Export-Csv was called once per file (382 calls) instead of once for
+	//      the whole batch — each call reopens/reformats the output file.
+	//   2. $event.LevelDisplayName resolves the severity string via the
+	//      provider's message-table resources on every single event, which is
+	//      far slower than mapping the small numeric Level enum ourselves.
+	// Streaming every event straight into one Export-Csv call, and replacing
+	// LevelDisplayName with a local lookup, removes both costs. As a side
+	// effect this also fixes a correctness bug where a file with exactly one
+	// event was silently dropped: $rows for a single event was a scalar
+	// pscustomobject (not an array), so $rows.Count was $null and the
+	// "$rows.Count -gt 0" check evaluated false.
 	script := `
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
-$sourceDir = ` + psQuote(sourceDir) + `
-$outCsv = Join-Path ` + psQuote(outDir) + ` 'eventlog_records.csv'
+$sourceDir = ` + utils.PSQuote(sourceDir) + `
+$outCsv = Join-Path ` + utils.PSQuote(outDir) + ` 'eventlog_records.csv'
 $selectedFiles = @(` + strings.Join(quotedFiles, ",\n") + `)
 if (Test-Path $outCsv) { Remove-Item -LiteralPath $outCsv -Force }
 
-$written = 0
-foreach ($fileName in $selectedFiles) {
-    $path = Join-Path $sourceDir $fileName
-    if (-not (Test-Path $path)) { continue }
+$levelNames = @{0='LogAlways';1='Critical';2='Error';3='Warning';4='Information';5='Verbose'}
 
-    $rows = foreach ($event in Get-WinEvent -Oldest -Path $path -ErrorAction SilentlyContinue) {
+$selectedFiles | ForEach-Object {
+    $fileName = $_
+    $path = Join-Path $sourceDir $fileName
+    if (-not (Test-Path $path)) { return }
+
+    foreach ($event in Get-WinEvent -Oldest -Path $path -ErrorAction SilentlyContinue) {
+        $levelName = $levelNames[[int]$event.Level]
+        if (-not $levelName) { $levelName = "Level$($event.Level)" }
         [pscustomobject]@{
             SourceFile    = $fileName
             LogName       = $event.LogName
             ProviderName  = $event.ProviderName
             Id            = $event.Id
-            Level         = $event.LevelDisplayName
+            Level         = $levelName
             TimeCreated   = $event.TimeCreated
             RecordId      = $event.RecordId
             ProcessId     = $event.ProcessId
@@ -76,31 +90,22 @@ foreach ($fileName in $selectedFiles) {
             Message       = ''
         }
     }
+} | Export-Csv -Path $outCsv -NoTypeInformation -Encoding UTF8
 
-    if ($rows -and $rows.Count -gt 0) {
-        if ($written -eq 0) {
-            $rows | Export-Csv -Path $outCsv -NoTypeInformation -Encoding UTF8
-        } else {
-            $rows | Export-Csv -Path $outCsv -NoTypeInformation -Encoding UTF8 -Append
-        }
-        $written += $rows.Count
-    }
-}
-
-if ($written -eq 0) {
+if (-not (Test-Path $outCsv)) {
     throw 'no selected EVTX records could be parsed'
 }
 `
 
-	if err := runPowerShell(ctx, script); err != nil {
-		files, fileErr := collectGeneratedCSVs(outDir)
+	if err := utils.RunPowerShell(ctx, script); err != nil {
+		files, fileErr := utils.CollectGeneratedCSVs(outDir)
 		if fileErr == nil && len(files) > 0 {
 			return module.AnalyzeResult{Files: files, OutputPath: outDir, Error: fmt.Errorf("parse event logs: %w", err).Error()}
 		}
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("parse event logs: %w", err).Error()}
 	}
 
-	files, err := collectGeneratedCSVs(outDir)
+	files, err := utils.CollectGeneratedCSVs(outDir)
 	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 	}
