@@ -235,20 +235,13 @@ func resolveMenuResults(finished menuModel) ([]module.Module, bool, error) {
 	if len(selected) == 0 {
 		return nil, false, nil
 	}
-	if finished.needsBrowserProfiles() {
-		paths := finished.profileResults()
-		if len(paths) == 0 {
-			return nil, false, fmt.Errorf("browser module selected but no profile paths were chosen")
-		}
-		browser.ConfigureProfiles(paths)
+	if finished.needsBrowserProfiles() && len(finished.profileResults()) == 0 {
+		return nil, false, fmt.Errorf("browser module selected but no profile paths were chosen")
 	}
-	if finished.needsEventLogSelection() {
-		names := finished.eventLogResults()
-		if len(names) == 0 {
-			return nil, false, fmt.Errorf("eventlog parser selected but no EVTX files were chosen")
-		}
-		eventlogpkg.ConfigureSelectedLogs(names)
+	if finished.needsEventLogSelection() && len(finished.eventLogResults()) == 0 {
+		return nil, false, fmt.Errorf("eventlog module selected but no EVTX files were chosen")
 	}
+	finished.applySelections()
 
 	return selected, false, nil
 }
@@ -606,7 +599,17 @@ func (m menuModel) enterRunConfig() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// applySelections pushes the current picks down to the collector packages. The
+// storage estimate asks each collector how much it will write, so the picks have to
+// be visible there before the estimate is computed — not only once the menu
+// finishes, which left the run config showing the figure for everything.
+func (m menuModel) applySelections() {
+	browser.ConfigureProfiles(m.profileResults())
+	eventlogpkg.ConfigureSelectedLogs(m.eventLogResults())
+}
+
 func (m *menuModel) refreshStorageEstimate() {
+	m.applySelections()
 	m.storageEstimate = resource.EstimateStorage(m.outputBaseDir, m.moduleResults(), m.resourceConfig.Compress)
 }
 
