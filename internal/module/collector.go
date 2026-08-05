@@ -78,3 +78,11 @@ func ModeDirName(mode string) string {
 func ModuleDir(outputDir string, m Module) string {
 	return artifact.ModuleDir(outputDir, ModeOf(m), m.Name(), m.Category())
 }
+
+func TotalSize(files []FileInfo) int64 {
+	var total int64
+	for _, file := range files {
+		total += file.Size
+	}
+	return total
+}

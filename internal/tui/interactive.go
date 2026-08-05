@@ -210,35 +210,6 @@ type menuModel struct {
 	completed bool
 }
 
-func RunInteractiveMenu() ([]module.Module, error) {
-	browser.ConfigureProfiles(nil)
-	eventlogpkg.ConfigureSelectedLogs(nil)
-
-	model := newMenuModel()
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
-	finalModel, err := program.Run()
-	if err != nil {
-		return nil, err
-	}
-
-	finished, ok := finalModel.(menuModel)
-	if !ok {
-		return nil, fmt.Errorf("unexpected interactive model type: %T", finalModel)
-	}
-	selected, cancelled, err := resolveMenuResults(finished)
-	if err != nil {
-		return nil, err
-	}
-	if cancelled {
-		return nil, nil
-	}
-	return selected, nil
-}
-
-func NewInteractiveMenuTeaModel() tea.Model {
-	return NewInteractiveMenuTeaModelWithConfig(".", resource.DefaultConfig())
-}
-
 func NewInteractiveMenuTeaModelWithConfig(outputBaseDir string, resources resource.Config) tea.Model {
 	browser.ConfigureProfiles(nil)
 	eventlogpkg.ConfigureSelectedLogs(nil)
@@ -247,11 +218,6 @@ func NewInteractiveMenuTeaModelWithConfig(outputBaseDir string, resources resour
 	model.resourceConfig = resources.Normalized()
 	model.refreshStorageEstimate()
 	return model
-}
-
-func InteractiveMenuFinished(model tea.Model) (done bool, modules []module.Module, cancelled bool, err error) {
-	done, result, cancelled, err := InteractiveMenuFinishedWithConfig(model)
-	return done, result.Modules, cancelled, err
 }
 
 func InteractiveMenuFinishedWithConfig(model tea.Model) (done bool, result RunConfigResult, cancelled bool, err error) {
@@ -482,7 +448,7 @@ func (m menuModel) updateCollectors(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "home", "g":
 		m.collectorCursor = 0
 	case "end", "G":
-		m.collectorCursor = maxInt(0, len(m.modules)-1)
+		m.collectorCursor = max(0, len(m.modules)-1)
 	case " ":
 		if len(m.modules) > 0 {
 			m.selectedCollectors[m.collectorCursor] = !m.selectedCollectors[m.collectorCursor]
@@ -538,7 +504,7 @@ func (m menuModel) updateProfiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "home", "g":
 		m.profileCursor = 0
 	case "end", "G":
-		m.profileCursor = maxInt(0, len(m.profiles)-1)
+		m.profileCursor = max(0, len(m.profiles)-1)
 	case " ":
 		if len(m.profiles) > 0 {
 			m.selectedProfiles[m.profileCursor] = !m.selectedProfiles[m.profileCursor]
@@ -592,7 +558,7 @@ func (m menuModel) updateEventLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "home", "g":
 		m.eventLogCursor = 0
 	case "end", "G":
-		m.eventLogCursor = maxInt(0, len(m.eventLogs)-1)
+		m.eventLogCursor = max(0, len(m.eventLogs)-1)
 	case " ":
 		if len(m.eventLogs) > 0 {
 			m.selectedEventLogs[m.eventLogCursor] = !m.selectedEventLogs[m.eventLogCursor]
@@ -696,15 +662,15 @@ func (m *menuModel) adjustRunConfig(direction int) {
 	host := resource.DetectHostResources()
 	switch m.configCursor {
 	case 0:
-		m.resourceConfig.CPULimitPercent = clampInt(m.resourceConfig.CPULimitPercent+direction*10, resource.MinCPULimitPercent, resource.MaxCPULimitPercent)
+		m.resourceConfig.CPULimitPercent = min(max(m.resourceConfig.CPULimitPercent+direction*10, resource.MinCPULimitPercent), resource.MaxCPULimitPercent)
 	case 1:
 		m.resourceConfig.RAMCapBytes += int64(direction) * 512 * 1024 * 1024
-		m.resourceConfig.RAMCapBytes = clampInt64(m.resourceConfig.RAMCapBytes, resource.MinRAMCapBytes, resource.MaxRAMCapBytes(host))
+		m.resourceConfig.RAMCapBytes = min(max(m.resourceConfig.RAMCapBytes, resource.MinRAMCapBytes), resource.MaxRAMCapBytes(host))
 	case 2:
-		m.resourceConfig.Workers = clampInt(m.resourceConfig.Workers+direction, resource.MinWorkers, resource.MaxWorkers(host))
+		m.resourceConfig.Workers = min(max(m.resourceConfig.Workers+direction, resource.MinWorkers), resource.MaxWorkers(host))
 	case 3:
 		m.resourceConfig.DiskIOLimitBps += int64(direction) * 10 * 1024 * 1024
-		m.resourceConfig.DiskIOLimitBps = clampInt64(m.resourceConfig.DiskIOLimitBps, resource.MinDiskIOLimitBps, resource.MaxDiskIOLimitBps)
+		m.resourceConfig.DiskIOLimitBps = min(max(m.resourceConfig.DiskIOLimitBps, resource.MinDiskIOLimitBps), resource.MaxDiskIOLimitBps)
 	case 4:
 		m.resourceConfig.Compress = !m.resourceConfig.Compress
 	}
@@ -722,7 +688,7 @@ func (m menuModel) View() string {
 
 	header := m.headerView(width)
 	footer := m.footerView(width)
-	bodyHeight := maxInt(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
+	bodyHeight := max(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
 	body := m.bodyView(width, bodyHeight)
 
 	ui := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
@@ -734,7 +700,7 @@ func (m menuModel) View() string {
 }
 
 func (m menuModel) headerView(width int) string {
-	innerWidth := maxInt(10, width-boxBorderStyle.GetHorizontalFrameSize())
+	innerWidth := max(10, width-boxBorderStyle.GetHorizontalFrameSize())
 	leftWidth, rightWidth := BannerColumnWidths(innerWidth)
 
 	leftLogo := BannerLogoLines()
@@ -770,13 +736,13 @@ func (m menuModel) headerView(width int) string {
 	row := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", BannerColumnGap), right)
 
 	return boxBorderStyle.
-		Width(maxInt(1, width-2)).
+		Width(max(1, width-2)).
 		Height(6).
 		Render(row)
 }
 
 func (m menuModel) footerView(width int) string {
-	innerWidth := maxInt(1, width-menuFooterStyle.GetHorizontalFrameSize())
+	innerWidth := max(1, width-menuFooterStyle.GetHorizontalFrameSize())
 	statusLine := subtleStyle.Render(trimToWidth(m.status, innerWidth))
 	helpLine := helpStyle.Render(trimToWidth(m.help.View(newMenuKeyMap()), innerWidth))
 	return menuFooterStyle.
@@ -934,10 +900,10 @@ func (m menuModel) profileTitleWidth(width int) int {
 }
 
 func (m menuModel) columnTitleWidth(width, longestTitle int) int {
-	available := maxInt(1, width-7)
+	available := max(1, width-7)
 	minWidth := 18
 	if available < minWidth {
-		minWidth = maxInt(8, available/2)
+		minWidth = max(8, available/2)
 	}
 	maxWidth := available - 2
 	if maxWidth < minWidth {
@@ -950,85 +916,95 @@ func (m menuModel) columnTitleWidth(width, longestTitle int) int {
 	if preferred < minWidth {
 		preferred = minWidth
 	}
-	return clampInt(preferred, minWidth, maxWidth)
+	return min(max(preferred, minWidth), maxWidth)
 }
 
-func (m menuModel) renderOptions(total int, render func(int) string) string {
-	lines := make([]string, 0, total)
-	for idx := 0; idx < total; idx++ {
-		lines = append(lines, render(idx))
+// listWindow is the slice of a list to draw, plus the counts for the "N above/below"
+// indicator lines. A zero count means that indicator is not drawn.
+type listWindow struct {
+	start, end int
+	above      int
+	below      int
+}
+
+func (w listWindow) rows() int {
+	rows := w.end - w.start
+	if w.above > 0 {
+		rows++
 	}
-	return strings.Join(lines, "\n")
+	if w.below > 0 {
+		rows++
+	}
+	return rows
+}
+
+// windowFor picks the visible slice around cursor and only claims indicator lines
+// the row budget can actually pay for. The indicators are part of the rendered
+// block, so counting them separately let the block exceed visibleRows and the
+// viewport clipped the last line — which is the cursor row when the list is
+// scrolled to the bottom.
+func windowFor(total, cursor, visibleRows int) listWindow {
+	if total <= 0 || visibleRows <= 0 {
+		return listWindow{}
+	}
+	if visibleRows >= total {
+		return listWindow{end: total}
+	}
+
+	reserve := min(2, max(0, visibleRows-1))
+	rows := max(1, visibleRows-reserve)
+	start := max(0, min(cursor-rows/2, total-rows))
+	end := min(start+rows, total)
+
+	w := listWindow{start: start, end: end}
+	spare := visibleRows - (end - start)
+	if start > 0 && spare > 0 {
+		w.above = start
+		spare--
+	}
+	if end < total && spare > 0 {
+		w.below = total - end
+	}
+	return w
 }
 
 func (m menuModel) renderWindowedOptions(total, cursor, visibleRows int, render func(int) string) string {
-	if total == 0 {
+	w := windowFor(total, cursor, visibleRows)
+	if w.rows() == 0 {
 		return ""
 	}
-	if visibleRows <= 0 {
-		return ""
-	}
-	if visibleRows >= total {
-		return m.renderOptions(total, render)
-	}
 
-	start := cursor - visibleRows/2
-	if start < 0 {
-		start = 0
+	lines := make([]string, 0, w.rows())
+	if w.above > 0 {
+		lines = append(lines, subtleStyle.Render(fmt.Sprintf("... %d items above ...", w.above)))
 	}
-	end := start + visibleRows
-	if end > total {
-		end = total
-		start = maxInt(0, end-visibleRows)
-	}
-
-	lines := make([]string, 0, end-start+2)
-	if start > 0 {
-		lines = append(lines, subtleStyle.Render(fmt.Sprintf("... %d items above ...", start)))
-	}
-	for idx := start; idx < end; idx++ {
+	for idx := w.start; idx < w.end; idx++ {
 		lines = append(lines, render(idx))
 	}
-	if end < total {
-		lines = append(lines, subtleStyle.Render(fmt.Sprintf("... %d items below ...", total-end)))
+	if w.below > 0 {
+		lines = append(lines, subtleStyle.Render(fmt.Sprintf("... %d items below ...", w.below)))
 	}
 	return strings.Join(lines, "\n")
 }
 
 func (m menuModel) renderWindowedLines(lines []string, lineByItem []int, cursor, visibleRows int) string {
-	total := len(lines)
-	if total == 0 {
-		return ""
-	}
-	if visibleRows <= 0 {
-		return ""
-	}
-	if visibleRows >= total {
-		return strings.Join(lines, "\n")
-	}
-
 	cursorLine := 0
 	if cursor >= 0 && cursor < len(lineByItem) {
 		cursorLine = lineByItem[cursor]
 	}
 
-	start := cursorLine - visibleRows/2
-	if start < 0 {
-		start = 0
-	}
-	end := start + visibleRows
-	if end > total {
-		end = total
-		start = maxInt(0, end-visibleRows)
+	w := windowFor(len(lines), cursorLine, visibleRows)
+	if w.rows() == 0 {
+		return ""
 	}
 
-	window := make([]string, 0, end-start+2)
-	if start > 0 {
-		window = append(window, subtleStyle.Render(fmt.Sprintf("... %d lines above ...", start)))
+	window := make([]string, 0, w.rows())
+	if w.above > 0 {
+		window = append(window, subtleStyle.Render(fmt.Sprintf("... %d lines above ...", w.above)))
 	}
-	window = append(window, lines[start:end]...)
-	if end < total {
-		window = append(window, subtleStyle.Render(fmt.Sprintf("... %d lines below ...", total-end)))
+	window = append(window, lines[w.start:w.end]...)
+	if w.below > 0 {
+		window = append(window, subtleStyle.Render(fmt.Sprintf("... %d lines below ...", w.below)))
 	}
 	return strings.Join(window, "\n")
 }
@@ -1064,7 +1040,7 @@ func renderSelectableRow(cursor, selected bool, title, detail, category string, 
 	}
 
 	prefix := fmt.Sprintf("%s %s ", cursorTextStyle.Render(cursorText), checkStyle.Render(check))
-	available := maxInt(1, width-lipgloss.Width(prefix))
+	available := max(1, width-lipgloss.Width(prefix))
 	if available < 16 {
 		return prefix + itemStyle.Render(trimToWidth(title, available))
 	}
@@ -1074,7 +1050,7 @@ func renderSelectableRow(cursor, selected bool, title, detail, category string, 
 	}
 
 	if titleWidth > available-5 {
-		titleWidth = maxInt(8, (available*2)/3)
+		titleWidth = max(8, (available*2)/3)
 	}
 	if titleWidth < 8 {
 		titleWidth = 8
@@ -1099,12 +1075,12 @@ func (m menuModel) bodyView(width, height int) string {
 		return ""
 	}
 
-	innerWidth := maxInt(1, width-boxBorderStyle.GetHorizontalFrameSize())
-	innerHeight := maxInt(1, height-boxBorderStyle.GetVerticalFrameSize())
+	innerWidth := max(1, width-boxBorderStyle.GetHorizontalFrameSize())
+	innerHeight := max(1, height-boxBorderStyle.GetVerticalFrameSize())
 	content := PadViewport(m.bodyContent(innerWidth, innerHeight), innerWidth, innerHeight)
 	return boxBorderStyle.
-		Width(maxInt(1, width-2)).
-		Height(maxInt(1, height-2)).
+		Width(max(1, width-2)).
+		Height(max(1, height-2)).
 		Render(content)
 }
 
@@ -1119,7 +1095,7 @@ func (m menuModel) bodyContent(width, height int) string {
 		"",
 	}
 
-	availableRows := maxInt(0, height-len(lines))
+	availableRows := max(0, height-len(lines))
 	if availableRows <= 0 {
 		if height < len(lines) {
 			return strings.Join(lines[:height], "\n")

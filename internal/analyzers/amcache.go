@@ -825,10 +825,18 @@ func readRegistryFirstJoinedString(key winreg.Key, names ...string) string {
 	return ""
 }
 
+// Amcache pads FileId/DriverId with four leading zeros before the 40-char SHA-1.
+// Only that pad may be dropped — trimming every leading zero also eats the hash's
+// own, producing a wrong hash for roughly one entry in sixteen.
 func normalizeAmcacheSHA1(value string) string {
 	value = strings.TrimSpace(strings.ToLower(value))
-	value = strings.TrimLeft(value, "0")
-	return value
+	if strings.Trim(value, "0") == "" {
+		return ""
+	}
+	if len(value) == 44 {
+		return value[4:]
+	}
+	return strings.TrimPrefix(value, "0000")
 }
 
 func stageLiveAmcacheHive() (string, func(), error) {

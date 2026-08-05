@@ -9,6 +9,7 @@ import (
 
 	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/platform"
+	"github.com/Liuchijang/FIR/internal/resource"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wordwrap"
 )
@@ -108,7 +109,7 @@ func (r SummaryReport) Render() string {
 			result.CollectorName,
 			resultStatus(result),
 			fmt.Sprintf("%d", len(result.FilesCollected)),
-			formatBytes(totalSize(result.FilesCollected)),
+			resource.FormatBytes(module.TotalSize(result.FilesCollected)),
 			formatDuration(result.Duration),
 			resultErrorBrief(result, 48),
 		})
@@ -180,7 +181,7 @@ func (r SummaryReport) WarningResults() []module.Result {
 }
 
 func (r SummaryReport) RenderTerminal(width int) string {
-	width = maxInt(width, 12)
+	width = max(width, 12)
 
 	// No "Collection Summary" heading here: the TUI already renders that phase title
 	// directly above this viewport (see CollectionProgressModel.bodyHeaderLines), so
@@ -199,7 +200,7 @@ func (r SummaryReport) RenderTerminal(width int) string {
 			header := fmt.Sprintf("! [%s] %s duration=%s", result.Category, result.CollectorName, formatDuration(result.Duration))
 			b.WriteString(failureHeaderStyle.Render(trimToWidth(header, width)))
 			b.WriteString("\n")
-			b.WriteString(wrapText("error: "+sanitizeCell(result.Error), maxInt(12, width-2), "  "))
+			b.WriteString(wrapText("error: "+sanitizeCell(result.Error), max(12, width-2), "  "))
 			b.WriteString("\n")
 		}
 	}
@@ -213,7 +214,7 @@ func (r SummaryReport) RenderTerminal(width int) string {
 			header := fmt.Sprintf("* [%s] %s duration=%s", result.Category, result.CollectorName, formatDuration(result.Duration))
 			b.WriteString(warningHeaderStyle.Render(trimToWidth(header, width)))
 			b.WriteString("\n")
-			b.WriteString(wrapText("warning: "+sanitizeCell(result.Error), maxInt(12, width-2), "  "))
+			b.WriteString(wrapText("warning: "+sanitizeCell(result.Error), max(12, width-2), "  "))
 			b.WriteString("\n")
 		}
 	}
@@ -227,27 +228,6 @@ func WriteSummary(outputDir string, report SummaryReport) error {
 		return fmt.Errorf("write summary.txt: %w", err)
 	}
 	return nil
-}
-
-func renderTable(headers []string, rows [][]string) string {
-	widths := make([]int, len(headers))
-	for idx, header := range headers {
-		widths[idx] = len(header)
-	}
-
-	for _, row := range rows {
-		for idx := range headers {
-			value := ""
-			if idx < len(row) {
-				value = sanitizeCell(row[idx])
-			}
-			if len(value) > widths[idx] {
-				widths[idx] = len(value)
-			}
-		}
-	}
-
-	return renderFixedWidthTable(headers, widths, rows)
 }
 
 func renderTerminalInfoTable(report SummaryReport, width int) string {
@@ -272,11 +252,11 @@ func renderTerminalInfoTable(report SummaryReport, width int) string {
 		for _, row := range rows {
 			compactRows = append(compactRows, []string{row[0] + ": " + row[1]})
 		}
-		return renderStyledTable([]string{"Info"}, []int{maxInt(1, width-4)}, compactRows, -1)
+		return renderStyledTable([]string{"Info"}, []int{max(1, width-4)}, compactRows, -1)
 	}
 
-	fieldWidth := clampInt((width-7)/3, 6, 18)
-	valueWidth := maxInt(10, width-7-fieldWidth)
+	fieldWidth := min(max((width-7)/3, 6), 18)
+	valueWidth := max(10, width-7-fieldWidth)
 	return renderStyledTable([]string{"Field", "Value"}, []int{fieldWidth, valueWidth}, rows, -1)
 }
 
@@ -284,14 +264,14 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 	switch {
 	case width >= 95:
 		rows := make([][]string, 0, len(results))
-		errorWidth := maxInt(16, width-tableWidth([]int{16, 10, 8, 5, 10, 8, 0}))
+		errorWidth := max(16, width-tableWidth([]int{16, 10, 8, 5, 10, 8, 0}))
 		for _, result := range results {
 			rows = append(rows, []string{
 				result.Category,
 				result.CollectorName,
 				resultStatus(result),
 				fmt.Sprintf("%d", len(result.FilesCollected)),
-				formatBytes(totalSize(result.FilesCollected)),
+				resource.FormatBytes(module.TotalSize(result.FilesCollected)),
 				formatDuration(result.Duration),
 				resultError(result),
 			})
@@ -311,13 +291,13 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 				result.CollectorName,
 				resultStatus(result),
 				fmt.Sprintf("%d", len(result.FilesCollected)),
-				formatBytes(totalSize(result.FilesCollected)),
+				resource.FormatBytes(module.TotalSize(result.FilesCollected)),
 				formatDuration(result.Duration),
 			})
 		}
 		return renderStyledTable(
 			[]string{"Category", "Module", "Status", "Files", "Size", "Duration"},
-			[]int{10, 16, 8, 5, 10, maxInt(8, width-tableWidth([]int{10, 16, 8, 5, 10, 0}))},
+			[]int{10, 16, 8, 5, 10, max(8, width-tableWidth([]int{10, 16, 8, 5, 10, 0}))},
 			rows,
 			2,
 		)
@@ -334,7 +314,7 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 		}
 		return renderStyledTable(
 			[]string{"Collector", "Status", "Files", "Duration"},
-			[]int{16, 10, 7, maxInt(8, width-tableWidth([]int{16, 10, 7, 0}))},
+			[]int{16, 10, 7, max(8, width-tableWidth([]int{16, 10, 7, 0}))},
 			rows,
 			1,
 		)
@@ -350,7 +330,7 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 		}
 		return renderStyledTable(
 			[]string{"Collector", "Status", "Duration"},
-			[]int{12, 8, maxInt(8, width-tableWidth([]int{12, 8, 0}))},
+			[]int{12, 8, max(8, width-tableWidth([]int{12, 8, 0}))},
 			rows,
 			1,
 		)
@@ -365,7 +345,7 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 			}
 			return renderStyledTable(
 				[]string{"Collector"},
-				[]int{maxInt(1, width-4)},
+				[]int{max(1, width-4)},
 				rows,
 				-1,
 			)
@@ -380,7 +360,7 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 		}
 		return renderStyledTable(
 			[]string{"Collector", "Status"},
-			[]int{8, maxInt(8, width-tableWidth([]int{8, 0}))},
+			[]int{8, max(8, width-tableWidth([]int{8, 0}))},
 			rows,
 			1,
 		)
@@ -548,14 +528,6 @@ func sanitizeCell(value string) string {
 	return value
 }
 
-func totalSize(files []module.FileInfo) int64 {
-	var total int64
-	for _, file := range files {
-		total += file.Size
-	}
-	return total
-}
-
 func formatDuration(d time.Duration) string {
 	if d <= 0 {
 		return "0s"
@@ -571,20 +543,6 @@ func formatTimeout(d time.Duration) string {
 		return "disabled"
 	}
 	return d.String()
-}
-
-func formatBytes(size int64) string {
-	const unit = 1024
-	if size < unit {
-		return fmt.Sprintf("%d B", size)
-	}
-
-	div, exp := int64(unit), 0
-	for n := size / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(size)/float64(div), "KMGTPE"[exp])
 }
 
 func wrapText(value string, width int, indent string) string {
@@ -659,21 +617,4 @@ func trimToWidth(value string, width int) string {
 		return suffix
 	}
 	return string(runes) + suffix
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func clampInt(value, minValue, maxValue int) int {
-	if value < minValue {
-		return minValue
-	}
-	if value > maxValue {
-		return maxValue
-	}
-	return value
 }

@@ -141,16 +141,3 @@ func Modes() []string {
 	}
 	return modes
 }
-
-// Names returns a sorted list of all registered module names.
-func Names() []string {
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-
-	names := make([]string, 0, len(registry.collectors))
-	for name := range registry.collectors {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}

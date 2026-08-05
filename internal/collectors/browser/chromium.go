@@ -18,9 +18,6 @@ import (
 
 const BrowserCollectorName = "browser"
 
-// ChromiumCollectorName is kept as a compatibility alias for existing code.
-const ChromiumCollectorName = BrowserCollectorName
-
 const (
 	browserFamilyChromium = "chromium"
 	browserFamilyFirefox  = "firefox"
@@ -180,10 +177,6 @@ func ConfigureProfiles(paths []string) {
 	browserSelection.paths = append([]string(nil), paths...)
 }
 
-func ConfigureChromiumProfiles(paths []string) {
-	ConfigureProfiles(paths)
-}
-
 func ResolveProfiles() ([]BrowserProfile, error) {
 	return resolveSelectedProfiles()
 }
@@ -214,10 +207,6 @@ func DiscoverProfiles() ([]BrowserProfile, error) {
 	}
 
 	return profiles, nil
-}
-
-func DiscoverChromiumProfiles() ([]BrowserProfile, error) {
-	return DiscoverProfiles()
 }
 
 func (c *browserCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {

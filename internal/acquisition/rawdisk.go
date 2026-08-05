@@ -185,6 +185,18 @@ func (v *RawVolume) GetNTFSVolumeData() (*NTFSVolumeData, error) {
 		return nil, fmt.Errorf("DeviceIoControl(FSCTL_GET_NTFS_VOLUME_DATA): %w", err)
 	}
 
+	// Validated once here because every geometry value below is a divisor or a
+	// stride somewhere downstream; a zero reaches those as a divide-by-zero panic
+	// or a negative slice index.
+	switch {
+	case raw.BytesPerSector == 0:
+		return nil, fmt.Errorf("volume reported zero bytes per sector")
+	case raw.BytesPerCluster == 0:
+		return nil, fmt.Errorf("volume reported zero bytes per cluster")
+	case raw.BytesPerFileRecordSegment == 0:
+		return nil, fmt.Errorf("volume reported zero bytes per file record segment")
+	}
+
 	v.sector = raw.BytesPerSector
 
 	return &NTFSVolumeData{
@@ -241,60 +253,23 @@ func (v *RawVolume) ReadAtOffset(offset int64, size int64) ([]byte, error) {
 	return buf[leadingBytes : leadingBytes+size], nil
 }
 
-// CopyMFTToFile copies the $MFT from the raw volume to the specified output file.
-// Uses NTFS volume data to locate and size the MFT.
+// CopyMFTToFile copies the $MFT from the raw volume to outputPath.
+//
+// It must follow $MFT's data runs rather than reading linearly from MFTStartLCN:
+// $MFT is routinely fragmented on aged volumes, and everything past the first
+// extent of a linear read is unrelated file data. The analyzer path already reads
+// through these runs, so a linear copy here also made collector and analyzer
+// disagree about the same volume.
 func (v *RawVolume) CopyMFTToFile(volData *NTFSVolumeData, outputPath string) (int64, error) {
-	mftOffset := int64(volData.MFTStartLCN) * int64(volData.BytesPerCluster)
-	mftSize := int64(volData.MFTValidDataLength)
-
-	_, err := windows.Seek(v.handle, mftOffset, io.SeekStart)
-	if err != nil {
-		return 0, fmt.Errorf("seek to MFT offset %d: %w", mftOffset, err)
+	if err := v.ensureMFTDataRuns(volData); err != nil {
+		return 0, err
 	}
 
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		return 0, fmt.Errorf("create MFT output file: %w", err)
+	size := int64(volData.MFTValidDataLength)
+	if size <= 0 || (volData.mftRealSize > 0 && volData.mftRealSize < size) {
+		size = volData.mftRealSize
 	}
-	defer outFile.Close()
-
-	sectorSize := int64(v.sector)
-	bufSize := sectorSize * 1024
-	buf := make([]byte, bufSize)
-
-	var totalWritten int64
-	remaining := mftSize
-
-	for remaining > 0 {
-		readSize := bufSize
-		if int64(readSize) > remaining {
-			readSize = ((remaining + sectorSize - 1) / sectorSize) * sectorSize
-		}
-
-		var n uint32
-		err := windows.ReadFile(v.handle, buf[:readSize], &n, nil)
-		if err != nil {
-			return totalWritten, fmt.Errorf("read MFT data: %w", err)
-		}
-		if n == 0 {
-			break
-		}
-
-		// Write only the valid portion (not padding).
-		writeSize := int64(n)
-		if writeSize > remaining {
-			writeSize = remaining
-		}
-
-		written, err := outFile.Write(buf[:writeSize])
-		if err != nil {
-			return totalWritten, fmt.Errorf("write MFT data: %w", err)
-		}
-		totalWritten += int64(written)
-		remaining -= int64(written)
-	}
-
-	return totalWritten, nil
+	return v.CopyDataRunsToFile(volData, volData.mftDataRuns, size, outputPath)
 }
 
 func (v *RawVolume) ReadMFTRecord(volData *NTFSVolumeData, recordNumber uint64) ([]byte, error) {
@@ -410,9 +385,9 @@ func (v *RawVolume) CopyDataRunsToFile(volData *NTFSVolumeData, runs []DataRun, 
 		}
 
 		if run.Sparse {
-			zero := make([]byte, min64(chunkSize, runBytes))
+			zero := make([]byte, min(chunkSize, runBytes))
 			for written := int64(0); written < runBytes; {
-				toWrite := min64(int64(len(zero)), runBytes-written)
+				toWrite := min(int64(len(zero)), runBytes-written)
 				n, err := outFile.Write(zero[:toWrite])
 				if err != nil {
 					return totalWritten, fmt.Errorf("write sparse run: %w", err)
@@ -425,7 +400,7 @@ func (v *RawVolume) CopyDataRunsToFile(volData *NTFSVolumeData, runs []DataRun, 
 
 		runOffset := run.LCN * bytesPerCluster
 		for consumed := int64(0); consumed < runBytes; {
-			toRead := min64(chunkSize, runBytes-consumed)
+			toRead := min(chunkSize, runBytes-consumed)
 			buf, err := v.ReadAtOffset(runOffset+consumed, toRead)
 			if err != nil {
 				return totalWritten, fmt.Errorf("read run at offset %d: %w", runOffset+consumed, err)
@@ -439,6 +414,14 @@ func (v *RawVolume) CopyDataRunsToFile(volData *NTFSVolumeData, runs []DataRun, 
 		}
 	}
 
+	if err := outFile.Sync(); err != nil {
+		return totalWritten, fmt.Errorf("sync output: %w", err)
+	}
+	// A run list that does not cover realSize means the copy is truncated. Reporting
+	// success here would hand the caller a short file to hash and record as evidence.
+	if totalWritten < realSize {
+		return totalWritten, fmt.Errorf("run list covers %d of %d bytes", totalWritten, realSize)
+	}
 	return totalWritten, nil
 }
 
@@ -469,7 +452,7 @@ func (v *RawVolume) ReadDataRuns(volData *NTFSVolumeData, runs []DataRun, realSi
 
 		runOffset := run.LCN * bytesPerCluster
 		for consumed := int64(0); consumed < runBytes; {
-			toRead := min64(1024*1024, runBytes-consumed)
+			toRead := min(1024*1024, runBytes-consumed)
 			buf, err := v.ReadAtOffset(runOffset+consumed, toRead)
 			if err != nil {
 				return nil, fmt.Errorf("read run at offset %d: %w", runOffset+consumed, err)
@@ -506,8 +489,8 @@ func (v *RawVolume) ReadLogicalFromRuns(volData *NTFSVolumeData, runs []DataRun,
 			break
 		}
 
-		segmentStart := max64(logicalOffset, runLogicalStart)
-		segmentEnd := min64(logicalOffset+size, runLogicalEnd)
+		segmentStart := max(logicalOffset, runLogicalStart)
+		segmentEnd := min(logicalOffset+size, runLogicalEnd)
 		segmentSize := segmentEnd - segmentStart
 		if segmentSize <= 0 {
 			runLogicalStart = runLogicalEnd
@@ -587,6 +570,9 @@ func (v *RawVolume) ensureMFTDataRuns(volData *NTFSVolumeData) error {
 func applyNTFSFixup(record []byte, sectorSize int) error {
 	if len(record) < 8 {
 		return fmt.Errorf("record too small")
+	}
+	if sectorSize <= 0 {
+		return fmt.Errorf("invalid sector size %d", sectorSize)
 	}
 	usaOffset := int(binary.LittleEndian.Uint16(record[4:6]))
 	usaCount := int(binary.LittleEndian.Uint16(record[6:8]))
@@ -1032,14 +1018,21 @@ func parseDataRuns(data []byte) ([]DataRun, error) {
 
 		lenSize := int(header & 0x0F)
 		offSize := int(header >> 4)
-		if lenSize == 0 || i+lenSize+offSize > len(data) {
-			return nil, fmt.Errorf("invalid data run")
+		if lenSize == 0 || lenSize > 8 || offSize > 8 || i+lenSize+offSize > len(data) {
+			return nil, fmt.Errorf("invalid data run header %#02x", header)
 		}
 
-		runLen := readSignedLittleEndian(data[i : i+lenSize])
+		// The run length is unsigned; only the LCN offset is signed, so that
+		// fragments can point backwards on disk. Sign-extending the length turns
+		// any fragment of 128+ clusters negative, which callers read as
+		// end-of-runs and stop copying mid-file.
+		runLen := readUnsignedLittleEndian(data[i : i+lenSize])
 		i += lenSize
 		runOff := readSignedLittleEndian(data[i : i+offSize])
 		i += offSize
+		if runLen <= 0 {
+			return nil, fmt.Errorf("invalid data run length %d", runLen)
+		}
 
 		sparse := offSize == 0
 		if !sparse {
@@ -1053,6 +1046,14 @@ func parseDataRuns(data []byte) ([]DataRun, error) {
 	}
 
 	return runs, nil
+}
+
+func readUnsignedLittleEndian(data []byte) int64 {
+	var value int64
+	for i := len(data) - 1; i >= 0; i-- {
+		value = value<<8 | int64(data[i])
+	}
+	return value
 }
 
 func readSignedLittleEndian(data []byte) int64 {
@@ -1086,18 +1087,4 @@ func filepathDir(path string) string {
 		return "."
 	}
 	return path[:idx]
-}
-
-func min64(a, b int64) int64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }

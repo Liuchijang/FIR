@@ -126,12 +126,45 @@ func runModule(parent context.Context, mod module.Module, mgr *output.Manager, t
 		finalizeResult(ctx, &result)
 	}()
 
-	if outcome, ok := runRequestModule(ctx, mod, mgr.BaseDir(), artifactDir, startedAt, selectedModules); ok {
-		applyModuleOutcome(ctx, mod, &result, outcome, log, startedAt)
+	// A module that ignores ctx would otherwise block this worker forever — raw-volume
+	// reads are unbounded blocking syscalls — and wg.Wait() would never return, so the
+	// run could never write its manifest or summary. Watch the module instead and
+	// abandon the goroutine on timeout: a leaked goroutine costs less than a run that
+	// never finishes and produces no evidence metadata.
+	completed := make(chan moduleRun, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				completed <- moduleRun{panicValue: recovered}
+			}
+		}()
+		if outcome, ok := runRequestModule(ctx, mod, mgr.BaseDir(), artifactDir, startedAt, selectedModules); ok {
+			completed <- moduleRun{outcome: outcome, viaRequest: true}
+			return
+		}
+		files, err := mod.Collect(ctx, mgr.BaseDir())
+		completed <- moduleRun{files: files, err: err}
+	}()
+
+	var run moduleRun
+	select {
+	case run = <-completed:
+	case <-ctx.Done():
+		result.Success = false
+		result.Error = fmt.Sprintf("module did not return before %s", ctx.Err())
+		log.Failed(mod.Name(), fmt.Errorf("%s", result.Error))
 		return result
 	}
 
-	files, err := mod.Collect(ctx, mgr.BaseDir())
+	if run.panicValue != nil {
+		panic(run.panicValue)
+	}
+	if run.viaRequest {
+		applyModuleOutcome(ctx, mod, &result, run.outcome, log, startedAt)
+		return result
+	}
+
+	files, err := run.files, run.err
 	result.FilesCollected = files
 	if err != nil {
 		result.Error = err.Error()
@@ -153,6 +186,14 @@ func runModule(parent context.Context, mod module.Module, mgr *output.Manager, t
 	result.Success = true
 	log.Done(mod.Name(), len(files), "artifacts", time.Since(startedAt))
 	return result
+}
+
+type moduleRun struct {
+	outcome    moduleOutcome
+	viaRequest bool
+	files      []module.FileInfo
+	err        error
+	panicValue any
 }
 
 type moduleOutcome struct {

@@ -146,8 +146,10 @@ func normalizeOptions(opts Options) Options {
 	if opts.OutputBaseDir == "" {
 		opts.OutputBaseDir = "."
 	}
-	if opts.Timeout <= 0 {
-		opts.Timeout = 0
+	// Resources must be defaulted before Concurrency is derived from it, otherwise an
+	// explicit Concurrency is read, then discarded when Resources is replaced wholesale.
+	if opts.Resources.IsZero() {
+		opts.Resources = resource.DefaultConfig()
 	}
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = opts.Resources.Workers
@@ -155,12 +157,7 @@ func normalizeOptions(opts Options) Options {
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = DefaultConcurrency
 	}
-	if opts.Resources.IsZero() {
-		opts.Resources = resource.DefaultConfig()
-	}
-	if opts.Resources.Workers <= 0 {
-		opts.Resources.Workers = opts.Concurrency
-	}
+	opts.Resources.Workers = opts.Concurrency
 	opts.Resources = opts.Resources.Normalized()
 	opts.Concurrency = opts.Resources.Workers
 	return opts

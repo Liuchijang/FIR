@@ -30,28 +30,22 @@ func DefaultConfig() Config {
 }
 
 func SuggestConfig(host HostResources) Config {
-	workers := host.CPUCores / 2
-	if workers < 2 {
-		workers = 2
-	}
-	if workers > 8 {
-		workers = 8
-	}
+	const gb = 1024 * 1024 * 1024
 
-	ramCap := int64(2 * 1024 * 1024 * 1024)
+	ramCap := int64(2 * gb)
 	if host.TotalRAMBytes > 0 {
 		switch {
-		case host.TotalRAMBytes <= 8*1024*1024*1024:
-			ramCap = 1 * 1024 * 1024 * 1024
-		case host.TotalRAMBytes >= 32*1024*1024*1024:
-			ramCap = 4 * 1024 * 1024 * 1024
+		case host.TotalRAMBytes <= 8*gb:
+			ramCap = 1 * gb
+		case host.TotalRAMBytes >= 32*gb:
+			ramCap = 4 * gb
 		}
 	}
 
 	return Config{
 		CPULimitPercent: DefaultCPULimitPercent,
 		RAMCapBytes:     ramCap,
-		Workers:         workers,
+		Workers:         min(max(host.CPUCores/2, 2), 8),
 		DiskIOLimitBps:  DefaultDiskIOLimitBps,
 		Compress:        DefaultCompress,
 	}
@@ -63,22 +57,22 @@ func (c Config) Normalized() Config {
 	if c.CPULimitPercent <= 0 {
 		c.CPULimitPercent = defaults.CPULimitPercent
 	}
-	c.CPULimitPercent = clampInt(c.CPULimitPercent, MinCPULimitPercent, MaxCPULimitPercent)
+	c.CPULimitPercent = min(max(c.CPULimitPercent, MinCPULimitPercent), MaxCPULimitPercent)
 
 	if c.RAMCapBytes <= 0 {
 		c.RAMCapBytes = defaults.RAMCapBytes
 	}
-	c.RAMCapBytes = clampInt64(c.RAMCapBytes, MinRAMCapBytes, MaxRAMCapBytes(host))
+	c.RAMCapBytes = min(max(c.RAMCapBytes, MinRAMCapBytes), MaxRAMCapBytes(host))
 
 	if c.Workers <= 0 {
 		c.Workers = defaults.Workers
 	}
-	c.Workers = clampInt(c.Workers, MinWorkers, MaxWorkers(host))
+	c.Workers = min(max(c.Workers, MinWorkers), MaxWorkers(host))
 
 	if c.DiskIOLimitBps <= 0 {
 		c.DiskIOLimitBps = defaults.DiskIOLimitBps
 	}
-	c.DiskIOLimitBps = clampInt64(c.DiskIOLimitBps, MinDiskIOLimitBps, MaxDiskIOLimitBps)
+	c.DiskIOLimitBps = min(max(c.DiskIOLimitBps, MinDiskIOLimitBps), MaxDiskIOLimitBps)
 	return c
 }
 
@@ -91,49 +85,16 @@ func (c Config) IsZero() bool {
 }
 
 func MaxWorkers(host HostResources) int {
-	maxWorkers := host.CPUCores
-	if maxWorkers <= 0 {
-		maxWorkers = HardWorkersMax
+	cores := host.CPUCores
+	if cores <= 0 {
+		cores = HardWorkersMax
 	}
-	if maxWorkers > HardWorkersMax {
-		maxWorkers = HardWorkersMax
-	}
-	if maxWorkers < MinWorkers {
-		return MinWorkers
-	}
-	return maxWorkers
+	return min(max(cores, MinWorkers), HardWorkersMax)
 }
 
 func MaxRAMCapBytes(host HostResources) int64 {
 	if host.TotalRAMBytes <= 0 {
 		return FallbackRAMCapMax
 	}
-	max := host.TotalRAMBytes / 2
-	if max > HardRAMCapMax {
-		max = HardRAMCapMax
-	}
-	if max < MinRAMCapBytes {
-		return MinRAMCapBytes
-	}
-	return max
-}
-
-func clampInt(value, minValue, maxValue int) int {
-	if value < minValue {
-		return minValue
-	}
-	if value > maxValue {
-		return maxValue
-	}
-	return value
-}
-
-func clampInt64(value, minValue, maxValue int64) int64 {
-	if value < minValue {
-		return minValue
-	}
-	if value > maxValue {
-		return maxValue
-	}
-	return value
+	return min(max(host.TotalRAMBytes/2, MinRAMCapBytes), HardRAMCapMax)
 }

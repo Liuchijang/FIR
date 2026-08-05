@@ -104,11 +104,11 @@ func BannerColumnWidths(innerWidth int) (int, int) {
 		return fixedLeftWidth, innerWidth - fixedLeftWidth - BannerColumnGap
 	}
 
-	leftWidth := maxInt(minLeftWidth, (innerWidth-BannerColumnGap)/2)
-	rightWidth := maxInt(10, innerWidth-leftWidth-BannerColumnGap)
+	leftWidth := max(minLeftWidth, (innerWidth-BannerColumnGap)/2)
+	rightWidth := max(10, innerWidth-leftWidth-BannerColumnGap)
 	if leftWidth+BannerColumnGap+rightWidth > innerWidth {
-		leftWidth = maxInt(10, (innerWidth-BannerColumnGap)/2)
-		rightWidth = maxInt(10, innerWidth-leftWidth-BannerColumnGap)
+		leftWidth = max(10, (innerWidth-BannerColumnGap)/2)
+		rightWidth = max(10, innerWidth-leftWidth-BannerColumnGap)
 	}
 	return leftWidth, rightWidth
 }
@@ -129,7 +129,7 @@ func RenderBannerInfoRow(label, value string, width int, labelStyle, valueStyle 
 
 	labelWidth := 10
 	if labelWidth > width-4 {
-		labelWidth = maxInt(1, width/3)
+		labelWidth = max(1, width/3)
 	}
 
 	labelText := trimToWidth(label, labelWidth)
@@ -138,12 +138,12 @@ func RenderBannerInfoRow(label, value string, width int, labelStyle, valueStyle 
 		labelPadding = 0
 	}
 
-	valueWidth := maxInt(1, width-labelWidth-1)
+	valueWidth := max(1, width-labelWidth-1)
 	valueText := trimToWidth(value, valueWidth)
 
 	return labelStyle.Render(labelText) +
 		strings.Repeat(" ", labelPadding) + " " +
-		valueStyle.Render("-- "+trimToWidth(valueText, maxInt(1, valueWidth-3)))
+		valueStyle.Render("-- "+trimToWidth(valueText, max(1, valueWidth-3)))
 }
 
 func PadViewport(value string, width, height int) string {
@@ -151,7 +151,7 @@ func PadViewport(value string, width, height int) string {
 }
 
 func RootViewportSize(totalWidth, totalHeight, marginX, marginY int) (int, int) {
-	return maxInt(20, totalWidth-marginX*2-1), maxInt(10, totalHeight-marginY*2-1)
+	return max(20, totalWidth-marginX*2-1), max(10, totalHeight-marginY*2-1)
 }
 
 func PollTerminalSizeCmd() tea.Cmd {

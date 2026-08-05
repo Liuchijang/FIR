@@ -33,22 +33,22 @@ type Logger struct {
 }
 
 var (
-	global     *Logger
-	globalOnce sync.Once
+	globalMu sync.RWMutex
+	global   *Logger
 )
 
 func Init(logDir string, verbose bool) error {
-	var initErr error
-	globalOnce = sync.Once{}
-	globalOnce.Do(func() {
-		l, err := newLogger(logDir, verbose)
-		if err != nil {
-			initErr = err
-			return
-		}
-		global = l
-	})
-	return initErr
+	l, err := newLogger(logDir, verbose)
+	if err != nil {
+		return err
+	}
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	if global != nil {
+		global.close()
+	}
+	global = l
+	return nil
 }
 
 func newLogger(logDir string, verbose bool) (*Logger, error) {
@@ -71,29 +71,45 @@ func newLogger(logDir string, verbose bool) (*Logger, error) {
 }
 
 func Close() {
-	if global != nil && global.logFile != nil {
-		global.logFile.Close()
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	if global != nil {
+		global.close()
+	}
+}
+
+// close redirects the file logger to io.Discard before closing the handle, so a
+// module goroutine still logging after shutdown writes nowhere instead of to a
+// closed descriptor.
+func (l *Logger) close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.fileLog = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	if l.logFile != nil {
+		l.logFile.Close()
+		l.logFile = nil
 	}
 }
 
 func G() *Logger {
-	if global == nil {
+	globalMu.RLock()
+	l := global
+	globalMu.RUnlock()
+	if l == nil {
 		return &Logger{
 			fileLog:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 			startTime:     time.Now(),
 			consoleOutput: true,
 		}
 	}
-	return global
+	return l
 }
 
 func SetConsoleOutput(enabled bool) {
-	if global == nil {
-		return
-	}
-	global.mu.Lock()
-	defer global.mu.Unlock()
-	global.consoleOutput = enabled
+	l := G()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.consoleOutput = enabled
 }
 
 func (l *Logger) Info(msg string, args ...any) {
@@ -176,13 +192,3 @@ func (l *Logger) Failed(collector string, err error) {
 	}
 	fmt.Fprintf(os.Stderr, "%s[-]%s Failed: %s%s%s: %v\n", colorRed, colorReset, colorBold, collector, colorReset, err)
 }
-
-func (l *Logger) Banner(version string) {
-	fmt.Fprintf(os.Stderr, "\n%s%s", colorCyan, colorBold)
-	fmt.Fprintf(os.Stderr, "  |-----||   O    |----\\\\\n")
-	fmt.Fprintf(os.Stderr, "  |    --| |----| |   x  <|'\n")
-	fmt.Fprintf(os.Stderr, "  |__|--'  |____| |__|\\\\__/\n")
-	fmt.Fprintf(os.Stderr, "  Windows DFIR Artifact Collector  v%s%s\n\n", version, colorReset)
-}
-
-func (l *Logger) Elapsed() time.Duration { return time.Since(l.startTime) }

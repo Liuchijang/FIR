@@ -34,10 +34,3 @@ func trimToWidth(value string, width int) string {
 	}
 	return string(runes) + suffix
 }
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

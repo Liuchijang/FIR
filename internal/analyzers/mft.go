@@ -653,6 +653,10 @@ func resolveMFTPath(records map[mftKey]mftRecordRow, cache map[mftKey]string, dr
 	if !ok {
 		return fmt.Sprintf(`\record_%d`, recordNumber)
 	}
+	// Seed the cache before descending so a cyclic parent chain in a corrupt $MFT
+	// terminates instead of recursing until the stack overflows. The real path
+	// overwrites this below.
+	cache[key] = fmt.Sprintf(`\record_%d`, recordNumber)
 	if recordNumber == 5 {
 		cache[key] = `\`
 		return `\`

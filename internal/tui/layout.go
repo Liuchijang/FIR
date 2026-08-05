@@ -13,7 +13,7 @@ func padToViewport(value string, width, height int) string {
 	}
 
 	contentHeight := lipgloss.Height(value)
-	lines := make([]string, 0, maxInt(contentHeight, height))
+	lines := make([]string, 0, max(contentHeight, height))
 	if value != "" {
 		for _, line := range strings.Split(value, "\n") {
 			lines = append(lines, padLineToWidth(line, width))
@@ -45,30 +45,4 @@ func padLineToWidth(value string, width int) string {
 		return value
 	}
 	return value + strings.Repeat(" ", padding)
-}
-
-func clampInt(value, minValue, maxValue int) int {
-	if maxValue < minValue {
-		maxValue = minValue
-	}
-	if value < minValue {
-		return minValue
-	}
-	if value > maxValue {
-		return maxValue
-	}
-	return value
-}
-
-func clampInt64(value, minValue, maxValue int64) int64 {
-	if maxValue < minValue {
-		maxValue = minValue
-	}
-	if value < minValue {
-		return minValue
-	}
-	if value > maxValue {
-		return maxValue
-	}
-	return value
 }

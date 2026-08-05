@@ -22,10 +22,6 @@ func SafeCopyFile(src, dst string) (module.FileInfo, error) {
 	}
 	defer srcFile.Close()
 
-	if _, err := srcFile.Stat(); err != nil {
-		return module.FileInfo{}, fmt.Errorf("stat source %s: %w", src, err)
-	}
-
 	return copyToDestination(srcFile, dst)
 }
 
@@ -48,10 +44,13 @@ func SafeCopyFileBackup(src, dst string) (module.FileInfo, error) {
 	if err != nil {
 		return module.FileInfo{}, fmt.Errorf("open source %s with backup semantics: %w", src, err)
 	}
-	defer windows.CloseHandle(handle)
 
+	// os.NewFile takes ownership of the handle, so srcFile.Close() is the only close.
+	// Closing it here as well would release a handle value Windows may already have
+	// handed to another worker.
 	srcFile := os.NewFile(uintptr(handle), src)
 	if srcFile == nil {
+		windows.CloseHandle(handle)
 		return module.FileInfo{}, fmt.Errorf("create file wrapper for %s", src)
 	}
 	defer srcFile.Close()
@@ -90,64 +89,4 @@ func copyToDestination(srcFile *os.File, dst string) (module.FileInfo, error) {
 	}
 
 	return module.FileInfo{Path: filepath.Base(dst), SHA256: hex.EncodeToString(hasher.Sum(nil)), Size: written}, nil
-}
-
-func CopyDir(srcDir, dstDir string) ([]module.FileInfo, error) {
-	entries, err := os.ReadDir(srcDir)
-	if err != nil {
-		return nil, fmt.Errorf("read directory %s: %w", srcDir, err)
-	}
-
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create dest dir %s: %w", dstDir, err)
-	}
-
-	var files []module.FileInfo
-	var lastErr error
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		src := filepath.Join(srcDir, entry.Name())
-		dst := filepath.Join(dstDir, entry.Name())
-
-		fi, err := SafeCopyFile(src, dst)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		files = append(files, fi)
-	}
-
-	if len(files) == 0 && lastErr != nil {
-		return nil, lastErr
-	}
-	return files, nil
-}
-
-func CopyDirRecursive(srcDir, dstDir string) ([]module.FileInfo, error) {
-	var files []module.FileInfo
-
-	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-
-		relPath, _ := filepath.Rel(srcDir, path)
-		dstPath := filepath.Join(dstDir, relPath)
-
-		if info.IsDir() {
-			return os.MkdirAll(dstPath, 0o755)
-		}
-
-		fi, copyErr := SafeCopyFile(path, dstPath)
-		if copyErr != nil {
-			return nil
-		}
-		fi.Path = relPath
-		files = append(files, fi)
-		return nil
-	})
-
-	return files, err
 }

@@ -423,7 +423,10 @@ func parseLegacyNt61Entries(data []byte, is32Bit bool, source shimCacheSource) (
 		return nil, 0
 	}
 
-	count := int(binary.LittleEndian.Uint32(data[4:8]))
+	// count comes straight off the registry blob and is unrelated to len(data), so a
+	// corrupt value would otherwise preallocate gigabytes before the loop's bounds
+	// check ever runs.
+	count := min(int(binary.LittleEndian.Uint32(data[4:8])), (len(data)-headerSize)/entrySize)
 	rows := make([]shimCacheRow, 0, count)
 	score := 0
 
@@ -484,7 +487,10 @@ func parseLegacyNt52Entries(data []byte, is32Bit bool, source shimCacheSource) (
 		return nil, 0
 	}
 
-	count := int(binary.LittleEndian.Uint32(data[4:8]))
+	// count comes straight off the registry blob and is unrelated to len(data), so a
+	// corrupt value would otherwise preallocate gigabytes before the loop's bounds
+	// check ever runs.
+	count := min(int(binary.LittleEndian.Uint32(data[4:8])), (len(data)-headerSize)/entrySize)
 	rows := make([]shimCacheRow, 0, count)
 	score := 0
 	sizeLike := 0

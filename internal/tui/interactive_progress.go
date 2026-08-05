@@ -15,6 +15,7 @@ import (
 
 	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/output"
+	"github.com/Liuchijang/FIR/internal/resource"
 )
 
 type collectorStatus string
@@ -285,7 +286,7 @@ func (m CollectionProgressModel) View() string {
 	width, height := m.rootSize()
 	header := m.headerViewWithWidth(width)
 	footer := m.footerViewWithWidth(width)
-	bodyHeight := maxInt(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
+	bodyHeight := max(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
 	body := m.bodyView(width, bodyHeight)
 	screen := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 	screen = PadViewport(screen, width, height)
@@ -295,7 +296,7 @@ func (m CollectionProgressModel) View() string {
 }
 
 func (m CollectionProgressModel) headerViewWithWidth(width int) string {
-	innerWidth := maxInt(10, width-panelBoxStyle.GetHorizontalFrameSize())
+	innerWidth := max(10, width-panelBoxStyle.GetHorizontalFrameSize())
 	leftWidth, rightWidth := BannerColumnWidths(innerWidth)
 
 	leftLogo := BannerLogoLines()
@@ -326,14 +327,14 @@ func (m CollectionProgressModel) headerViewWithWidth(width int) string {
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", BannerColumnGap), right)
 	return panelBoxStyle.
-		Width(maxInt(1, width-2)).
+		Width(max(1, width-2)).
 		Height(6).
 		Render(row)
 }
 
 func (m CollectionProgressModel) footerViewWithWidth(width int) string {
-	width = maxInt(1, width)
-	helpWidth := maxInt(1, width-footerBarStyle.GetHorizontalFrameSize())
+	width = max(1, width)
+	helpWidth := max(1, width-footerBarStyle.GetHorizontalFrameSize())
 
 	helpModel := m.help
 	helpModel.Width = helpWidth
@@ -345,7 +346,7 @@ func (m CollectionProgressModel) footerViewWithWidth(width int) string {
 	if helpView := helpModel.View(m.keyMap()); helpView != "" {
 		lines = append(lines, helpView)
 	}
-	innerWidth := maxInt(1, width-footerBarStyle.GetHorizontalFrameSize())
+	innerWidth := max(1, width-footerBarStyle.GetHorizontalFrameSize())
 	return footerBarStyle.Width(innerWidth).Render(strings.Join(lines, "\n"))
 }
 
@@ -353,12 +354,12 @@ func (m CollectionProgressModel) bodyView(width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	innerWidth := maxInt(1, width-panelBoxStyle.GetHorizontalFrameSize())
-	innerHeight := maxInt(1, height-panelBoxStyle.GetVerticalFrameSize())
+	innerWidth := max(1, width-panelBoxStyle.GetHorizontalFrameSize())
+	innerHeight := max(1, height-panelBoxStyle.GetVerticalFrameSize())
 	content := PadViewport(m.bodyContent(innerWidth, innerHeight), innerWidth, innerHeight)
 	return panelBoxStyle.
-		Width(maxInt(1, width-2)).
-		Height(maxInt(1, height-2)).
+		Width(max(1, width-2)).
+		Height(max(1, height-2)).
 		Render(content)
 }
 
@@ -368,7 +369,7 @@ func (m CollectionProgressModel) bodyContent(width, height int) string {
 	}
 
 	lines := m.bodyHeaderLines(width)
-	availableRows := maxInt(0, height-len(lines))
+	availableRows := max(0, height-len(lines))
 	if availableRows <= 0 {
 		if height < len(lines) {
 			return strings.Join(lines[:height], "\n")
@@ -448,8 +449,8 @@ func (m CollectionProgressModel) renderProgressRow(row progressRow, width int) s
 		)
 	}
 
-	categoryWidth := clampInt(width/8, 8, 14)
-	nameWidth := clampInt(width/5, 10, 24)
+	categoryWidth := min(max(width/8, 8), 14)
+	nameWidth := min(max(width/5, 10), 24)
 	category := trimToWidth("["+row.category+"]", categoryWidth)
 	name := trimToWidth(row.name, nameWidth)
 
@@ -479,7 +480,7 @@ func (m CollectionProgressModel) progressDetails(row progressRow) string {
 		details := fmt.Sprintf(
 			"files=%d  size=%s  duration=%s",
 			len(row.result.FilesCollected),
-			progressFormatBytes(progressTotalSize(row.result.FilesCollected)),
+			resource.FormatBytes(module.TotalSize(row.result.FilesCollected)),
 			row.result.Duration.Round(100*time.Millisecond).String(),
 		)
 		if row.result.Error != "" {
@@ -513,12 +514,12 @@ func (m *CollectionProgressModel) syncViewport() {
 	width, height := m.rootSize()
 	header := m.headerViewWithWidth(width)
 	footer := m.footerViewWithWidth(width)
-	bodyHeight := maxInt(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
-	innerWidth := maxInt(1, width-panelBoxStyle.GetHorizontalFrameSize())
-	innerHeight := maxInt(1, bodyHeight-panelBoxStyle.GetVerticalFrameSize())
+	bodyHeight := max(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
+	innerWidth := max(1, width-panelBoxStyle.GetHorizontalFrameSize())
+	innerHeight := max(1, bodyHeight-panelBoxStyle.GetVerticalFrameSize())
 	bodyHeaderHeight := lipgloss.Height(strings.Join(m.bodyHeaderLines(innerWidth), "\n"))
-	m.viewport.Width = maxInt(1, innerWidth)
-	m.viewport.Height = maxInt(1, innerHeight-bodyHeaderHeight)
+	m.viewport.Width = max(1, innerWidth)
+	m.viewport.Height = max(1, innerHeight-bodyHeaderHeight)
 
 	if m.completed {
 		if m.err != nil {
@@ -635,26 +636,4 @@ func progressPadVisibleWidth(value string, width int) string {
 		return value
 	}
 	return value + strings.Repeat(" ", padding)
-}
-
-func progressTotalSize(files []module.FileInfo) int64 {
-	var total int64
-	for _, file := range files {
-		total += file.Size
-	}
-	return total
-}
-
-func progressFormatBytes(size int64) string {
-	const unit = 1024
-	if size < unit {
-		return fmt.Sprintf("%d B", size)
-	}
-
-	div, exp := int64(unit), 0
-	for n := size / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(size)/float64(div), "KMGTPE"[exp])
 }
