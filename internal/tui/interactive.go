@@ -1092,9 +1092,12 @@ func (m menuModel) needsBrowserProfiles() bool {
 	return false
 }
 
+// Matched by category, like needsBrowserProfiles: the eventlog collector honours the
+// selection through ResolveSelectedOrAllLogs exactly as the parser does, so both are
+// offered the picker.
 func (m menuModel) needsEventLogSelection() bool {
 	for _, mod := range m.moduleResults() {
-		if mod.Name() == "eventlog_parser" {
+		if mod.Category() == "eventlog" {
 			return true
 		}
 	}
