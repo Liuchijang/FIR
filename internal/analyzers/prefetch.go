@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func init() { module.RegisterAnalyzer(&prefetchParser{}) }
@@ -28,7 +27,7 @@ func (c *prefetchParser) Description() string {
 func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create prefetch parser output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create prefetch parser output dir: %w", err))
 	}
 
 	sourceDir := filepath.Join(os.Getenv("SystemRoot"), "Prefetch")
@@ -38,13 +37,13 @@ func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 
 	entries, err := os.ReadDir(sourceDir)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("read prefetch source dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("read prefetch source dir: %w", err))
 	}
 
 	rows := make([][]string, 0, len(entries))
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".pf") {
@@ -53,7 +52,7 @@ func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 
 		row, err := parsePrefetchMetadata(filepath.Join(sourceDir, entry.Name()))
 		if err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 		rows = append(rows, row)
 	}
@@ -63,8 +62,7 @@ func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no prefetch files found in %s", sourceDir)}
 	}
 
-	outCSV := filepath.Join(outDir, "prefetch_files.csv")
-	if err := writeCSVFile(outCSV, []string{
+	return csvResult(outDir, "prefetch_files.csv", []string{
 		"SourceFile",
 		"ExecutableName",
 		"PrefetchHash",
@@ -75,15 +73,7 @@ func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 		"CreatedUTC",
 		"ModifiedUTC",
 		"AccessedUTC",
-	}, rows); err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-
-	fi, err := utils.FileInfoFromPath(outCSV)
-	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-	return module.AnalyzeResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
+	}, rows)
 }
 
 func parsePrefetchMetadata(path string) ([]string, error) {

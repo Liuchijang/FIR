@@ -53,14 +53,14 @@ func (c *usnJrnlParser) Description() string {
 func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create USN parser output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create USN parser output dir: %w", err))
 	}
 
 	sources, sourceErrs := readUSNJournalSources(ctx, req.OutputDir)
 
 	recordMap, pathCache, enriched, err := loadMFTForUSN(ctx, req)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return analyzerError(outDir, err)
 	}
 
 	var header []string
@@ -68,7 +68,7 @@ func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 	var parseErrs []string
 	for _, src := range sources {
 		if err := ctx.Err(); err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 
 		h, driveRows, _, _, err := parseUSNJournalRows(src.data, src.drive, recordMap, pathCache, enriched)
@@ -92,12 +92,12 @@ func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 	}
 	recordsCSV := filepath.Join(outDir, recordsName)
 	if err := writeCSVFile(recordsCSV, header, rows); err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return analyzerError(outDir, err)
 	}
 
 	recordsInfo, err := utils.FileInfoFromPath(recordsCSV)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return analyzerError(outDir, err)
 	}
 	return module.AnalyzeResult{Files: []module.FileInfo{recordsInfo}, OutputPath: outDir}
 }

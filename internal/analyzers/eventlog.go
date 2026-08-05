@@ -25,7 +25,7 @@ func (c *eventLogParser) Description() string {
 func (c *eventLogParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create eventlog parser output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create eventlog parser output dir: %w", err))
 	}
 
 	sourceDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
@@ -34,7 +34,7 @@ func (c *eventLogParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 	}
 	selectedFiles, err := eventlogpkg.ResolveSelectedOrAllLogs(sourceDir)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("resolve selected EVTX files: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("resolve selected EVTX files: %w", err))
 	}
 	if len(selectedFiles) == 0 {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no selected or available EVTX files found in %s", sourceDir)}
@@ -102,12 +102,12 @@ if (-not (Test-Path $outCsv)) {
 		if fileErr == nil && len(files) > 0 {
 			return module.AnalyzeResult{Files: files, OutputPath: outDir, Error: fmt.Errorf("parse event logs: %w", err).Error()}
 		}
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("parse event logs: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("parse event logs: %w", err))
 	}
 
 	files, err := utils.CollectGeneratedCSVs(outDir)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return analyzerError(outDir, err)
 	}
 	return module.AnalyzeResult{Files: files, OutputPath: outDir}
 }

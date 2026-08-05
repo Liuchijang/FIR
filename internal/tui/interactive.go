@@ -17,7 +17,6 @@ import (
 	eventlogpkg "github.com/Liuchijang/FIR/internal/collectors/eventlog"
 	"github.com/Liuchijang/FIR/internal/console"
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/output"
 	"github.com/Liuchijang/FIR/internal/resource"
 )
 
@@ -677,72 +676,15 @@ func (m menuModel) View() string {
 		return "Loading..."
 	}
 
-	marginX := 2
-	marginY := 1
-	width, height := RootViewportSize(m.width, m.height, marginX, marginY)
-
-	header := m.headerView(width)
-	footer := m.footerView(width)
-	bodyHeight := max(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
-	body := m.bodyView(width, bodyHeight)
-
-	ui := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
-	ui = PadViewport(ui, width, height)
-
-	return lipgloss.NewStyle().
-		Padding(marginY, marginX).
-		Render(ui)
-}
-
-func (m menuModel) headerView(width int) string {
-	innerWidth := max(10, width-boxBorderStyle.GetHorizontalFrameSize())
-	leftWidth, rightWidth := BannerColumnWidths(innerWidth)
-
-	leftLogo := BannerLogoLines()
-	rightLines := []string{
-		"Machine Info",
-		RenderBannerInfoRow("Host", MachineHostname(), rightWidth, menuItemStyle, bannerMutedStyle),
-		RenderBannerInfoRow("Platform", MachinePlatform(), rightWidth, menuItemStyle, bannerMutedStyle),
-		RenderBannerInfoRow("Phase", m.screenTitle(), rightWidth, menuItemStyle, bannerMutedStyle),
-	}
-
-	left := lipgloss.NewStyle().
-		Width(leftWidth).
-		Align(lipgloss.Left, lipgloss.Top).
-		Render(strings.Join([]string{
-			bannerLogoStyle.Render(trimToWidth(leftLogo[0], leftWidth)),
-			bannerLogoStyle.Render(trimToWidth(leftLogo[1], leftWidth)),
-			bannerLogoStyle.Render(trimToWidth(leftLogo[2], leftWidth)),
-			bannerTitleStyle.Render(trimToWidth("FIR v"+output.Version, leftWidth)),
-			lipgloss.NewStyle().Bold(true).Render(trimToWidth("Freedom Incident Response", leftWidth)),
-			bannerMutedStyle.Render(trimToWidth("Interactive module launcher", leftWidth)),
-		}, "\n"))
-
-	right := lipgloss.NewStyle().
-		Width(rightWidth).
-		Align(lipgloss.Left, lipgloss.Top).
-		Render(strings.Join([]string{
-			bannerTitleStyle.Render(trimToWidth(rightLines[0], rightWidth)),
-			trimToWidth(rightLines[1], rightWidth),
-			trimToWidth(rightLines[2], rightWidth),
-			trimToWidth(rightLines[3], rightWidth),
-		}, "\n"))
-
-	row := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", BannerColumnGap), right)
-
-	return boxBorderStyle.
-		Width(max(1, width-2)).
-		Height(6).
-		Render(row)
-}
-
-func (m menuModel) footerView(width int) string {
-	innerWidth := max(1, width-menuFooterStyle.GetHorizontalFrameSize())
-	statusLine := subtleStyle.Render(trimToWidth(m.status, innerWidth))
-	helpLine := helpStyle.Render(trimToWidth(m.help.View(newMenuKeyMap()), innerWidth))
-	return menuFooterStyle.
-		Width(innerWidth).
-		Render(strings.Join([]string{statusLine, helpLine}, "\n"))
+	width, height := chromeSize(m.width, m.height)
+	header := chromeHeader(width, "Interactive module launcher", [][2]string{
+		{"Host", MachineHostname()},
+		{"Platform", MachinePlatform()},
+		{"Phase", m.screenTitle()},
+	})
+	footer := chromeFooter(width, m.status, m.keyMap(), m.help)
+	body := chromePanel(width, chromeBodyHeight(height, header, footer), m.bodyContent)
+	return chromeFrame(width, height, header, body, footer)
 }
 
 func (m menuModel) renderCollectors(width, height int) string {
@@ -1063,20 +1005,6 @@ func renderSelectableRow(cursor, selected bool, title, detail, category string, 
 		row += " " + detailStyle.Render("-- "+trimToWidth(detail, detailWidth-3))
 	}
 	return row
-}
-
-func (m menuModel) bodyView(width, height int) string {
-	if height <= 0 {
-		return ""
-	}
-
-	innerWidth := max(1, width-boxBorderStyle.GetHorizontalFrameSize())
-	innerHeight := max(1, height-boxBorderStyle.GetVerticalFrameSize())
-	content := PadViewport(m.bodyContent(innerWidth, innerHeight), innerWidth, innerHeight)
-	return boxBorderStyle.
-		Width(max(1, width-2)).
-		Height(max(1, height-2)).
-		Render(content)
 }
 
 func (m menuModel) bodyContent(width, height int) string {

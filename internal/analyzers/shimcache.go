@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 	winreg "golang.org/x/sys/windows/registry"
 )
 
@@ -60,12 +59,12 @@ func (c *shimCacheParser) Description() string {
 func (c *shimCacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create shimcache parser output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create shimcache parser output dir: %w", err))
 	}
 
 	sources, err := loadShimCacheSources(req.OutputDir)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {
 		return module.AnalyzeResult{OutputPath: outDir, Error: "no ShimCache sources found in collected SYSTEM hive or live registry"}
@@ -76,7 +75,7 @@ func (c *shimCacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 	var parseErrors []string
 	for _, source := range sources {
 		if err := ctx.Err(); err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 
 		data := source.Data
@@ -114,7 +113,6 @@ func (c *shimCacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 		return module.AnalyzeResult{OutputPath: outDir, Error: "no ShimCache entries parsed"}
 	}
 
-	outCSV := filepath.Join(outDir, "shimcache_entries.csv")
 	csvRows := make([][]string, 0, len(rows))
 	for _, row := range rows {
 		csvRows = append(csvRows, []string{
@@ -128,7 +126,7 @@ func (c *shimCacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 			fmt.Sprintf("%d", row.EntryPosition),
 		})
 	}
-	if err := writeCSVFile(outCSV, []string{
+	return csvResult(outDir, "shimcache_entries.csv", []string{
 		"LastModifiedUTC",
 		"LastUpdateUTC",
 		"Path",
@@ -137,15 +135,7 @@ func (c *shimCacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 		"ControlSet",
 		"Format",
 		"EntryPosition",
-	}, csvRows); err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-
-	fi, err := utils.FileInfoFromPath(outCSV)
-	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-	return module.AnalyzeResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
+	}, csvRows)
 }
 
 func loadShimCacheSources(outputDir string) ([]shimCacheSource, error) {

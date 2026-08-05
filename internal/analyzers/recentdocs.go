@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 	winreg "golang.org/x/sys/windows/registry"
 )
 
@@ -38,17 +37,17 @@ func (c *recentDocsParser) Description() string {
 func (c *recentDocsParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create recentdocs output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create recentdocs output dir: %w", err))
 	}
 
 	sources, err := collectedUserHiveSources(req.OutputDir, "NTUSER.DAT")
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {
 		sources, err = liveUserNTUserSources()
 		if err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 	}
 	if len(sources) == 0 {
@@ -58,7 +57,7 @@ func (c *recentDocsParser) Analyze(ctx context.Context, req module.AnalyzeReques
 	rows := make([]recentDocsRow, 0, 256)
 	for _, source := range sources {
 		if err := ctx.Err(); err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 
 		root, err := openUserHiveSource(source)
@@ -90,7 +89,6 @@ func (c *recentDocsParser) Analyze(ctx context.Context, req module.AnalyzeReques
 		return rows[i].Username < rows[j].Username
 	})
 
-	outCSV := filepath.Join(outDir, "recentdocs_entries.csv")
 	csvRows := make([][]string, 0, len(rows))
 	for _, row := range rows {
 		csvRows = append(csvRows, []string{
@@ -104,7 +102,7 @@ func (c *recentDocsParser) Analyze(ctx context.Context, req module.AnalyzeReques
 			row.KeyLastWriteTimestamp,
 		})
 	}
-	if err := writeCSVFile(outCSV, []string{
+	return csvResult(outDir, "recentdocs_entries.csv", []string{
 		"Username",
 		"HiveSource",
 		"KeyPath",
@@ -113,15 +111,7 @@ func (c *recentDocsParser) Analyze(ctx context.Context, req module.AnalyzeReques
 		"MRUPosition",
 		"EntryName",
 		"KeyLastWriteTimestamp",
-	}, csvRows); err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-
-	fi, err := utils.FileInfoFromPath(outCSV)
-	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-	return module.AnalyzeResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
+	}, csvRows)
 }
 
 func parseRecentDocsFromRoot(root winreg.Key, source userHiveSource) ([]recentDocsRow, error) {

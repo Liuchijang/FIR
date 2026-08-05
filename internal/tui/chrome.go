@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Liuchijang/FIR/internal/console"
+	"github.com/Liuchijang/FIR/internal/output"
 	"github.com/Liuchijang/FIR/internal/platform"
 	"github.com/charmbracelet/bubbles/help"
 	tea "github.com/charmbracelet/bubbletea"
@@ -153,4 +154,100 @@ func PollTerminalSizeCmd() tea.Cmd {
 		}
 		return tea.WindowSizeMsg{Width: width, Height: height}
 	})
+}
+
+const (
+	chromeMarginX = 2
+	chromeMarginY = 1
+	chromeHeaderH = 6
+)
+
+// chromeSize is the drawable area inside the root margins.
+func chromeSize(termWidth, termHeight int) (int, int) {
+	return RootViewportSize(termWidth, termHeight, chromeMarginX, chromeMarginY)
+}
+
+// chromeHeader draws the banner panel: logo and subtitle on the left, labelled
+// machine-info rows on the right.
+func chromeHeader(width int, subtitle string, info [][2]string) string {
+	innerWidth := max(10, width-panelBoxStyle.GetHorizontalFrameSize())
+	leftWidth, rightWidth := BannerColumnWidths(innerWidth)
+
+	logo := BannerLogoLines()
+	leftLines := []string{
+		bannerLogoStyle.Render(trimToWidth(logo[0], leftWidth)),
+		bannerLogoStyle.Render(trimToWidth(logo[1], leftWidth)),
+		bannerLogoStyle.Render(trimToWidth(logo[2], leftWidth)),
+		bannerTitleStyle.Render(trimToWidth("FIR v"+output.Version, leftWidth)),
+		lipgloss.NewStyle().Bold(true).Render(trimToWidth("Freedom Incident Response", leftWidth)),
+		bannerMutedStyle.Render(trimToWidth(subtitle, leftWidth)),
+	}
+
+	rightLines := make([]string, 0, len(info)+1)
+	rightLines = append(rightLines, bannerTitleStyle.Render(trimToWidth("Machine Info", rightWidth)))
+	for _, row := range info {
+		rightLines = append(rightLines, RenderBannerInfoRow(row[0], row[1], rightWidth, menuItemStyle, bannerMutedStyle))
+	}
+
+	column := func(w int, lines []string) string {
+		return lipgloss.NewStyle().Width(w).Align(lipgloss.Left, lipgloss.Top).Render(strings.Join(lines, "\n"))
+	}
+	row := lipgloss.JoinHorizontal(lipgloss.Top,
+		column(leftWidth, leftLines),
+		strings.Repeat(" ", BannerColumnGap),
+		column(rightWidth, rightLines),
+	)
+	return panelBoxStyle.Width(max(1, width-2)).Height(chromeHeaderH).Render(row)
+}
+
+// chromeFooter draws the status line above the key help, omitting either if empty.
+func chromeFooter(width int, status string, keys help.KeyMap, model help.Model) string {
+	innerWidth := max(1, width-footerBarStyle.GetHorizontalFrameSize())
+	model.Width = innerWidth
+
+	lines := make([]string, 0, 2)
+	if status != "" {
+		lines = append(lines, subtleStyle.Render(trimToWidth(status, innerWidth)))
+	}
+	if view := model.View(keys); view != "" {
+		lines = append(lines, helpStyle.Render(trimToWidth(view, innerWidth)))
+	}
+	return footerBarStyle.Width(innerWidth).Render(strings.Join(lines, "\n"))
+}
+
+// chromePanel wraps body content in the bordered panel, padded to fill it.
+func chromePanel(width, height int, render func(width, height int) string) string {
+	if height <= 0 {
+		return ""
+	}
+	innerWidth := max(1, width-panelBoxStyle.GetHorizontalFrameSize())
+	innerHeight := max(1, height-panelBoxStyle.GetVerticalFrameSize())
+	content := padToViewport(render(innerWidth, innerHeight), innerWidth, innerHeight)
+	return panelBoxStyle.Width(max(1, width-2)).Height(max(1, height-2)).Render(content)
+}
+
+// chromeBodyHeight is the panel height left once the header and footer are placed.
+func chromeBodyHeight(height int, header, footer string) int {
+	return max(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
+}
+
+// chromeFrame stacks the three panels and applies the root margin.
+func chromeFrame(width, height int, header, body, footer string) string {
+	ui := padToViewport(lipgloss.JoinVertical(lipgloss.Left, header, body, footer), width, height)
+	return lipgloss.NewStyle().Padding(chromeMarginY, chromeMarginX).Render(ui)
+}
+
+// chromeApplySize folds a WindowSizeMsg into width/height, reporting whether the
+// terminal actually changed size.
+func chromeApplySize(msg tea.WindowSizeMsg, width, height *int) bool {
+	changed := false
+	if msg.Width > 0 {
+		changed = changed || msg.Width != *width
+		*width = msg.Width
+	}
+	if msg.Height > 0 {
+		changed = changed || msg.Height != *height
+		*height = msg.Height
+	}
+	return changed
 }

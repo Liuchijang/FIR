@@ -154,7 +154,7 @@ func (c *amcacheParser) Description() string {
 func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create amcache parser output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create amcache parser output dir: %w", err))
 	}
 
 	var errs []string
@@ -216,7 +216,7 @@ func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 func writeAmcacheAnalyzeResult(outDir string, results amcacheResults) module.AnalyzeResult {
 	files, err := writeAmcacheResults(outDir, results)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return analyzerError(outDir, err)
 	}
 	return module.AnalyzeResult{Files: files, OutputPath: outDir}
 }
@@ -282,6 +282,21 @@ func parseAmcacheResultsFromRoot(root winreg.Key) (amcacheResults, error) {
 	return amcacheResults{}, nil
 }
 
+// amcacheInventories drives the Root\Inventory* subkeys this parser exports. Adding
+// an inventory is a table entry, not another copy of the open/parse/append block.
+var amcacheInventories = []struct {
+	paths    []string
+	filename string
+	header   []string
+	rows     func(winreg.Key) ([][]string, error)
+}{
+	{[]string{`Root\InventoryDeviceContainer`}, "amcache_device_containers.csv", amcacheDeviceContainerHeaders, parseInventoryDeviceContainerRows},
+	{[]string{`Root\InventoryDevicePnp`}, "amcache_device_pnps.csv", amcacheDevicePnpHeaders, parseInventoryDevicePnpRows},
+	{[]string{`Root\InventoryDriverBinary`}, "amcache_drive_binaries.csv", amcacheDriveBinaryHeaders, parseInventoryDriverBinaryRows},
+	{[]string{`Root\InventoryDriverPackage`}, "amcache_driver_packages.csv", amcacheDriverPackageHeaders, parseInventoryDriverPackageRows},
+	{[]string{`Root\InventoryApplicationShortcut`, `Root\InventoryShortcut`}, "amcache_shortcuts.csv", amcacheShortcutHeaders, parseInventoryShortcutRows},
+}
+
 func parseNewAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 	programsKey, programsOK, err := openRegistryKeyOptional(root, `Root\InventoryApplication`)
 	if err != nil {
@@ -299,47 +314,22 @@ func parseNewAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 		defer filesKey.Close()
 	}
 
-	deviceContainersKey, deviceContainersOK, err := openRegistryKeyOptional(root, `Root\InventoryDeviceContainer`)
-	if err != nil {
-		return amcacheResults{}, false, fmt.Errorf("open InventoryDeviceContainer: %w", err)
-	}
-	if deviceContainersOK {
-		defer deviceContainersKey.Close()
-	}
-
-	devicePnpsKey, devicePnpsOK, err := openRegistryKeyOptional(root, `Root\InventoryDevicePnp`)
-	if err != nil {
-		return amcacheResults{}, false, fmt.Errorf("open InventoryDevicePnp: %w", err)
-	}
-	if devicePnpsOK {
-		defer devicePnpsKey.Close()
-	}
-
-	driveBinariesKey, driveBinariesOK, err := openRegistryKeyOptional(root, `Root\InventoryDriverBinary`)
-	if err != nil {
-		return amcacheResults{}, false, fmt.Errorf("open InventoryDriverBinary: %w", err)
-	}
-	if driveBinariesOK {
-		defer driveBinariesKey.Close()
+	inventoryKeys := make([]winreg.Key, len(amcacheInventories))
+	present := make([]bool, len(amcacheInventories))
+	matched := programsOK || filesOK
+	for i, inv := range amcacheInventories {
+		key, ok, err := openAmcacheOptionalKey(root, inv.paths...)
+		if err != nil {
+			return amcacheResults{}, false, fmt.Errorf("open %s: %w", inv.paths[0], err)
+		}
+		if !ok {
+			continue
+		}
+		defer key.Close()
+		inventoryKeys[i], present[i] = key, true
+		matched = true
 	}
 
-	driverPackagesKey, driverPackagesOK, err := openRegistryKeyOptional(root, `Root\InventoryDriverPackage`)
-	if err != nil {
-		return amcacheResults{}, false, fmt.Errorf("open InventoryDriverPackage: %w", err)
-	}
-	if driverPackagesOK {
-		defer driverPackagesKey.Close()
-	}
-
-	shortcutsKey, shortcutsOK, err := openAmcacheOptionalKey(root, `Root\InventoryApplicationShortcut`, `Root\InventoryShortcut`)
-	if err != nil {
-		return amcacheResults{}, false, fmt.Errorf("open InventoryApplicationShortcut: %w", err)
-	}
-	if shortcutsOK {
-		defer shortcutsKey.Close()
-	}
-
-	matched := programsOK || filesOK || deviceContainersOK || devicePnpsOK || driveBinariesOK || driverPackagesOK || shortcutsOK
 	if !matched {
 		return amcacheResults{}, false, nil
 	}
@@ -367,58 +357,18 @@ func parseNewAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 			Rows:     rows,
 		})
 	}
-	if deviceContainersOK {
-		rows, err := parseInventoryDeviceContainerRows(deviceContainersKey)
+
+	for i, inv := range amcacheInventories {
+		if !present[i] {
+			continue
+		}
+		rows, err := inv.rows(inventoryKeys[i])
 		if err != nil {
 			return amcacheResults{}, true, err
 		}
 		results.Datasets = append(results.Datasets, amcacheDataset{
-			Filename: "amcache_device_containers.csv",
-			Header:   amcacheDeviceContainerHeaders,
-			Rows:     rows,
-		})
-	}
-	if devicePnpsOK {
-		rows, err := parseInventoryDevicePnpRows(devicePnpsKey)
-		if err != nil {
-			return amcacheResults{}, true, err
-		}
-		results.Datasets = append(results.Datasets, amcacheDataset{
-			Filename: "amcache_device_pnps.csv",
-			Header:   amcacheDevicePnpHeaders,
-			Rows:     rows,
-		})
-	}
-	if driveBinariesOK {
-		rows, err := parseInventoryDriverBinaryRows(driveBinariesKey)
-		if err != nil {
-			return amcacheResults{}, true, err
-		}
-		results.Datasets = append(results.Datasets, amcacheDataset{
-			Filename: "amcache_drive_binaries.csv",
-			Header:   amcacheDriveBinaryHeaders,
-			Rows:     rows,
-		})
-	}
-	if driverPackagesOK {
-		rows, err := parseInventoryDriverPackageRows(driverPackagesKey)
-		if err != nil {
-			return amcacheResults{}, true, err
-		}
-		results.Datasets = append(results.Datasets, amcacheDataset{
-			Filename: "amcache_driver_packages.csv",
-			Header:   amcacheDriverPackageHeaders,
-			Rows:     rows,
-		})
-	}
-	if shortcutsOK {
-		rows, err := parseInventoryShortcutRows(shortcutsKey)
-		if err != nil {
-			return amcacheResults{}, true, err
-		}
-		results.Datasets = append(results.Datasets, amcacheDataset{
-			Filename: "amcache_shortcuts.csv",
-			Header:   amcacheShortcutHeaders,
+			Filename: inv.filename,
+			Header:   inv.header,
 			Rows:     rows,
 		})
 	}

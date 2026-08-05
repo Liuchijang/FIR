@@ -21,7 +21,7 @@ func (c *wmiParser) Description() string {
 func (c *wmiParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create WMI parser output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create WMI parser output dir: %w", err))
 	}
 
 	script := `
@@ -91,12 +91,12 @@ Get-WmiNamespaceRows -Namespace 'root' |
 `
 
 	if err := utils.RunPowerShell(ctx, script); err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("parse WMI data: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("parse WMI data: %w", err))
 	}
 
 	files, err := utils.CollectGeneratedCSVs(outDir)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return analyzerError(outDir, err)
 	}
 	return module.AnalyzeResult{Files: files, OutputPath: outDir}
 }

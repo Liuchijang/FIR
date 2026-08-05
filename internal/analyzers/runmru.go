@@ -3,12 +3,10 @@ package analyzers
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 	winreg "golang.org/x/sys/windows/registry"
 )
 
@@ -37,17 +35,17 @@ func (c *runMRUParser) Description() string {
 func (c *runMRUParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create runmru output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create runmru output dir: %w", err))
 	}
 
 	sources, err := collectedUserHiveSources(req.OutputDir, "NTUSER.DAT")
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {
 		sources, err = liveUserNTUserSources()
 		if err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 	}
 	if len(sources) == 0 {
@@ -57,7 +55,7 @@ func (c *runMRUParser) Analyze(ctx context.Context, req module.AnalyzeRequest) m
 	rows := make([]runMRURow, 0, 128)
 	for _, source := range sources {
 		if err := ctx.Err(); err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 
 		root, err := openUserHiveSource(source)
@@ -89,7 +87,6 @@ func (c *runMRUParser) Analyze(ctx context.Context, req module.AnalyzeRequest) m
 		return rows[i].Username < rows[j].Username
 	})
 
-	outCSV := filepath.Join(outDir, "runmru_entries.csv")
 	csvRows := make([][]string, 0, len(rows))
 	for _, row := range rows {
 		mruPosition := ""
@@ -107,7 +104,7 @@ func (c *runMRUParser) Analyze(ctx context.Context, req module.AnalyzeRequest) m
 			row.KeyLastWriteTimestamp,
 		})
 	}
-	if err := writeCSVFile(outCSV, []string{
+	return csvResult(outDir, "runmru_entries.csv", []string{
 		"Username",
 		"HiveSource",
 		"KeyPath",
@@ -116,15 +113,7 @@ func (c *runMRUParser) Analyze(ctx context.Context, req module.AnalyzeRequest) m
 		"Command",
 		"MRUList",
 		"KeyLastWriteTimestamp",
-	}, csvRows); err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-
-	fi, err := utils.FileInfoFromPath(outCSV)
-	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-	return module.AnalyzeResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
+	}, csvRows)
 }
 
 func parseRunMRUFromRoot(root winreg.Key, source userHiveSource) ([]runMRURow, error) {

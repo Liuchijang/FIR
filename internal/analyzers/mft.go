@@ -13,7 +13,6 @@ import (
 
 	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 const (
@@ -83,7 +82,7 @@ func (c *mftParser) Description() string {
 func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create MFT parser output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create MFT parser output dir: %w", err))
 	}
 
 	var rows []mftRecordRow
@@ -120,7 +119,7 @@ func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) modu
 		var err error
 		rows, err = parseLiveMFT(ctx)
 		if err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 	}
 	if len(rows) == 0 {
@@ -174,8 +173,7 @@ func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) modu
 		})
 	}
 
-	recordCSV := filepath.Join(outDir, "mft_records.csv")
-	if err := writeCSVFile(recordCSV, []string{
+	return csvResult(outDir, "mft_records.csv", []string{
 		"Drive",
 		"RecordNumber",
 		"SequenceNumber",
@@ -202,15 +200,7 @@ func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) modu
 		"ResidentData",
 		"HasUnnamedData",
 		"HasAlternateDataStreams",
-	}, detailRows); err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-
-	recordInfo, err := utils.FileInfoFromPath(recordCSV)
-	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-	return module.AnalyzeResult{Files: []module.FileInfo{recordInfo}, OutputPath: outDir}
+	}, detailRows)
 }
 
 func parseCollectedMFT(ctx context.Context, path string) ([]mftRecordRow, error) {

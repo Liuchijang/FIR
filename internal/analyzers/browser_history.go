@@ -51,12 +51,12 @@ func (c *browserHistoryParser) Description() string {
 func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create browser history parser output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create browser history parser output dir: %w", err))
 	}
 
 	sources, err := resolveBrowserHistorySources(req)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {
 		return module.AnalyzeResult{OutputPath: outDir, Error: "no browser profiles available for history analysis"}
@@ -66,7 +66,7 @@ func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRe
 	var parseErrors []string
 	for _, source := range sources {
 		if err := ctx.Err(); err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 
 		rows, err := parseBrowserProfileHistory(outDir, source.Profile)

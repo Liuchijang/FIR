@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"time"
 
@@ -279,88 +278,23 @@ func (m CollectionProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m CollectionProgressModel) View() string {
-	if m.width == 0 || m.height == 0 {
-		return "\nLoading..."
+	if m.width <= 0 || m.height <= 0 {
+		return "Loading..."
 	}
-
-	width, height := m.rootSize()
-	header := m.headerViewWithWidth(width)
-	footer := m.footerViewWithWidth(width)
-	bodyHeight := max(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
-	body := m.bodyView(width, bodyHeight)
-	screen := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
-	screen = PadViewport(screen, width, height)
-	return lipgloss.NewStyle().
-		Padding(progressMarginY, progressMarginX).
-		Render(screen)
+	width, height := chromeSize(m.width, m.height)
+	header, footer := m.chromeHeaderFooter(width)
+	body := chromePanel(width, chromeBodyHeight(height, header, footer), m.bodyContent)
+	return chromeFrame(width, height, header, body, footer)
 }
 
-func (m CollectionProgressModel) headerViewWithWidth(width int) string {
-	innerWidth := max(10, width-panelBoxStyle.GetHorizontalFrameSize())
-	leftWidth, rightWidth := BannerColumnWidths(innerWidth)
-
-	leftLogo := BannerLogoLines()
-	rightLines := []string{
-		"Machine Info",
-		RenderBannerInfoRow("Host", MachineHostname(), rightWidth, menuItemStyle, bannerMutedStyle),
-		RenderBannerInfoRow("Platform", runtime.GOOS+"/"+runtime.GOARCH, rightWidth, menuItemStyle, bannerMutedStyle),
-		RenderBannerInfoRow("Phase", m.collectionPhaseTitle(), rightWidth, menuItemStyle, bannerMutedStyle),
-		RenderBannerInfoRow("State", m.bannerStateSummary(), rightWidth, menuItemStyle, bannerMutedStyle),
-	}
-
-	left := lipgloss.NewStyle().
-		Width(leftWidth).
-		Align(lipgloss.Left, lipgloss.Top).
-		Render(strings.Join([]string{
-			bannerLogoStyle.Render(trimToWidth(leftLogo[0], leftWidth)),
-			bannerLogoStyle.Render(trimToWidth(leftLogo[1], leftWidth)),
-			bannerLogoStyle.Render(trimToWidth(leftLogo[2], leftWidth)),
-			bannerTitleStyle.Render(trimToWidth("FIR v"+output.Version, leftWidth)),
-			lipgloss.NewStyle().Bold(true).Render(trimToWidth("Freedom Incident Response", leftWidth)),
-			bannerMutedStyle.Render(trimToWidth("Interactive collection runner", leftWidth)),
-		}, "\n"))
-
-	right := lipgloss.NewStyle().
-		Width(rightWidth).
-		Align(lipgloss.Left, lipgloss.Top).
-		Render(renderProgressBannerLines(rightLines, rightWidth))
-
-	row := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", BannerColumnGap), right)
-	return panelBoxStyle.
-		Width(max(1, width-2)).
-		Height(6).
-		Render(row)
-}
-
-func (m CollectionProgressModel) footerViewWithWidth(width int) string {
-	width = max(1, width)
-	helpWidth := max(1, width-footerBarStyle.GetHorizontalFrameSize())
-
-	helpModel := m.help
-	helpModel.Width = helpWidth
-
-	lines := make([]string, 0, 2)
-	if hint := m.footerHint(); hint != "" {
-		lines = append(lines, subtleStyle.Render(trimToWidth(hint, helpWidth)))
-	}
-	if helpView := helpModel.View(m.keyMap()); helpView != "" {
-		lines = append(lines, helpView)
-	}
-	innerWidth := max(1, width-footerBarStyle.GetHorizontalFrameSize())
-	return footerBarStyle.Width(innerWidth).Render(strings.Join(lines, "\n"))
-}
-
-func (m CollectionProgressModel) bodyView(width, height int) string {
-	if width <= 0 || height <= 0 {
-		return ""
-	}
-	innerWidth := max(1, width-panelBoxStyle.GetHorizontalFrameSize())
-	innerHeight := max(1, height-panelBoxStyle.GetVerticalFrameSize())
-	content := PadViewport(m.bodyContent(innerWidth, innerHeight), innerWidth, innerHeight)
-	return panelBoxStyle.
-		Width(max(1, width-2)).
-		Height(max(1, height-2)).
-		Render(content)
+func (m CollectionProgressModel) chromeHeaderFooter(width int) (string, string) {
+	header := chromeHeader(width, "Interactive collection runner", [][2]string{
+		{"Host", MachineHostname()},
+		{"Platform", MachinePlatform()},
+		{"Phase", m.collectionPhaseTitle()},
+		{"State", m.bannerStateSummary()},
+	})
+	return header, chromeFooter(width, m.footerHint(), m.keyMap(), m.help)
 }
 
 func (m CollectionProgressModel) bodyContent(width, height int) string {
@@ -511,10 +445,9 @@ func (m *CollectionProgressModel) syncViewport() {
 		return
 	}
 
-	width, height := m.rootSize()
-	header := m.headerViewWithWidth(width)
-	footer := m.footerViewWithWidth(width)
-	bodyHeight := max(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
+	width, height := chromeSize(m.width, m.height)
+	header, footer := m.chromeHeaderFooter(width)
+	bodyHeight := chromeBodyHeight(height, header, footer)
 	innerWidth := max(1, width-panelBoxStyle.GetHorizontalFrameSize())
 	innerHeight := max(1, bodyHeight-panelBoxStyle.GetVerticalFrameSize())
 	bodyHeaderHeight := lipgloss.Height(strings.Join(m.bodyHeaderLines(innerWidth), "\n"))
@@ -533,10 +466,6 @@ func (m *CollectionProgressModel) syncViewport() {
 	}
 
 	m.viewport.SetContent(m.renderRunningContent(m.viewport.Width))
-}
-
-func (m CollectionProgressModel) rootSize() (int, int) {
-	return RootViewportSize(m.width, m.height, progressMarginX, progressMarginY)
 }
 
 func renderProgressBannerLines(lines []string, width int) string {

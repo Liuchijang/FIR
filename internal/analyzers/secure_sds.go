@@ -11,7 +11,6 @@ import (
 
 	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func init() { module.RegisterAnalyzer(&secureSDSParser{}) }
@@ -27,7 +26,7 @@ func (c *secureSDSParser) Description() string {
 func (c *secureSDSParser) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create secure_sds parser output dir: %w", err).Error()}
+		return analyzerError(outDir, fmt.Errorf("create secure_sds parser output dir: %w", err))
 	}
 
 	sources, sourceErrs := readSecureSDSSources(req.OutputDir)
@@ -36,7 +35,7 @@ func (c *secureSDSParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 	var parseErrs []string
 	for _, src := range sources {
 		if err := ctx.Err(); err != nil {
-			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+			return analyzerError(outDir, err)
 		}
 
 		driveRows, _, _, err := parseSecureSDSRows(src.data)
@@ -52,8 +51,7 @@ func (c *secureSDSParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no SDS entries parsed: %s", strings.Join(append(sourceErrs, parseErrs...), "; "))}
 	}
 
-	entriesCSV := filepath.Join(outDir, "secure_sds_entries.csv")
-	if err := writeCSVFile(entriesCSV, []string{
+	return csvResult(outDir, "secure_sds_entries.csv", []string{
 		"Drive",
 		"StreamOffset",
 		"HeaderOffsetValue",
@@ -70,15 +68,7 @@ func (c *secureSDSParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 		"SACLPresent",
 		"SACLSize",
 		"SACLEntryCount",
-	}, rows); err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-
-	entriesInfo, err := utils.FileInfoFromPath(entriesCSV)
-	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
-	}
-	return module.AnalyzeResult{Files: []module.FileInfo{entriesInfo}, OutputPath: outDir}
+	}, rows)
 }
 
 type secureSDSSource struct {

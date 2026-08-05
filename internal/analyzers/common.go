@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func requiredModuleDir(outputDir, name string) (string, error) {
@@ -94,4 +95,21 @@ func maskString[T ~uint16 | ~uint32](mask T, flags []maskFlag[T]) string {
 		}
 	}
 	return strings.Join(names, "|")
+}
+
+func analyzerError(outDir string, err error) module.AnalyzeResult {
+	return analyzerError(outDir, err)
+}
+
+// csvResult writes one CSV into outDir and returns the finished result for it.
+func csvResult(outDir, name string, header []string, rows [][]string) module.AnalyzeResult {
+	path := filepath.Join(outDir, name)
+	if err := writeCSVFile(path, header, rows); err != nil {
+		return analyzerError(outDir, err)
+	}
+	fi, err := utils.FileInfoFromPath(path)
+	if err != nil {
+		return analyzerError(outDir, err)
+	}
+	return module.AnalyzeResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
 }
