@@ -13,8 +13,7 @@ import (
 
 const BannerColumnGap = 3
 
-// asciiPanelBorder mirrors the +---+ frame the summary tables draw, so when the rounded
-// border is unavailable the panels and the tables inside them read as one visual system.
+// Mirrors the +---+ summary tables so panels and tables read as one system.
 var asciiPanelBorder = lipgloss.Border{
 	Top:         "-",
 	Bottom:      "-",
@@ -26,10 +25,6 @@ var asciiPanelBorder = lipgloss.Border{
 	BottomRight: "+",
 }
 
-// adaptivePanelBorder picks the rounded border only on consoles that can actually render
-// its U+256D-U+2570 corner glyphs. Legacy conhost substitutes '?' for glyphs its font
-// lacks, which turned every panel corner into a literal '?'. Same idea as
-// newAdaptiveSpinner, applied to the frame instead of the spinner.
 func adaptivePanelBorder() lipgloss.Border {
 	if console.SupportsUnicodeGlyphs() {
 		return lipgloss.RoundedBorder()
@@ -56,9 +51,6 @@ var (
 	}
 )
 
-// verticalKeysHelp labels the up/down bindings, dropping the U+2191/U+2193 arrows on
-// consoles whose fonts render them as '?'. Both key maps share it so the footer help reads
-// the same on the selection and collection screens.
 func verticalKeysHelp() string {
 	if console.SupportsUnicodeGlyphs() {
 		return "↑/↓/k/j"
@@ -66,9 +58,7 @@ func verticalKeysHelp() string {
 	return "up/dn/k/j"
 }
 
-// newAdaptiveHelp builds the footer help model with separators the console can actually
-// draw: bubbles defaults to " • " (U+2022) and "…" (U+2026), both of which legacy conhost
-// renders as '?'.
+// bubbles defaults to " • " and "…", which legacy conhost renders as '?'.
 func newAdaptiveHelp() help.Model {
 	model := help.New()
 	if !console.SupportsUnicodeGlyphs() {

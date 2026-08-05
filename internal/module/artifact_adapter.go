@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// RequestCollector is the runtime bridge for collectors using CollectRequest.
 type RequestCollector interface {
 	Module
 	CollectWithRequest(ctx context.Context, req CollectRequest) CollectResult
@@ -17,7 +16,6 @@ type artifactAdapter struct {
 	collector ArtifactCollector
 }
 
-// RegisterArtifact registers a collector that implements the newer request/result contract.
 func RegisterArtifact(category string, collector ArtifactCollector) {
 	Register(&artifactAdapter{
 		category:  category,

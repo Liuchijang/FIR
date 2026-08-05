@@ -67,10 +67,8 @@ func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 	var rows [][]string
 	var parseErrs []string
 	for _, src := range sources {
-		select {
-		case <-ctx.Done():
-			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
-		default:
+		if err := ctx.Err(); err != nil {
+			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 		}
 
 		h, driveRows, _, _, err := parseUSNJournalRows(src.data, src.drive, recordMap, pathCache, enriched)
@@ -156,8 +154,6 @@ func readUSNJournalSources(ctx context.Context, outputDir string) ([]usnJournalS
 	return sources, errs
 }
 
-// collectedUSNJournalDrives lists the drive letters for which a per-drive
-// $UsnJrnl_J_<drive> file was collected into dir, sorted for determinism.
 func collectedUSNJournalDrives(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -204,10 +200,8 @@ func readLiveUSNJournal(ctx context.Context, drive string) ([]byte, error) {
 	payload := make([]byte, 0, 4*1024*1024)
 
 	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		err = windows.DeviceIoControl(handle, fsctlReadUsnJournal, (*byte)(unsafe.Pointer(&readData)), uint32(unsafe.Sizeof(readData)), &buf[0], uint32(len(buf)), &bytesReturned, nil)
@@ -499,105 +493,63 @@ func parseUSNRecordV3(record []byte, recordOffset uint64, enriched bool) ([]stri
 	return row, true
 }
 
-func usnReasonString(mask uint32) string {
-	flags := []struct {
-		value uint32
-		name  string
-	}{
-		{0x00000001, "DATA_OVERWRITE"},
-		{0x00000002, "DATA_EXTEND"},
-		{0x00000004, "DATA_TRUNCATION"},
-		{0x00000010, "NAMED_DATA_OVERWRITE"},
-		{0x00000020, "NAMED_DATA_EXTEND"},
-		{0x00000040, "NAMED_DATA_TRUNCATION"},
-		{0x00000100, "FILE_CREATE"},
-		{0x00000200, "FILE_DELETE"},
-		{0x00000400, "EA_CHANGE"},
-		{0x00000800, "SECURITY_CHANGE"},
-		{0x00001000, "RENAME_OLD_NAME"},
-		{0x00002000, "RENAME_NEW_NAME"},
-		{0x00004000, "INDEXABLE_CHANGE"},
-		{0x00008000, "BASIC_INFO_CHANGE"},
-		{0x00010000, "HARD_LINK_CHANGE"},
-		{0x00020000, "COMPRESSION_CHANGE"},
-		{0x00040000, "ENCRYPTION_CHANGE"},
-		{0x00080000, "OBJECT_ID_CHANGE"},
-		{0x00100000, "REPARSE_POINT_CHANGE"},
-		{0x00200000, "STREAM_CHANGE"},
-		{0x00400000, "TRANSACTED_CHANGE"},
-		{0x00800000, "INTEGRITY_CHANGE"},
-		{0x80000000, "CLOSE"},
-	}
-
-	var names []string
-	for _, flag := range flags {
-		if mask&flag.value != 0 {
-			names = append(names, flag.name)
-		}
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	return strings.Join(names, "|")
+var usnReasonFlags = []maskFlag[uint32]{
+	{0x00000001, "DATA_OVERWRITE"},
+	{0x00000002, "DATA_EXTEND"},
+	{0x00000004, "DATA_TRUNCATION"},
+	{0x00000010, "NAMED_DATA_OVERWRITE"},
+	{0x00000020, "NAMED_DATA_EXTEND"},
+	{0x00000040, "NAMED_DATA_TRUNCATION"},
+	{0x00000100, "FILE_CREATE"},
+	{0x00000200, "FILE_DELETE"},
+	{0x00000400, "EA_CHANGE"},
+	{0x00000800, "SECURITY_CHANGE"},
+	{0x00001000, "RENAME_OLD_NAME"},
+	{0x00002000, "RENAME_NEW_NAME"},
+	{0x00004000, "INDEXABLE_CHANGE"},
+	{0x00008000, "BASIC_INFO_CHANGE"},
+	{0x00010000, "HARD_LINK_CHANGE"},
+	{0x00020000, "COMPRESSION_CHANGE"},
+	{0x00040000, "ENCRYPTION_CHANGE"},
+	{0x00080000, "OBJECT_ID_CHANGE"},
+	{0x00100000, "REPARSE_POINT_CHANGE"},
+	{0x00200000, "STREAM_CHANGE"},
+	{0x00400000, "TRANSACTED_CHANGE"},
+	{0x00800000, "INTEGRITY_CHANGE"},
+	{0x80000000, "CLOSE"},
 }
 
-func usnSourceInfoString(mask uint32) string {
-	flags := []struct {
-		value uint32
-		name  string
-	}{
-		{0x00000001, "DATA_MANAGEMENT"},
-		{0x00000002, "AUXILIARY_DATA"},
-		{0x00000004, "REPLICATION_MANAGEMENT"},
-	}
+func usnReasonString(mask uint32) string { return maskString(mask, usnReasonFlags) }
 
-	var names []string
-	for _, flag := range flags {
-		if mask&flag.value != 0 {
-			names = append(names, flag.name)
-		}
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	return strings.Join(names, "|")
+var usnSourceInfoFlags = []maskFlag[uint32]{
+	{0x00000001, "DATA_MANAGEMENT"},
+	{0x00000002, "AUXILIARY_DATA"},
+	{0x00000004, "REPLICATION_MANAGEMENT"},
 }
 
-func fileAttributesString(mask uint32) string {
-	flags := []struct {
-		value uint32
-		name  string
-	}{
-		{0x00000001, "READONLY"},
-		{0x00000002, "HIDDEN"},
-		{0x00000004, "SYSTEM"},
-		{0x00000010, "DIRECTORY"},
-		{0x00000020, "ARCHIVE"},
-		{0x00000040, "DEVICE"},
-		{0x00000080, "NORMAL"},
-		{0x00000100, "TEMPORARY"},
-		{0x00000200, "SPARSE_FILE"},
-		{0x00000400, "REPARSE_POINT"},
-		{0x00000800, "COMPRESSED"},
-		{0x00001000, "OFFLINE"},
-		{0x00002000, "NOT_CONTENT_INDEXED"},
-		{0x00004000, "ENCRYPTED"},
-		{0x00008000, "INTEGRITY_STREAM"},
-		{0x00010000, "VIRTUAL"},
-		{0x00020000, "NO_SCRUB_DATA"},
-	}
+func usnSourceInfoString(mask uint32) string { return maskString(mask, usnSourceInfoFlags) }
 
-	var names []string
-	for _, flag := range flags {
-		if mask&flag.value != 0 {
-			names = append(names, flag.name)
-		}
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	return strings.Join(names, "|")
+var fileAttributesFlags = []maskFlag[uint32]{
+	{0x00000001, "READONLY"},
+	{0x00000002, "HIDDEN"},
+	{0x00000004, "SYSTEM"},
+	{0x00000010, "DIRECTORY"},
+	{0x00000020, "ARCHIVE"},
+	{0x00000040, "DEVICE"},
+	{0x00000080, "NORMAL"},
+	{0x00000100, "TEMPORARY"},
+	{0x00000200, "SPARSE_FILE"},
+	{0x00000400, "REPARSE_POINT"},
+	{0x00000800, "COMPRESSED"},
+	{0x00001000, "OFFLINE"},
+	{0x00002000, "NOT_CONTENT_INDEXED"},
+	{0x00004000, "ENCRYPTED"},
+	{0x00008000, "INTEGRITY_STREAM"},
+	{0x00010000, "VIRTUAL"},
+	{0x00020000, "NO_SCRUB_DATA"},
 }
+
+func fileAttributesString(mask uint32) string { return maskString(mask, fileAttributesFlags) }
 
 func bytesToHex(data []byte) string {
 	if len(data) == 0 {

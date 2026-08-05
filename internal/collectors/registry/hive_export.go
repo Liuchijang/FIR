@@ -53,10 +53,8 @@ func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInf
 	}
 
 	for sid, profileDir := range sidToProfile {
-		select {
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
 		}
 
 		username := filepath.Base(profileDir)
@@ -105,10 +103,8 @@ func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInf
 	var files []module.FileInfo
 	var errs []string
 	for _, spec := range specs {
-		select {
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
 		}
 
 		fi, err := collectHiveSpec(spec)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,12 +15,8 @@ import (
 	"github.com/muesli/reflow/wordwrap"
 )
 
-// Terminal styles below deliberately reuse the interactive TUI's palette (see
-// internal/tui): 175 for errors, 182 for success, 246 for borders, 218 for section
-// titles. RenderTerminal draws inside the TUI's rounded panel, so a table drawn in
-// unrelated colors reads as a second, foreign UI pasted into the panel. Only the
-// RenderTerminal path uses these — Render() must stay plain so summary.txt on disk
-// never contains ANSI escapes.
+// Reuses the TUI palette so the table does not read as a foreign UI inside its
+// panel. RenderTerminal only — Render() must stay plain: summary.txt takes no ANSI.
 var (
 	failureHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("175"))
 	warningHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("221"))
@@ -167,9 +164,6 @@ func (r SummaryReport) FailedResults() []module.Result {
 	return failed
 }
 
-// WarningResults returns modules that finished successfully (some files were
-// collected) but still reported an error — e.g. a registry collector that
-// captured most hives but couldn't read one of them.
 func (r SummaryReport) WarningResults() []module.Result {
 	var warnings []module.Result
 	for _, result := range r.Results {
@@ -260,111 +254,108 @@ func renderTerminalInfoTable(report SummaryReport, width int) string {
 	return renderStyledTable([]string{"Field", "Value"}, []int{fieldWidth, valueWidth}, rows, -1)
 }
 
+// flexColumn marks the one column that absorbs the leftover width.
+const flexColumn = -1
+
+// modulesLayouts are ordered widest-first; the first layout that fits the terminal
+// wins. Each drops whichever columns no longer earn their space.
+var modulesLayouts = []struct {
+	minWidth  int
+	headers   []string
+	widths    []int
+	statusCol int
+	cells     func(module.Result) []string
+}{
+	{
+		minWidth:  95,
+		headers:   []string{"Category", "Module", "Status", "Files", "Size", "Duration", "Error"},
+		widths:    []int{10, 16, 8, 5, 10, 8, flexColumn},
+		statusCol: 2,
+		cells: func(r module.Result) []string {
+			return []string{r.Category, r.CollectorName, resultStatus(r), fileCount(r), fileSize(r), formatDuration(r.Duration), resultError(r)}
+		},
+	},
+	{
+		minWidth:  76,
+		headers:   []string{"Category", "Module", "Status", "Files", "Size", "Duration"},
+		widths:    []int{10, 16, 8, 5, 10, flexColumn},
+		statusCol: 2,
+		cells: func(r module.Result) []string {
+			return []string{r.Category, r.CollectorName, resultStatus(r), fileCount(r), fileSize(r), formatDuration(r.Duration)}
+		},
+	},
+	{
+		minWidth:  54,
+		headers:   []string{"Collector", "Status", "Files", "Duration"},
+		widths:    []int{16, 10, 7, flexColumn},
+		statusCol: 1,
+		cells: func(r module.Result) []string {
+			return []string{collectorLabel(r), resultStatus(r), fileCount(r), formatDuration(r.Duration)}
+		},
+	},
+	{
+		minWidth:  38,
+		headers:   []string{"Collector", "Status", "Duration"},
+		widths:    []int{12, 8, flexColumn},
+		statusCol: 1,
+		cells: func(r module.Result) []string {
+			return []string{collectorLabel(r), resultStatus(r), formatDuration(r.Duration)}
+		},
+	},
+	{
+		minWidth:  23,
+		headers:   []string{"Collector", "Status"},
+		widths:    []int{8, flexColumn},
+		statusCol: 1,
+		cells: func(r module.Result) []string {
+			return []string{collectorLabel(r), resultStatus(r)}
+		},
+	},
+	{
+		minWidth:  0,
+		headers:   []string{"Collector"},
+		widths:    []int{flexColumn},
+		statusCol: -1,
+		cells: func(r module.Result) []string {
+			return []string{collectorLabel(r) + " " + resultStatus(r)}
+		},
+	},
+}
+
+func collectorLabel(r module.Result) string {
+	return fmt.Sprintf("[%s] %s", r.Category, r.CollectorName)
+}
+
+func fileCount(r module.Result) string {
+	return strconv.Itoa(len(r.FilesCollected))
+}
+
+func fileSize(r module.Result) string {
+	return resource.FormatBytes(module.TotalSize(r.FilesCollected))
+}
+
 func renderTerminalModulesTable(results []module.Result, width int) string {
-	switch {
-	case width >= 95:
-		rows := make([][]string, 0, len(results))
-		errorWidth := max(16, width-tableWidth([]int{16, 10, 8, 5, 10, 8, 0}))
-		for _, result := range results {
-			rows = append(rows, []string{
-				result.Category,
-				result.CollectorName,
-				resultStatus(result),
-				fmt.Sprintf("%d", len(result.FilesCollected)),
-				resource.FormatBytes(module.TotalSize(result.FilesCollected)),
-				formatDuration(result.Duration),
-				resultError(result),
-			})
+	layout := modulesLayouts[len(modulesLayouts)-1]
+	for _, candidate := range modulesLayouts {
+		if width >= candidate.minWidth {
+			layout = candidate
+			break
 		}
-		return renderStyledTable(
-			[]string{"Category", "Module", "Status", "Files", "Size", "Duration", "Error"},
-			[]int{10, 16, 8, 5, 10, 8, errorWidth},
-			rows,
-			2,
-		)
-
-	case width >= 76:
-		rows := make([][]string, 0, len(results))
-		for _, result := range results {
-			rows = append(rows, []string{
-				result.Category,
-				result.CollectorName,
-				resultStatus(result),
-				fmt.Sprintf("%d", len(result.FilesCollected)),
-				resource.FormatBytes(module.TotalSize(result.FilesCollected)),
-				formatDuration(result.Duration),
-			})
-		}
-		return renderStyledTable(
-			[]string{"Category", "Module", "Status", "Files", "Size", "Duration"},
-			[]int{10, 16, 8, 5, 10, max(8, width-tableWidth([]int{10, 16, 8, 5, 10, 0}))},
-			rows,
-			2,
-		)
-
-	case width >= 54:
-		rows := make([][]string, 0, len(results))
-		for _, result := range results {
-			rows = append(rows, []string{
-				fmt.Sprintf("[%s] %s", result.Category, result.CollectorName),
-				resultStatus(result),
-				fmt.Sprintf("%d", len(result.FilesCollected)),
-				formatDuration(result.Duration),
-			})
-		}
-		return renderStyledTable(
-			[]string{"Collector", "Status", "Files", "Duration"},
-			[]int{16, 10, 7, max(8, width-tableWidth([]int{16, 10, 7, 0}))},
-			rows,
-			1,
-		)
-
-	case width >= 38:
-		rows := make([][]string, 0, len(results))
-		for _, result := range results {
-			rows = append(rows, []string{
-				fmt.Sprintf("[%s] %s", result.Category, result.CollectorName),
-				resultStatus(result),
-				formatDuration(result.Duration),
-			})
-		}
-		return renderStyledTable(
-			[]string{"Collector", "Status", "Duration"},
-			[]int{12, 8, max(8, width-tableWidth([]int{12, 8, 0}))},
-			rows,
-			1,
-		)
-
-	default:
-		if width < 23 {
-			rows := make([][]string, 0, len(results))
-			for _, result := range results {
-				rows = append(rows, []string{
-					fmt.Sprintf("[%s] %s %s", result.Category, result.CollectorName, resultStatus(result)),
-				})
-			}
-			return renderStyledTable(
-				[]string{"Collector"},
-				[]int{max(1, width-4)},
-				rows,
-				-1,
-			)
-		}
-
-		rows := make([][]string, 0, len(results))
-		for _, result := range results {
-			rows = append(rows, []string{
-				fmt.Sprintf("[%s] %s", result.Category, result.CollectorName),
-				resultStatus(result),
-			})
-		}
-		return renderStyledTable(
-			[]string{"Collector", "Status"},
-			[]int{8, max(8, width-tableWidth([]int{8, 0}))},
-			rows,
-			1,
-		)
 	}
+
+	widths := append([]int(nil), layout.widths...)
+	for i, w := range widths {
+		if w == flexColumn {
+			widths[i] = 0
+			widths[i] = max(8, width-tableWidth(widths))
+		}
+	}
+
+	rows := make([][]string, 0, len(results))
+	for _, result := range results {
+		rows = append(rows, layout.cells(result))
+	}
+	return renderStyledTable(layout.headers, widths, rows, layout.statusCol)
 }
 
 func resultStatus(result module.Result) string {
@@ -394,12 +385,8 @@ func resultErrorBrief(result module.Result, width int) string {
 	return trimToWidth(sanitizeCell(result.Error), width)
 }
 
-// renderStyledTable draws the same fixed-width ASCII table as renderFixedWidthTable, but
-// tints the borders and header row to the TUI palette and colors the cells in statusCol
-// using the same status colors the live progress list uses — so a module's SUCCESS/FAILED
-// row keeps its color when collection finishes instead of turning plain white. Styles are
-// applied after each cell is trimmed and padded, so the ANSI escapes can never disturb
-// column alignment. Pass statusCol < 0 to disable cell coloring.
+// Styles are applied after each cell is trimmed and padded so the ANSI escapes
+// cannot disturb column alignment. statusCol < 0 disables cell coloring.
 func renderStyledTable(headers []string, widths []int, rows [][]string, statusCol int) string {
 	plain := func(int, string) lipgloss.Style { return lipgloss.NewStyle() }
 	cellStyle := plain

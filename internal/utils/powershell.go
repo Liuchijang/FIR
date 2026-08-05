@@ -23,7 +23,6 @@ func RunPowerShell(ctx context.Context, script string) error {
 	return nil
 }
 
-// PSQuote single-quotes value for safe interpolation into a PowerShell script.
 func PSQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }

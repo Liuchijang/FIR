@@ -65,10 +65,8 @@ func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRe
 	var files []module.FileInfo
 	var parseErrors []string
 	for _, source := range sources {
-		select {
-		case <-ctx.Done():
-			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
-		default:
+		if err := ctx.Err(); err != nil {
+			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 		}
 
 		rows, err := parseBrowserProfileHistory(outDir, source.Profile)

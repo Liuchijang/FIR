@@ -57,10 +57,8 @@ func (c *recentDocsParser) Analyze(ctx context.Context, req module.AnalyzeReques
 
 	rows := make([]recentDocsRow, 0, 256)
 	for _, source := range sources {
-		select {
-		case <-ctx.Done():
-			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
-		default:
+		if err := ctx.Err(); err != nil {
+			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 		}
 
 		root, err := openUserHiveSource(source)

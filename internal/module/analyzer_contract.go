@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// AnalyzeRequest is the normalized request shape for analyzer modules.
 type AnalyzeRequest struct {
 	OutputDir       string
 	AnalyzerDir     string
@@ -33,7 +32,6 @@ func (req AnalyzeRequest) EnsureOutputDir(name string) (string, error) {
 	return outDir, nil
 }
 
-// AnalyzeResult is the normalized result shape for analyzer modules.
 type AnalyzeResult struct {
 	Files      []FileInfo
 	OutputPath string
@@ -41,7 +39,6 @@ type AnalyzeResult struct {
 	Error      string
 }
 
-// Analyzer is the preferred contract for post-collection analysis modules.
 type Analyzer interface {
 	Name() string
 	Category() string

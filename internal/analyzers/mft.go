@@ -223,10 +223,8 @@ func parseCollectedMFT(ctx context.Context, path string) ([]mftRecordRow, error)
 	rows := make([]mftRecordRow, 0, totalRecords)
 
 	for i := 0; i < totalRecords; i++ {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		start := i * mftRecordSize
@@ -259,10 +257,8 @@ func parseLiveMFT(ctx context.Context) ([]mftRecordRow, error) {
 	var rows []mftRecordRow
 	var errs []string
 	for _, drive := range drives {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		driveRows, err := parseLiveMFTForDrive(ctx, drive)
@@ -311,10 +307,8 @@ func parseLiveMFTForDrive(ctx context.Context, drive string) ([]mftRecordRow, er
 	}
 
 	for start := 0; start < totalRecords; start += liveMFTBatchRecords {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		count := liveMFTBatchRecords
@@ -352,8 +346,6 @@ func parseLiveMFTForDrive(ctx context.Context, drive string) ([]mftRecordRow, er
 	return rows, nil
 }
 
-// collectedMFTDrives lists the drive letters for which a per-drive $MFT_<drive>
-// file was collected into dir (e.g. "$MFT_C" -> "C"), sorted for determinism.
 func collectedMFTDrives(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

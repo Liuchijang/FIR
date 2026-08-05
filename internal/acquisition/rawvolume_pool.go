@@ -16,8 +16,6 @@ type pooledVolume struct {
 	volData *NTFSVolumeData
 }
 
-// Get returns the (RawVolume, NTFSVolumeData) pair for drive, opening and
-// caching it on first use.
 func (p *RawVolumePool) Get(drive string) (*RawVolume, *NTFSVolumeData, error) {
 	if p.volumes == nil {
 		p.volumes = make(map[string]*pooledVolume)
@@ -40,9 +38,6 @@ func (p *RawVolumePool) Get(drive string) (*RawVolume, *NTFSVolumeData, error) {
 	return vol, volData, nil
 }
 
-// CopyFile copies path (its drive letter selects the pooled volume, defaulting
-// to "C" if path has none) to outputPath by reading straight off the raw NTFS
-// volume via CopyFileFromRawPath.
 func (p *RawVolumePool) CopyFile(path, outputPath string) (int64, error) {
 	vol, volData, err := p.Get(driveLetterOf(path))
 	if err != nil {

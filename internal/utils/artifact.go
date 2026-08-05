@@ -8,7 +8,6 @@ import (
 	"github.com/Liuchijang/FIR/internal/module"
 )
 
-// FileInfoFromPath computes metadata for a generated artifact already written to disk.
 func FileInfoFromPath(path string) (module.FileInfo, error) {
 	hash, err := HashFile(path)
 	if err != nil {

@@ -6,12 +6,10 @@ import (
 	"sync"
 )
 
-// registry is the global module registry. Modules self-register via init().
 var registry = &collectorRegistry{
 	collectors: make(map[string]Module),
 }
 
-// collectorRegistry provides thread-safe registration and lookup of modules.
 type collectorRegistry struct {
 	mu         sync.RWMutex
 	collectors map[string]Module
@@ -31,7 +29,6 @@ func Register(m Module) {
 	registry.collectors[name] = m
 }
 
-// Get returns a module by name, or an error if not found.
 func Get(name string) (Module, error) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -43,7 +40,6 @@ func Get(name string) (Module, error) {
 	return c, nil
 }
 
-// GetByCategory returns all modules belonging to the specified category.
 func GetByCategory(category string) []Module {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -60,7 +56,6 @@ func GetByCategory(category string) []Module {
 	return result
 }
 
-// GetByMode returns all modules belonging to the specified mode.
 func GetByMode(mode string) []Module {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -80,7 +75,6 @@ func GetByMode(mode string) []Module {
 	return result
 }
 
-// All returns all registered modules, sorted by category then name.
 func All() []Module {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -98,7 +92,6 @@ func All() []Module {
 	return result
 }
 
-// Categories returns a sorted, deduplicated list of all registered categories.
 func Categories() []string {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -116,7 +109,6 @@ func Categories() []string {
 	return cats
 }
 
-// Modes returns the known mode order for interactive and CLI displays.
 func Modes() []string {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()

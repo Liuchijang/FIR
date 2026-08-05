@@ -70,7 +70,6 @@ type consoleScreenBufferInfo struct {
 	DwMaximumWindowSize coord
 }
 
-// Ensure makes sure FIR has a usable console in both terminal and Explorer launches.
 func Ensure() {
 	if hasConsoleWindow() || hasUsableStdHandles() {
 		enableVirtualTerminal()
@@ -207,23 +206,14 @@ func enableVirtualTerminalForHandle(kind uint32) {
 	_ = windows.SetConsoleMode(handle, mode)
 }
 
-// PauseBeforeExit keeps an Explorer-launched console window open until the user acknowledges it.
 func PauseBeforeExit() {
 	if !shouldPauseBeforeExit() {
 		return
 	}
 
-	// The interactive TUI runs with mouse-motion tracking on, which makes the
-	// terminal stream a MOUSE_EVENT for every pixel of cursor movement. Bubble
-	// Tea disables tracking as part of its own shutdown, but that disable
-	// sequence and the terminal actually honoring it both take a moment: any
-	// stray motion right as the program exits can still land in the console
-	// input buffer. waitForFreshConsoleKeypress has to read and discard every
-	// one of those before it reaches a real key press, so a burst of queued
-	// mouse events reads as "the window takes a few seconds to close after I
-	// press a key". Send the disable sequences again here — harmless if
-	// they're already off — so nothing further gets queued once we start
-	// waiting.
+	// Re-disable mouse tracking: Bubble Tea's own disable lands a moment later, and
+	// queued MOUSE_EVENTs must drain before the keypress wait sees a real key —
+	// otherwise it reads as "the window takes seconds to close".
 	fmt.Fprint(os.Stdout, "\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l")
 	fmt.Fprint(os.Stderr, "\nPress any key to exit . . .")
 	waitForFreshConsoleKeypress()
@@ -234,20 +224,11 @@ func LikelyExplorerLaunch() bool {
 	return shouldPauseBeforeExit()
 }
 
-// SupportsUnicodeGlyphs reports whether the attached console can render the non-ASCII
-// glyphs FIR's chrome uses: lipgloss's rounded-border corners (U+256D-U+2570) and the
-// braille spinner frames (U+28xx).
-//
-// Legacy conhost prints a literal '?' for any glyph missing from the console font, and
-// neither the default raster "Terminal" font nor Lucida Console carries those ranges — so
-// every panel corner came out as '?' when FIR was double-clicked or run from cmd.exe, even
-// though enableUTF8Console already switches the codepage to UTF-8. The codepage is not the
-// problem; the font's glyph coverage is, and that cannot be changed from inside the process.
-//
-// Modern hosts (Windows Terminal, VS Code, ConEmu, mintty, Alacritty, WezTerm) all
-// advertise themselves through the environment, so only those are treated as safe. The
-// check is deliberately conservative: a false negative merely costs an ASCII fallback,
-// while a false positive litters '?' across the whole UI.
+// Legacy conhost prints '?' for glyphs its font lacks, and neither the raster
+// "Terminal" font nor Lucida Console carries rounded borders (U+256D-U+2570) or
+// braille spinner frames (U+28xx) — a codepage switch cannot fix glyph coverage.
+// Only hosts that advertise themselves are trusted: a false negative costs an
+// ASCII fallback, a false positive litters '?' across the UI.
 func SupportsUnicodeGlyphs() bool {
 	if value, ok := os.LookupEnv("ConEmuANSI"); ok {
 		return strings.EqualFold(strings.TrimSpace(value), "ON")

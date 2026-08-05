@@ -51,12 +51,7 @@ var (
 	}
 )
 
-// newAdaptiveSpinner picks a spinner style that renders safely regardless of launch
-// context. spinner.Dot draws braille frames (U+28xx), which legacy conhost renders as '?'
-// because its fonts lack that range — so those consoles get the plain-ASCII
-// safePinkSpinner instead. This keys off the same console capability check as the panel
-// borders (adaptivePanelBorder): the previous LikelyExplorerLaunch check only caught
-// double-click launches and still produced broken frames when FIR was run from cmd.exe.
+// spinner.Dot draws braille frames that legacy conhost renders as '?'.
 func newAdaptiveSpinner() spinner.Model {
 	spin := spinner.New()
 	if console.SupportsUnicodeGlyphs() {

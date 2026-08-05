@@ -18,8 +18,6 @@ type modeProvider interface {
 	Mode() string
 }
 
-// Module is the interface implemented by both collection and analysis modules.
-// Each module is responsible for producing forensic output in its category.
 type Module interface {
 	// Name returns the unique identifier for this module (e.g., "mft", "registry").
 	Name() string
@@ -36,14 +34,12 @@ type Module interface {
 	Collect(ctx context.Context, outputDir string) ([]FileInfo, error)
 }
 
-// FileInfo holds metadata about a collected file, including its integrity hash.
 type FileInfo struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
 }
 
-// Result captures the outcome of a single module's execution.
 type Result struct {
 	CollectorName  string        `json:"collector_name"`
 	Category       string        `json:"category"`

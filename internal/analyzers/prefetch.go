@@ -43,10 +43,8 @@ func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 
 	rows := make([][]string, 0, len(entries))
 	for _, entry := range entries {
-		select {
-		case <-ctx.Done():
-			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
-		default:
+		if err := ctx.Err(); err != nil {
+			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 		}
 
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".pf") {

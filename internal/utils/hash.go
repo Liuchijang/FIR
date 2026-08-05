@@ -8,7 +8,6 @@ import (
 	"os"
 )
 
-// HashFile computes the SHA-256 hash of the file at the given path.
 func HashFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -19,7 +18,6 @@ func HashFile(path string) (string, error) {
 	return HashReader(f)
 }
 
-// HashReader computes the SHA-256 hash from an io.Reader.
 func HashReader(r io.Reader) (string, error) {
 	h := sha256.New()
 	if _, err := io.Copy(h, r); err != nil {

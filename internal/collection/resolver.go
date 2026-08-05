@@ -7,7 +7,6 @@ import (
 	"github.com/Liuchijang/FIR/internal/module"
 )
 
-// ResolveModules converts a comma-separated artifact string to registered modules.
 func ResolveModules(artifactStr string) ([]module.Module, error) {
 	names := strings.Split(artifactStr, ",")
 	var result []module.Module

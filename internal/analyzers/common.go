@@ -78,3 +78,20 @@ func sanitizeCSVValue(value string) string {
 	value = strings.ReplaceAll(value, "\t", " ")
 	return strings.TrimSpace(value)
 }
+
+// maskFlag pairs a bit with its name. Flag tables are package-level so a
+// million-record USN journal does not reallocate them per record.
+type maskFlag[T ~uint16 | ~uint32] struct {
+	value T
+	name  string
+}
+
+func maskString[T ~uint16 | ~uint32](mask T, flags []maskFlag[T]) string {
+	var names []string
+	for _, flag := range flags {
+		if mask&flag.value != 0 {
+			names = append(names, flag.name)
+		}
+	}
+	return strings.Join(names, "|")
+}

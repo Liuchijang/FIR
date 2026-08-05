@@ -35,10 +35,8 @@ func (c *secureSDSParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 	var rows [][]string
 	var parseErrs []string
 	for _, src := range sources {
-		select {
-		case <-ctx.Done():
-			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
-		default:
+		if err := ctx.Err(); err != nil {
+			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 		}
 
 		driveRows, _, _, err := parseSecureSDSRows(src.data)
@@ -135,8 +133,6 @@ func readSecureSDSSources(outputDir string) ([]secureSDSSource, []string) {
 	return sources, errs
 }
 
-// collectedSecureSDSDrives lists the drive letters for which a per-drive
-// $Secure_SDS_<drive> file was collected into dir, sorted for determinism.
 func collectedSecureSDSDrives(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -281,37 +277,25 @@ func parseSecurityDescriptorInfo(data []byte) (securityDescriptorInfo, bool) {
 	return info, true
 }
 
-func securityDescriptorControlString(control uint16) string {
-	flags := []struct {
-		value uint16
-		name  string
-	}{
-		{0x0001, "OWNER_DEFAULTED"},
-		{0x0002, "GROUP_DEFAULTED"},
-		{0x0004, "DACL_PRESENT"},
-		{0x0008, "DACL_DEFAULTED"},
-		{0x0010, "SACL_PRESENT"},
-		{0x0020, "SACL_DEFAULTED"},
-		{0x0100, "DACL_AUTO_INHERIT_REQ"},
-		{0x0200, "SACL_AUTO_INHERIT_REQ"},
-		{0x0400, "DACL_AUTO_INHERITED"},
-		{0x0800, "SACL_AUTO_INHERITED"},
-		{0x1000, "DACL_PROTECTED"},
-		{0x2000, "SACL_PROTECTED"},
-		{0x4000, "RM_CONTROL_VALID"},
-		{0x8000, "SELF_RELATIVE"},
-	}
+var securityDescriptorControlFlags = []maskFlag[uint16]{
+	{0x0001, "OWNER_DEFAULTED"},
+	{0x0002, "GROUP_DEFAULTED"},
+	{0x0004, "DACL_PRESENT"},
+	{0x0008, "DACL_DEFAULTED"},
+	{0x0010, "SACL_PRESENT"},
+	{0x0020, "SACL_DEFAULTED"},
+	{0x0100, "DACL_AUTO_INHERIT_REQ"},
+	{0x0200, "SACL_AUTO_INHERIT_REQ"},
+	{0x0400, "DACL_AUTO_INHERITED"},
+	{0x0800, "SACL_AUTO_INHERITED"},
+	{0x1000, "DACL_PROTECTED"},
+	{0x2000, "SACL_PROTECTED"},
+	{0x4000, "RM_CONTROL_VALID"},
+	{0x8000, "SELF_RELATIVE"},
+}
 
-	var names []string
-	for _, flag := range flags {
-		if control&flag.value != 0 {
-			names = append(names, flag.name)
-		}
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	return strings.Join(names, "|")
+func securityDescriptorControlString(control uint16) string {
+	return maskString(control, securityDescriptorControlFlags)
 }
 
 func sidFromOffset(data []byte, offset uint32) string {

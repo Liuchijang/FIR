@@ -13,10 +13,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// FSCTL_GET_NTFS_VOLUME_DATA is the IOCTL code to retrieve NTFS volume metadata.
 const FSCTL_GET_NTFS_VOLUME_DATA = 0x00090064
 
-// NTFSVolumeData holds key NTFS volume parameters returned by FSCTL_GET_NTFS_VOLUME_DATA.
 type NTFSVolumeData struct {
 	VolumeSerialNumber           uint64
 	NumberSectors                uint64
@@ -54,7 +52,6 @@ type ntfsVolumeDataRaw struct {
 	MFTZoneEnd                   int64
 }
 
-// RawVolume provides sector-aligned read access to a raw Windows volume.
 type RawVolume struct {
 	handle windows.Handle
 	sector uint32
@@ -64,12 +61,8 @@ type RawVolume struct {
 	pathIndex *mftPathIndex
 }
 
-// mftPathIndex maps every in-use MFT record to its parent directory's record
-// number, built by a single full-MFT scan and reused by every subsequent
-// FindRecordByPath call on the same RawVolume. Without this cache, resolving
-// N raw paths on one volume (e.g. a hive file plus its .LOG1/.LOG2
-// companions) costs N full linear MFT scans — measured at ~47s each on a
-// ~1M-record volume, i.e. minutes just to fetch a few KB of log files.
+// Parent->children index from one full-MFT scan. Without it every
+// FindRecordByPath is another linear scan — ~47s on a 1M-record volume.
 type mftPathIndex struct {
 	childrenByParent map[uint64][]FileNameRef
 }
@@ -100,14 +93,8 @@ var (
 	procGetDriveTypeW    = modKernel32.NewProc("GetDriveTypeW")
 )
 
-// driveTypeFixed is the Windows DRIVE_FIXED constant returned by GetDriveTypeW
-// for locally attached, non-removable volumes.
 const driveTypeFixed = 3
 
-// ListFixedDrives enumerates the drive letters (e.g. "C", "D") of all fixed
-// (non-removable, non-network, non-optical) volumes currently mounted on the
-// system, so collectors can operate across every local disk rather than a
-// single hard-coded drive.
 func ListFixedDrives() ([]string, error) {
 	r1, _, callErr := procGetLogicalDrives.Call()
 	if r1 == 0 {
@@ -166,7 +153,6 @@ func (v *RawVolume) Close() error {
 	return windows.CloseHandle(v.handle)
 }
 
-// GetNTFSVolumeData retrieves NTFS metadata including MFT location and cluster sizes.
 func (v *RawVolume) GetNTFSVolumeData() (*NTFSVolumeData, error) {
 	var raw ntfsVolumeDataRaw
 	var bytesReturned uint32
@@ -851,8 +837,6 @@ func FindRecordByPath(vol *RawVolume, volData *NTFSVolumeData, path string) (uin
 // handful of large reads instead.
 const mftScanBatchRecords = 8192
 
-// ensurePathIndex builds (on first use) or returns the cached full-volume
-// parent->children filename index used by FindRecordByPath.
 func (v *RawVolume) ensurePathIndex(volData *NTFSVolumeData) (*mftPathIndex, error) {
 	if v.pathIndex != nil {
 		return v.pathIndex, nil

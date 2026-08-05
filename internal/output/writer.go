@@ -12,15 +12,12 @@ import (
 	"github.com/Liuchijang/FIR/internal/platform"
 )
 
-// Manager handles output directory creation and path resolution.
 type Manager struct {
 	mu      sync.Mutex
 	baseDir string // Root output directory (e.g., DESKTOP-ABC123_20260416_143210)
 	created map[string]bool
 }
 
-// NewManager creates a new output manager.
-// baseDir is the parent directory where the timestamped collection folder will be created.
 func NewManager(baseDir string) (*Manager, error) {
 	hostname := platform.DetectHost().Hostname
 	hostname = sanitizeDirName(hostname)
@@ -39,13 +36,10 @@ func NewManager(baseDir string) (*Manager, error) {
 	}, nil
 }
 
-// BaseDir returns the full path to the collection output directory.
 func (m *Manager) BaseDir() string {
 	return m.baseDir
 }
 
-// CategoryDir returns the path for a specific artifact category subdirectory,
-// creating it if it doesn't exist yet.
 func (m *Manager) CategoryDir(category string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -60,7 +54,6 @@ func (m *Manager) CategoryDir(category string) (string, error) {
 	return dir, nil
 }
 
-// LogsDir returns the path for the logs subdirectory.
 func (m *Manager) LogsDir() (string, error) {
 	return m.CategoryDir("logs")
 }
@@ -75,7 +68,6 @@ func sanitizeDirName(name string) string {
 	return result
 }
 
-// SanitizeDirNameForExport reuses FIR's directory-name normalization in other packages.
 func SanitizeDirNameForExport(name string) string {
 	return sanitizeDirName(name)
 }

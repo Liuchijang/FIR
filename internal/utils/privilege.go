@@ -8,7 +8,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// IsAdmin checks whether the current process is running with elevated (admin) privileges.
 func IsAdmin() bool {
 	var sid *windows.SID
 	err := windows.AllocateAndInitializeSid(
@@ -31,8 +30,6 @@ func IsAdmin() bool {
 	return member
 }
 
-// EnablePrivilege enables the specified privilege (e.g., "SeBackupPrivilege")
-// in the current process token.
 func EnablePrivilege(name string) error {
 	var token windows.Token
 	proc := windows.CurrentProcess()

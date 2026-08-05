@@ -14,7 +14,6 @@ import (
 
 const copyBufferSize = 64 * 1024
 
-// SafeCopyFile copies src to dst while simultaneously computing the SHA-256 hash.
 func SafeCopyFile(src, dst string) (module.FileInfo, error) {
 	srcFile, err := os.Open(src)
 	if err != nil {

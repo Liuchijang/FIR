@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// CollectRequest is the normalized request shape for artifact collectors.
 type CollectRequest struct {
 	OutputDir       string
 	ArtifactDir     string
@@ -33,7 +32,6 @@ func (req CollectRequest) EnsureOutputDir(defaultSubdir string) (string, error) 
 	return outDir, nil
 }
 
-// CollectResult is the normalized result shape for artifact collectors.
 type CollectResult struct {
 	Files      []FileInfo
 	OutputPath string
@@ -41,7 +39,6 @@ type CollectResult struct {
 	Error      string
 }
 
-// ArtifactCollector is the preferred contract for new collection modules.
 type ArtifactCollector interface {
 	Name() string
 	Description() string

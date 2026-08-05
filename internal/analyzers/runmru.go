@@ -56,10 +56,8 @@ func (c *runMRUParser) Analyze(ctx context.Context, req module.AnalyzeRequest) m
 
 	rows := make([]runMRURow, 0, 128)
 	for _, source := range sources {
-		select {
-		case <-ctx.Done():
-			return module.AnalyzeResult{OutputPath: outDir, Error: ctx.Err().Error()}
-		default:
+		if err := ctx.Err(); err != nil {
+			return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 		}
 
 		root, err := openUserHiveSource(source)

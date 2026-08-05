@@ -162,7 +162,6 @@ type BrowserProfile struct {
 	Path    string
 }
 
-// ChromiumProfile is kept as a compatibility alias for existing code.
 type ChromiumProfile = BrowserProfile
 
 func (c *browserCollector) Name() string { return BrowserCollectorName }
