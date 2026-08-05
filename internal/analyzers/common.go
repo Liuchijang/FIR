@@ -98,7 +98,7 @@ func maskString[T ~uint16 | ~uint32](mask T, flags []maskFlag[T]) string {
 }
 
 func analyzerError(outDir string, err error) module.AnalyzeResult {
-	return analyzerError(outDir, err)
+	return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
 }
 
 // csvResult writes one CSV into outDir and returns the finished result for it.
