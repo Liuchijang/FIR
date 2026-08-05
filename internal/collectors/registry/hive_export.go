@@ -235,3 +235,34 @@ func isNotFoundError(err error) bool {
 		errors.Is(err, windows.ERROR_FILE_NOT_FOUND) ||
 		errors.Is(err, windows.ERROR_PATH_NOT_FOUND)
 }
+
+// EstimatedBytes sums the hives this run will copy: the system hives with their
+// .LOG1/.LOG2 companions, plus NTUSER.DAT and UsrClass.dat for every profile.
+func estimatedRegistryBytes() int64 {
+	configDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "config")
+
+	var paths []string
+	for _, hive := range systemHives {
+		paths = append(paths, filepath.Join(configDir, hive))
+		for _, suffix := range hiveLogSuffixes[1:] {
+			paths = append(paths, filepath.Join(configDir, hive+suffix))
+		}
+	}
+
+	sidToProfile, err := loadProfileSIDMap()
+	if err == nil {
+		for _, profileDir := range sidToProfile {
+			paths = append(paths,
+				filepath.Join(profileDir, "NTUSER.DAT"),
+				filepath.Join(profileDir, "AppData", "Local", "Microsoft", "Windows", "UsrClass.dat"),
+			)
+			for _, suffix := range hiveLogSuffixes[1:] {
+				paths = append(paths,
+					filepath.Join(profileDir, "NTUSER.DAT"+suffix),
+					filepath.Join(profileDir, "AppData", "Local", "Microsoft", "Windows", "UsrClass.dat"+suffix),
+				)
+			}
+		}
+	}
+	return utils.PathsSize(paths...)
+}

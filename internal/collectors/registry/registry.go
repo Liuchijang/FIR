@@ -54,3 +54,5 @@ func (c *registryCollector) Collect(ctx context.Context, req module.CollectReque
 	}
 	return module.CollectResult{Files: allFiles, OutputPath: outDir}
 }
+
+func (c *registryCollector) EstimatedBytes() int64 { return estimatedRegistryBytes() }

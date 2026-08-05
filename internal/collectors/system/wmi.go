@@ -76,3 +76,7 @@ func (c *wmiCollector) Collect(ctx context.Context, req module.CollectRequest) m
 	}
 	return module.CollectResult{Files: allFiles, OutputPath: outDir}
 }
+
+func (c *wmiCollector) EstimatedBytes() int64 {
+	return utils.PathsSize(filepath.Join(os.Getenv("SystemRoot"), "System32", "wbem", "Repository"))
+}

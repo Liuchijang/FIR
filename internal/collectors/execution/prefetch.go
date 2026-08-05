@@ -63,3 +63,7 @@ func (c *prefetchCollector) Collect(ctx context.Context, req module.CollectReque
 	}
 	return module.CollectResult{Files: allFiles, OutputPath: outDir}
 }
+
+func (c *prefetchCollector) EstimatedBytes() int64 {
+	return utils.PathsSize(filepath.Join(os.Getenv("SystemRoot"), "Prefetch"))
+}

@@ -130,3 +130,8 @@ func saveMountedAmcacheHive(dst string) (module.FileInfo, error) {
 	}
 	return utils.FileInfoFromPath(dst)
 }
+
+func (c *amcacheCollector) EstimatedBytes() int64 {
+	base := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve")
+	return utils.PathsSize(base, base+".LOG1", base+".LOG2")
+}

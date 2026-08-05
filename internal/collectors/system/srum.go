@@ -40,3 +40,7 @@ func (c *srumCollector) Collect(ctx context.Context, req module.CollectRequest) 
 	}
 	return module.CollectResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
 }
+
+func (c *srumCollector) EstimatedBytes() int64 {
+	return utils.PathsSize(filepath.Join(os.Getenv("SystemRoot"), "System32", "sru", "SRUDB.dat"))
+}
