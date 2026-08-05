@@ -22,7 +22,10 @@ const (
 	// dump is high-entropy, so generic deflate barely shrinks it.
 	ramArchiveRatioPct = 80
 	safetyMarginPct    = 20
-	minSafetyMargin    = 1 * gb
+	// minSafetyMargin covers the run's own logs, manifest and summary plus a little
+	// slack. It is deliberately small: a 1GB floor made a single 2MB EVTX file
+	// report "Required 1.0 GiB", which reads as a broken estimate.
+	minSafetyMargin = 128 * mb
 )
 
 type StorageEstimate struct {
@@ -106,6 +109,14 @@ func archiveRatioForModule(mod module.Module) int64 {
 func estimateModuleBytes(mod module.Module) int64 {
 	if module.ModeOf(mod) == module.ModeAnalyzer {
 		return defaultAnalyzerSize
+	}
+
+	// A module that knows what it will write — because the user picked specific EVTX
+	// files or browser profiles — outranks the flat per-artifact guess below.
+	if est, ok := mod.(module.SizeEstimator); ok {
+		if size := est.EstimatedBytes(); size > 0 {
+			return size
+		}
 	}
 
 	switch strings.ToLower(mod.Name()) {

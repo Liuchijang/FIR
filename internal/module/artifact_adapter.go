@@ -51,3 +51,12 @@ func (a *artifactAdapter) Collect(ctx context.Context, outputDir string) ([]File
 func (a *artifactAdapter) CollectWithRequest(ctx context.Context, req CollectRequest) CollectResult {
 	return a.collector.Collect(ctx, req)
 }
+
+// EstimatedBytes forwards to the wrapped collector so the estimate is not hidden by
+// the adapter; 0 means the collector has no better answer than the flat estimate.
+func (a *artifactAdapter) EstimatedBytes() int64 {
+	if est, ok := a.collector.(SizeEstimator); ok {
+		return est.EstimatedBytes()
+	}
+	return 0
+}

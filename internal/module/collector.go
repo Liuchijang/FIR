@@ -82,3 +82,10 @@ func TotalSize(files []FileInfo) int64 {
 	}
 	return total
 }
+
+// SizeEstimator lets a module report how many bytes it will actually write, so the
+// storage estimate follows the user's selection instead of a flat per-module guess.
+// Returning 0 means "no opinion" and falls back to that guess.
+type SizeEstimator interface {
+	EstimatedBytes() int64
+}

@@ -4,6 +4,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -695,4 +696,48 @@ func copyBrowserDir(srcDir, dstDir, relDir string, rawCtx *acquisition.RawVolume
 
 func outputDirName(name string) string {
 	return strings.ReplaceAll(output.SanitizeDirNameForExport(name), " ", "_")
+}
+
+// EstimatedBytes sums the artifacts actually present in the selected profiles, so
+// picking one profile does not estimate a flat whole-machine figure.
+func (c *browserCollector) EstimatedBytes() int64 {
+	profiles, err := resolveSelectedProfiles()
+	if err != nil || len(profiles) == 0 {
+		return 0
+	}
+
+	var total int64
+	for _, profile := range profiles {
+		for _, name := range chromiumEvidenceFiles {
+			if info, err := os.Stat(filepath.Join(profile.Path, name)); err == nil {
+				total += info.Size()
+			}
+		}
+		for _, name := range chromiumEvidenceDirs {
+			total += dirSize(filepath.Join(profile.Path, name))
+		}
+		for _, name := range firefoxEvidenceFiles {
+			if info, err := os.Stat(filepath.Join(profile.Path, name)); err == nil {
+				total += info.Size()
+			}
+		}
+		for _, name := range firefoxEvidenceDirs {
+			total += dirSize(filepath.Join(profile.Path, name))
+		}
+	}
+	return total
+}
+
+func dirSize(dir string) int64 {
+	var total int64
+	filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if info, err := entry.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }

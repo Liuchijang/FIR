@@ -43,9 +43,12 @@ func ConfigureSelectedLogs(names []string) {
 	eventLogSelection.names = append([]string(nil), names...)
 }
 
+func evtxLogDir() string {
+	return filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
+}
+
 func DiscoverAvailableLogs() ([]EventLogFile, error) {
-	evtxDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
-	return discoverLogsInDir(evtxDir)
+	return discoverLogsInDir(evtxLogDir())
 }
 
 func ResolveSelectedOrAllLogs(dir string) ([]string, error) {
@@ -91,7 +94,7 @@ func (c *eventLogCollector) Collect(ctx context.Context, req module.CollectReque
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create eventlog output dir: %w", err).Error()}
 	}
 
-	evtxDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
+	evtxDir := evtxLogDir()
 	evtxFiles, err := ResolveSelectedOrAllLogs(evtxDir)
 	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("resolve event log files: %w", err).Error()}
@@ -158,4 +161,22 @@ func discoverLogsInDir(dir string) ([]EventLogFile, error) {
 		return logs[i].Name < logs[j].Name
 	})
 	return logs, nil
+}
+
+// EstimatedBytes reports the size of the logs this run will actually copy, so
+// picking one small log does not estimate the whole winevt\Logs directory.
+func (c *eventLogCollector) EstimatedBytes() int64 {
+	dir := evtxLogDir()
+	names, err := ResolveSelectedOrAllLogs(dir)
+	if err != nil {
+		return 0
+	}
+
+	var total int64
+	for _, name := range names {
+		if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			total += info.Size()
+		}
+	}
+	return total
 }
