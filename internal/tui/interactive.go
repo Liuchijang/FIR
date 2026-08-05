@@ -677,12 +677,12 @@ func (m menuModel) View() string {
 	}
 
 	width, height := chromeSize(m.width, m.height)
-	header := chromeHeader(width, "Interactive module launcher", [][2]string{
+	footer := chromeFooter(width, m.status, m.keyMap(), m.help)
+	header := chromeHeader(width, height-lipgloss.Height(footer), "Interactive module launcher", [][2]string{
 		{"Host", MachineHostname()},
 		{"Platform", MachinePlatform()},
 		{"Phase", m.screenTitle()},
 	})
-	footer := chromeFooter(width, m.status, m.keyMap(), m.help)
 	body := chromePanel(width, chromeBodyHeight(height, header, footer), m.bodyContent)
 	return chromeFrame(width, height, header, body, footer)
 }
@@ -1012,18 +1012,22 @@ func (m menuModel) bodyContent(width, height int) string {
 		return ""
 	}
 
-	lines := []string{
-		titleStyle.Render(trimToWidth(m.screenTitle(), width)),
-		subtleStyle.Render(trimToWidth(m.status, width)),
-		"",
+	// The screen title is already in the header's Phase row and the status is already
+	// in the footer, so on a short terminal these three rows are dropped rather than
+	// spent duplicating them — otherwise they consume the whole panel and no
+	// selectable row is drawn at all.
+	var lines []string
+	if height >= bodyChromeRows+3 {
+		lines = []string{
+			titleStyle.Render(trimToWidth(m.screenTitle(), width)),
+			subtleStyle.Render(trimToWidth(m.status, width)),
+			"",
+		}
 	}
 
 	availableRows := max(0, height-len(lines))
 	if availableRows <= 0 {
-		if height < len(lines) {
-			return strings.Join(lines[:height], "\n")
-		}
-		return strings.Join(lines, "\n")
+		return strings.Join(lines[:min(len(lines), height)], "\n")
 	}
 
 	var content string

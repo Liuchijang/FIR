@@ -288,13 +288,15 @@ func (m CollectionProgressModel) View() string {
 }
 
 func (m CollectionProgressModel) chromeHeaderFooter(width int) (string, string) {
-	header := chromeHeader(width, "Interactive collection runner", [][2]string{
+	footer := chromeFooter(width, m.footerHint(), m.keyMap(), m.help)
+	_, height := chromeSize(m.width, m.height)
+	header := chromeHeader(width, height-lipgloss.Height(footer), "Interactive collection runner", [][2]string{
 		{"Host", MachineHostname()},
 		{"Platform", MachinePlatform()},
 		{"Phase", m.collectionPhaseTitle()},
 		{"State", m.bannerStateSummary()},
 	})
-	return header, chromeFooter(width, m.footerHint(), m.keyMap(), m.help)
+	return header, footer
 }
 
 func (m CollectionProgressModel) bodyContent(width, height int) string {
@@ -302,13 +304,9 @@ func (m CollectionProgressModel) bodyContent(width, height int) string {
 		return ""
 	}
 
-	lines := m.bodyHeaderLines(width)
-	availableRows := max(0, height-len(lines))
-	if availableRows <= 0 {
-		if height < len(lines) {
-			return strings.Join(lines[:height], "\n")
-		}
-		return strings.Join(lines, "\n")
+	lines := m.bodyHeaderLines(width, height)
+	if height-len(lines) <= 0 {
+		return strings.Join(lines[:min(len(lines), height)], "\n")
 	}
 
 	content := m.viewport.View()
@@ -319,7 +317,13 @@ func (m CollectionProgressModel) bodyContent(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m CollectionProgressModel) bodyHeaderLines(width int) []string {
+// bodyHeaderLines returns nothing when height leaves no room for both the header
+// and rows: the phase title is already in the banner, so under pressure the rows win.
+func (m CollectionProgressModel) bodyHeaderLines(width, height int) []string {
+	if height < bodyChromeRows+2 {
+		return nil
+	}
+
 	lines := []string{
 		titleStyle.Render(trimToWidth(m.collectionPhaseTitle(), width)),
 	}
@@ -450,7 +454,7 @@ func (m *CollectionProgressModel) syncViewport() {
 	bodyHeight := chromeBodyHeight(height, header, footer)
 	innerWidth := max(1, width-panelBoxStyle.GetHorizontalFrameSize())
 	innerHeight := max(1, bodyHeight-panelBoxStyle.GetVerticalFrameSize())
-	bodyHeaderHeight := lipgloss.Height(strings.Join(m.bodyHeaderLines(innerWidth), "\n"))
+	bodyHeaderHeight := len(m.bodyHeaderLines(innerWidth, innerHeight))
 	m.viewport.Width = max(1, innerWidth)
 	m.viewport.Height = max(1, innerHeight-bodyHeaderHeight)
 

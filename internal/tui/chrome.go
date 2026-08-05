@@ -160,6 +160,12 @@ const (
 	chromeMarginX = 2
 	chromeMarginY = 1
 	chromeHeaderH = 6
+	// chromeMinBodyRows is the panel height the banner must leave behind. Below it
+	// the banner is collapsed to one line: a fixed 8-row banner on a short terminal
+	// starved the body until no selectable rows were drawn at all.
+	chromeMinBodyRows = 8
+	// bodyChromeRows is the title/status/blank block a body panel prepends.
+	bodyChromeRows = 3
 )
 
 // chromeSize is the drawable area inside the root margins.
@@ -168,8 +174,14 @@ func chromeSize(termWidth, termHeight int) (int, int) {
 }
 
 // chromeHeader draws the banner panel: logo and subtitle on the left, labelled
-// machine-info rows on the right.
-func chromeHeader(width int, subtitle string, info [][2]string) string {
+// machine-info rows on the right. budget is the height available for the header and
+// the body together; when the banner would not leave chromeMinBodyRows behind it
+// collapses to a single line so the body keeps its rows.
+func chromeHeader(width, budget int, subtitle string, info [][2]string) string {
+	if budget < chromeHeaderH+panelBoxStyle.GetVerticalFrameSize()+chromeMinBodyRows {
+		return chromeCompactHeader(width, info)
+	}
+
 	innerWidth := max(10, width-panelBoxStyle.GetHorizontalFrameSize())
 	leftWidth, rightWidth := BannerColumnWidths(innerWidth)
 
@@ -198,6 +210,26 @@ func chromeHeader(width int, subtitle string, info [][2]string) string {
 		column(rightWidth, rightLines),
 	)
 	return panelBoxStyle.Width(max(1, width-2)).Height(chromeHeaderH).Render(row)
+}
+
+// chromeCompactHeader is the one-line banner for short terminals: version, host and
+// the last info row, which is the phase or run state.
+func chromeCompactHeader(width int, info [][2]string) string {
+	innerWidth := max(10, width-panelBoxStyle.GetHorizontalFrameSize())
+
+	parts := []string{bannerTitleStyle.Render("FIR v" + output.Version)}
+	if len(info) > 0 {
+		parts = append(parts, menuItemStyle.Render(info[0][1]))
+	}
+	if len(info) > 1 {
+		parts = append(parts, bannerMutedStyle.Render(info[len(info)-1][1]))
+	}
+
+	line := strings.Join(parts, bannerMutedStyle.Render("  |  "))
+	if lipgloss.Width(line) > innerWidth {
+		line = trimToWidth(line, innerWidth)
+	}
+	return panelBoxStyle.Width(max(1, width-2)).Height(1).Render(line)
 }
 
 // chromeFooter draws the status line above the key help, omitting either if empty.
