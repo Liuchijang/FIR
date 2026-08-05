@@ -5,6 +5,7 @@ package console
 import (
 	"fmt"
 	"os"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -231,6 +232,41 @@ func PauseBeforeExit() {
 
 func LikelyExplorerLaunch() bool {
 	return shouldPauseBeforeExit()
+}
+
+// SupportsUnicodeGlyphs reports whether the attached console can render the non-ASCII
+// glyphs FIR's chrome uses: lipgloss's rounded-border corners (U+256D-U+2570) and the
+// braille spinner frames (U+28xx).
+//
+// Legacy conhost prints a literal '?' for any glyph missing from the console font, and
+// neither the default raster "Terminal" font nor Lucida Console carries those ranges — so
+// every panel corner came out as '?' when FIR was double-clicked or run from cmd.exe, even
+// though enableUTF8Console already switches the codepage to UTF-8. The codepage is not the
+// problem; the font's glyph coverage is, and that cannot be changed from inside the process.
+//
+// Modern hosts (Windows Terminal, VS Code, ConEmu, mintty, Alacritty, WezTerm) all
+// advertise themselves through the environment, so only those are treated as safe. The
+// check is deliberately conservative: a false negative merely costs an ASCII fallback,
+// while a false positive litters '?' across the whole UI.
+func SupportsUnicodeGlyphs() bool {
+	if value, ok := os.LookupEnv("ConEmuANSI"); ok {
+		return strings.EqualFold(strings.TrimSpace(value), "ON")
+	}
+	if term := strings.TrimSpace(os.Getenv("TERM")); term != "" {
+		return !strings.EqualFold(term, "dumb")
+	}
+	for _, key := range []string{
+		"WT_SESSION",
+		"WT_PROFILE_ID",
+		"TERM_PROGRAM",
+		"ALACRITTY_WINDOW_ID",
+		"WEZTERM_EXECUTABLE",
+	} {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func SyncBufferToWindow() {

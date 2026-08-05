@@ -67,7 +67,7 @@ func newProgressKeyMap(completed bool) progressKeyMap {
 	keys := progressKeyMap{
 		Up: key.NewBinding(
 			key.WithKeys("up", "k"),
-			key.WithHelp("↑/↓/k/j", "scroll"),
+			key.WithHelp(verticalKeysHelp(), "scroll"),
 		),
 		Down: key.NewBinding(
 			key.WithKeys("down", "j"),
@@ -149,13 +149,17 @@ func NewCollectionProgressModel(collectors []module.Module, concurrency int) Col
 		})
 	}
 
-	return CollectionProgressModel{
+	m := CollectionProgressModel{
 		spinner:     spin,
-		help:        help.New(),
+		help:        newAdaptiveHelp(),
 		viewport:    viewport.New(0, 0),
 		rows:        rows,
 		concurrency: concurrency,
+		width:       100,
+		height:      28,
 	}
+	m.syncViewport()
+	return m
 }
 
 func (m CollectionProgressModel) RunError() error {
@@ -262,6 +266,11 @@ func (m CollectionProgressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.report = &msg.Report
 		}
 		m.syncViewport()
+		// The viewport keeps whatever scroll offset the progress list ended on, and the
+		// summary report that replaces it is much taller — without this the summary opens
+		// part-way down, hiding the info table's first rows. Reset here rather than in
+		// syncViewport, which runs on every spinner tick and would fight the user's scrolling.
+		m.viewport.GotoTop()
 		return m, nil
 	}
 
@@ -292,19 +301,19 @@ func (m CollectionProgressModel) headerViewWithWidth(width int) string {
 	leftLogo := BannerLogoLines()
 	rightLines := []string{
 		"Machine Info",
-		RenderBannerInfoRow("Host", MachineHostname(), rightWidth, progressBannerLabelStyle, progressBannerValueStyle),
-		RenderBannerInfoRow("Platform", runtime.GOOS+"/"+runtime.GOARCH, rightWidth, progressBannerLabelStyle, progressBannerValueStyle),
-		RenderBannerInfoRow("Phase", m.collectionPhaseTitle(), rightWidth, progressBannerLabelStyle, progressBannerValueStyle),
-		RenderBannerInfoRow("State", m.bannerStateSummary(), rightWidth, progressBannerLabelStyle, progressBannerValueStyle),
+		RenderBannerInfoRow("Host", MachineHostname(), rightWidth, menuItemStyle, bannerMutedStyle),
+		RenderBannerInfoRow("Platform", runtime.GOOS+"/"+runtime.GOARCH, rightWidth, menuItemStyle, bannerMutedStyle),
+		RenderBannerInfoRow("Phase", m.collectionPhaseTitle(), rightWidth, menuItemStyle, bannerMutedStyle),
+		RenderBannerInfoRow("State", m.bannerStateSummary(), rightWidth, menuItemStyle, bannerMutedStyle),
 	}
 
 	left := lipgloss.NewStyle().
 		Width(leftWidth).
 		Align(lipgloss.Left, lipgloss.Top).
 		Render(strings.Join([]string{
-			titleStyle.Render(trimToWidth(leftLogo[0], leftWidth)),
-			titleStyle.Render(trimToWidth(leftLogo[1], leftWidth)),
-			titleStyle.Render(trimToWidth(leftLogo[2], leftWidth)),
+			bannerLogoStyle.Render(trimToWidth(leftLogo[0], leftWidth)),
+			bannerLogoStyle.Render(trimToWidth(leftLogo[1], leftWidth)),
+			bannerLogoStyle.Render(trimToWidth(leftLogo[2], leftWidth)),
 			bannerTitleStyle.Render(trimToWidth("FIR v"+output.Version, leftWidth)),
 			lipgloss.NewStyle().Bold(true).Render(trimToWidth("Freedom Incident Response", leftWidth)),
 			bannerMutedStyle.Render(trimToWidth("Interactive collection runner", leftWidth)),
@@ -605,11 +614,6 @@ func (m CollectionProgressModel) footerHint() string {
 const (
 	progressMarginX = 2
 	progressMarginY = 1
-)
-
-var (
-	progressBannerLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
-	progressBannerValueStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true)
 )
 
 func progressSanitizeError(value string) string {

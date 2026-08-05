@@ -16,6 +16,8 @@ func PauseBeforeExit() {}
 
 func LikelyExplorerLaunch() bool { return false }
 
+func SupportsUnicodeGlyphs() bool { return true }
+
 func SyncBufferToWindow() {}
 
 func CurrentSize() (int, int, bool) {

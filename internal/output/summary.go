@@ -13,9 +13,21 @@ import (
 	"github.com/muesli/reflow/wordwrap"
 )
 
+// Terminal styles below deliberately reuse the interactive TUI's palette (see
+// internal/tui): 175 for errors, 182 for success, 246 for borders, 218 for section
+// titles. RenderTerminal draws inside the TUI's rounded panel, so a table drawn in
+// unrelated colors reads as a second, foreign UI pasted into the panel. Only the
+// RenderTerminal path uses these — Render() must stay plain so summary.txt on disk
+// never contains ANSI escapes.
 var (
-	failureHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("204"))
+	failureHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("175"))
 	warningHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("221"))
+	terminalTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("218"))
+	tableBorderStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	tableHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
+	successCellStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("182"))
+	failureCellStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("175"))
+	skippedCellStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("221"))
 )
 
 type SummaryReport struct {
@@ -170,18 +182,18 @@ func (r SummaryReport) WarningResults() []module.Result {
 func (r SummaryReport) RenderTerminal(width int) string {
 	width = maxInt(width, 12)
 
+	// No "Collection Summary" heading here: the TUI already renders that phase title
+	// directly above this viewport (see CollectionProgressModel.bodyHeaderLines), so
+	// repeating it inside the content printed the same words twice in two styles.
 	var b strings.Builder
-	b.WriteString("Collection Summary\n")
-	b.WriteString(strings.Repeat("=", minInt(width, len("Collection Summary"))))
-	b.WriteString("\n\n")
 	b.WriteString(renderTerminalInfoTable(r, width))
 	b.WriteString("\n\n")
 	b.WriteString(renderTerminalModulesTable(r.Results, width))
 
 	failed := r.FailedResults()
 	if len(failed) > 0 {
-		b.WriteString("\n\nFailure Details\n")
-		b.WriteString(strings.Repeat("-", minInt(width, len("Failure Details"))))
+		b.WriteString("\n\n")
+		b.WriteString(terminalTitleStyle.Render(trimToWidth("Failure Details", width)))
 		b.WriteString("\n")
 		for _, result := range failed {
 			header := fmt.Sprintf("! [%s] %s duration=%s", result.Category, result.CollectorName, formatDuration(result.Duration))
@@ -194,8 +206,8 @@ func (r SummaryReport) RenderTerminal(width int) string {
 
 	warnings := r.WarningResults()
 	if len(warnings) > 0 {
-		b.WriteString("\n\nWarnings (succeeded with partial errors)\n")
-		b.WriteString(strings.Repeat("-", minInt(width, len("Warnings (succeeded with partial errors)"))))
+		b.WriteString("\n\n")
+		b.WriteString(terminalTitleStyle.Render(trimToWidth("Warnings (succeeded with partial errors)", width)))
 		b.WriteString("\n")
 		for _, result := range warnings {
 			header := fmt.Sprintf("* [%s] %s duration=%s", result.Category, result.CollectorName, formatDuration(result.Duration))
@@ -260,12 +272,12 @@ func renderTerminalInfoTable(report SummaryReport, width int) string {
 		for _, row := range rows {
 			compactRows = append(compactRows, []string{row[0] + ": " + row[1]})
 		}
-		return renderFixedWidthTable([]string{"Info"}, []int{maxInt(1, width-4)}, compactRows)
+		return renderStyledTable([]string{"Info"}, []int{maxInt(1, width-4)}, compactRows, -1)
 	}
 
 	fieldWidth := clampInt((width-7)/3, 6, 18)
 	valueWidth := maxInt(10, width-7-fieldWidth)
-	return renderFixedWidthTable([]string{"Field", "Value"}, []int{fieldWidth, valueWidth}, rows)
+	return renderStyledTable([]string{"Field", "Value"}, []int{fieldWidth, valueWidth}, rows, -1)
 }
 
 func renderTerminalModulesTable(results []module.Result, width int) string {
@@ -284,10 +296,11 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 				resultError(result),
 			})
 		}
-		return renderFixedWidthTable(
+		return renderStyledTable(
 			[]string{"Category", "Module", "Status", "Files", "Size", "Duration", "Error"},
 			[]int{10, 16, 8, 5, 10, 8, errorWidth},
 			rows,
+			2,
 		)
 
 	case width >= 76:
@@ -302,10 +315,11 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 				formatDuration(result.Duration),
 			})
 		}
-		return renderFixedWidthTable(
+		return renderStyledTable(
 			[]string{"Category", "Module", "Status", "Files", "Size", "Duration"},
 			[]int{10, 16, 8, 5, 10, maxInt(8, width-tableWidth([]int{10, 16, 8, 5, 10, 0}))},
 			rows,
+			2,
 		)
 
 	case width >= 54:
@@ -318,10 +332,11 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 				formatDuration(result.Duration),
 			})
 		}
-		return renderFixedWidthTable(
+		return renderStyledTable(
 			[]string{"Collector", "Status", "Files", "Duration"},
 			[]int{16, 10, 7, maxInt(8, width-tableWidth([]int{16, 10, 7, 0}))},
 			rows,
+			1,
 		)
 
 	case width >= 38:
@@ -333,10 +348,11 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 				formatDuration(result.Duration),
 			})
 		}
-		return renderFixedWidthTable(
+		return renderStyledTable(
 			[]string{"Collector", "Status", "Duration"},
 			[]int{12, 8, maxInt(8, width-tableWidth([]int{12, 8, 0}))},
 			rows,
+			1,
 		)
 
 	default:
@@ -347,10 +363,11 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 					fmt.Sprintf("[%s] %s %s", result.Category, result.CollectorName, resultStatus(result)),
 				})
 			}
-			return renderFixedWidthTable(
+			return renderStyledTable(
 				[]string{"Collector"},
 				[]int{maxInt(1, width-4)},
 				rows,
+				-1,
 			)
 		}
 
@@ -361,10 +378,11 @@ func renderTerminalModulesTable(results []module.Result, width int) string {
 				resultStatus(result),
 			})
 		}
-		return renderFixedWidthTable(
+		return renderStyledTable(
 			[]string{"Collector", "Status"},
 			[]int{8, maxInt(8, width-tableWidth([]int{8, 0}))},
 			rows,
+			1,
 		)
 	}
 }
@@ -394,6 +412,75 @@ func resultErrorBrief(result module.Result, width int) string {
 		return "-"
 	}
 	return trimToWidth(sanitizeCell(result.Error), width)
+}
+
+// renderStyledTable draws the same fixed-width ASCII table as renderFixedWidthTable, but
+// tints the borders and header row to the TUI palette and colors the cells in statusCol
+// using the same status colors the live progress list uses — so a module's SUCCESS/FAILED
+// row keeps its color when collection finishes instead of turning plain white. Styles are
+// applied after each cell is trimmed and padded, so the ANSI escapes can never disturb
+// column alignment. Pass statusCol < 0 to disable cell coloring.
+func renderStyledTable(headers []string, widths []int, rows [][]string, statusCol int) string {
+	plain := func(int, string) lipgloss.Style { return lipgloss.NewStyle() }
+	cellStyle := plain
+	if statusCol >= 0 {
+		cellStyle = func(col int, value string) lipgloss.Style {
+			if col == statusCol {
+				return statusCellStyle(value)
+			}
+			return lipgloss.NewStyle()
+		}
+	}
+
+	var b strings.Builder
+	border := tableBorderStyle.Render(tableBorder(widths))
+	b.WriteString(border)
+	b.WriteString("\n")
+	b.WriteString(styledTableRow(headers, widths, func(int, string) lipgloss.Style { return tableHeaderStyle }))
+	b.WriteString("\n")
+	b.WriteString(border)
+	b.WriteString("\n")
+	for _, row := range rows {
+		b.WriteString(styledTableRow(row, widths, cellStyle))
+		b.WriteString("\n")
+	}
+	b.WriteString(border)
+	return b.String()
+}
+
+func styledTableRow(values []string, widths []int, style func(col int, value string) lipgloss.Style) string {
+	var b strings.Builder
+	pipe := tableBorderStyle.Render("|")
+	b.WriteString(pipe)
+	for idx, width := range widths {
+		value := ""
+		if idx < len(values) {
+			value = trimToWidth(sanitizeCell(values[idx]), width)
+		}
+		padding := width - lipgloss.Width(value)
+		if padding < 0 {
+			padding = 0
+		}
+		b.WriteString(" ")
+		b.WriteString(style(idx, value).Render(value))
+		b.WriteString(strings.Repeat(" ", padding))
+		b.WriteString(" ")
+		b.WriteString(pipe)
+	}
+	return b.String()
+}
+
+func statusCellStyle(value string) lipgloss.Style {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "SUCCESS":
+		return successCellStyle
+	case "FAILED":
+		return failureCellStyle
+	case "SKIPPED":
+		return skippedCellStyle
+	default:
+		return lipgloss.NewStyle()
+	}
 }
 
 func renderFixedWidthTable(headers []string, widths []int, rows [][]string) string {
@@ -572,13 +659,6 @@ func trimToWidth(value string, width int) string {
 		return suffix
 	}
 	return string(runes) + suffix
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func maxInt(a, b int) int {
