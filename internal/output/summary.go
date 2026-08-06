@@ -38,7 +38,7 @@ type SummaryReport struct {
 	FinishedAt          time.Time
 	TotalDuration       time.Duration
 	TimeoutPerCollector time.Duration
-	Concurrency         int
+	Workers             string
 	CollectorsTotal     int
 	SuccessCount        int
 	FailureCount        int
@@ -46,7 +46,7 @@ type SummaryReport struct {
 	Results             []module.Result
 }
 
-func NewSummaryReport(outputDir string, startedAt time.Time, totalDuration time.Duration, timeout time.Duration, concurrency int, results []module.Result) SummaryReport {
+func NewSummaryReport(outputDir string, startedAt time.Time, totalDuration time.Duration, timeout time.Duration, workers string, results []module.Result) SummaryReport {
 	host := platform.DetectHost()
 
 	successCount := 0
@@ -73,7 +73,7 @@ func NewSummaryReport(outputDir string, startedAt time.Time, totalDuration time.
 		FinishedAt:          startedAt.Add(totalDuration),
 		TotalDuration:       totalDuration,
 		TimeoutPerCollector: timeout,
-		Concurrency:         concurrency,
+		Workers:             workers,
 		CollectorsTotal:     len(results),
 		SuccessCount:        successCount,
 		FailureCount:        failureCount,
@@ -94,7 +94,7 @@ func (r SummaryReport) Render() string {
 		{"Succeeded", fmt.Sprintf("%d", r.SuccessCount)},
 		{"Failed", fmt.Sprintf("%d", r.FailureCount)},
 		{"Skipped", fmt.Sprintf("%d", r.SkippedCount)},
-		{"Concurrency", fmt.Sprintf("%d", r.Concurrency)},
+		{"Workers", r.Workers},
 		{"Timeout per collector", formatTimeout(r.TimeoutPerCollector)},
 		{"Total duration", formatDuration(r.TotalDuration)},
 	}
@@ -236,7 +236,7 @@ func renderTerminalInfoTable(report SummaryReport, width int) string {
 		{"Succeeded", fmt.Sprintf("%d", report.SuccessCount)},
 		{"Failed", fmt.Sprintf("%d", report.FailureCount)},
 		{"Skipped", fmt.Sprintf("%d", report.SkippedCount)},
-		{"Concurrency", fmt.Sprintf("%d", report.Concurrency)},
+		{"Workers", report.Workers},
 		{"Timeout per collector", formatTimeout(report.TimeoutPerCollector)},
 		{"Total duration", formatDuration(report.TotalDuration)},
 	}

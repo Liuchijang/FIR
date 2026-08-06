@@ -5,6 +5,7 @@ package resource
 import (
 	"unsafe"
 
+	"github.com/Liuchijang/FIR/internal/acquisition"
 	"golang.org/x/sys/windows"
 )
 
@@ -21,14 +22,44 @@ type usnJournalDataV0 struct {
 	AllocationDelta uint64
 }
 
-// liveUsnJournalSize returns the configured MaximumSize of the USN journal on
-// drive C, used as a proxy for the run's total USN journal footprint (journal
-// size is normally similar across drives, and querying just one keeps this
-// pre-run estimate cheap). Returns 0 if the journal can't be queried (e.g.
-// not elevated, or journal not enabled), letting the caller fall back to a
-// flat estimate.
+// liveUsnJournalSize sums the configured MaximumSize of the USN journal across
+// every fixed drive, mirroring what the usnjrnl collector actually reads — it
+// walks all fixed drives, not just C.
+//
+// Querying only C undercounted every multi-volume machine by roughly the number
+// of drives. Drives whose journal cannot be queried (not elevated, or the
+// journal is disabled) are credited the size of the ones that answered, so a
+// single unreadable volume does not silently shrink the estimate. Returns 0
+// when nothing could be measured, letting the caller fall back to a flat guess.
 func liveUsnJournalSize() int64 {
-	volPath, err := windows.UTF16PtrFromString(`\\.\C:`)
+	drives, err := acquisition.ListFixedDrives()
+	if err != nil || len(drives) == 0 {
+		drives = []string{"C"}
+	}
+
+	var total int64
+	measured := 0
+	for _, drive := range drives {
+		size := usnJournalMaxSize(drive)
+		if size <= 0 {
+			continue
+		}
+		total += size
+		measured++
+	}
+
+	if measured == 0 {
+		return 0
+	}
+	if measured < len(drives) {
+		average := total / int64(measured)
+		total += average * int64(len(drives)-measured)
+	}
+	return total
+}
+
+func usnJournalMaxSize(drive string) int64 {
+	volPath, err := windows.UTF16PtrFromString(`\\.\` + drive + `:`)
 	if err != nil {
 		return 0
 	}

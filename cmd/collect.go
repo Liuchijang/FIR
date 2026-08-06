@@ -17,12 +17,8 @@ var (
 	artifactFlag    string
 	analyzeFlag     bool
 	timeoutFlag     time.Duration
-	concurrencyFlag int
-	workersFlag     int
 	cpuLimitFlag    int
-	ramCapFlag      string
 	diskIOFlag      string
-	ramCapBytesFlag int64
 	diskIOBytesFlag int64
 	compressFlag    bool
 	noCompressFlag  bool
@@ -36,7 +32,8 @@ var collectCmd = &cobra.Command{
 Examples:
   fir collect --artifact registry,eventlog,prefetch
   fir collect --artifact ram,mft,registry --output C:\triage --timeout 10m
-  fir collect --artifact all --workers 3 --compress
+  fir collect --artifact all --cpu-limit 60 --disk-io 80MB
+  fir collect --artifact all --compress
   fir collect --artifact eventlog --analyze
 
 By default, --artifact only runs collector modules (the ones that acquire raw
@@ -72,11 +69,8 @@ func init() {
 	collectCmd.Flags().StringVarP(&artifactFlag, "artifact", "a", "", "Comma-separated list of artifacts or categories to collect (required)")
 	collectCmd.Flags().BoolVar(&analyzeFlag, "analyze", false, "Also run the analyzer modules for the selected artifacts/categories (default: collect only)")
 	collectCmd.Flags().DurationVarP(&timeoutFlag, "timeout", "t", collection.DefaultTimeout, "Optional timeout per module (0 disables timeout)")
-	collectCmd.Flags().IntVarP(&concurrencyFlag, "concurrency", "c", 0, "Deprecated alias for --workers")
-	collectCmd.Flags().IntVar(&workersFlag, "workers", 0, "Maximum number of concurrent modules")
 	collectCmd.Flags().IntVar(&cpuLimitFlag, "cpu-limit", 0, "CPU limit percentage")
-	collectCmd.Flags().StringVar(&ramCapFlag, "ram-cap", "", "RAM cap, e.g. 2GB")
-	collectCmd.Flags().StringVar(&diskIOFlag, "disk-io", "", "Disk IO limit, e.g. 80MB")
+	collectCmd.Flags().StringVar(&diskIOFlag, "disk-io", "", "Cap disk bandwidth for FIR and its child processes, e.g. 80MB (default: no cap)")
 	collectCmd.Flags().BoolVar(&compressFlag, "compress", true, "Compress run directory after collection")
 	collectCmd.Flags().BoolVar(&noCompressFlag, "no-compress", false, "Disable run directory compression")
 	collectCmd.MarkFlagRequired("artifact")
@@ -86,16 +80,9 @@ func init() {
 
 func runCollect() error {
 	var err error
-	ramCapBytesFlag, err = parseByteSize(ramCapFlag)
-	if err != nil {
-		return err
-	}
 	diskIOBytesFlag, err = parseByteSize(diskIOFlag)
 	if err != nil {
 		return err
-	}
-	if workersFlag <= 0 {
-		workersFlag = concurrencyFlag
 	}
 	if noCompressFlag {
 		compressFlag = false

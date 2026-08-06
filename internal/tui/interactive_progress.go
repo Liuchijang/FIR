@@ -125,18 +125,18 @@ type CollectionProgressModel struct {
 	help     help.Model
 	viewport viewport.Model
 
-	rows        []progressRow
-	outputDir   string
-	report      *output.SummaryReport
-	err         error
-	completed   bool
-	aborting    bool
-	concurrency int
-	width       int
-	height      int
+	rows      []progressRow
+	outputDir string
+	report    *output.SummaryReport
+	err       error
+	completed bool
+	aborting  bool
+	workers   string
+	width     int
+	height    int
 }
 
-func NewCollectionProgressModel(collectors []module.Module, concurrency int) CollectionProgressModel {
+func NewCollectionProgressModel(collectors []module.Module, workers string) CollectionProgressModel {
 	spin := newAdaptiveSpinner()
 	spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("217")).Bold(true)
 
@@ -150,13 +150,13 @@ func NewCollectionProgressModel(collectors []module.Module, concurrency int) Col
 	}
 
 	m := CollectionProgressModel{
-		spinner:     spin,
-		help:        newAdaptiveHelp(),
-		viewport:    viewport.New(0, 0),
-		rows:        rows,
-		concurrency: concurrency,
-		width:       100,
-		height:      28,
+		spinner:  spin,
+		help:     newAdaptiveHelp(),
+		viewport: viewport.New(0, 0),
+		rows:     rows,
+		workers:  workers,
+		width:    100,
+		height:   28,
 	}
 	m.syncViewport()
 	return m
@@ -439,7 +439,7 @@ func (m CollectionProgressModel) statusLine() string {
 		fmt.Sprintf("%s Running: %d", m.spinner.View(), running),
 		fmt.Sprintf("Waiting: %d", waiting),
 		fmt.Sprintf("Finished: %d/%d", done, len(m.rows)),
-		fmt.Sprintf("Concurrency: %d", m.concurrency),
+		fmt.Sprintf("Workers: %s", m.workers),
 	}
 	return strings.Join(parts, "  |  ")
 }
@@ -496,11 +496,11 @@ func (m CollectionProgressModel) bannerStateSummary() string {
 		}
 		if m.report != nil {
 			return fmt.Sprintf(
-				"Succeeded: %d | Failed: %d | Total: %d | Concurrency: %d",
+				"Succeeded: %d | Failed: %d | Total: %d | Workers: %s",
 				m.report.SuccessCount,
 				m.report.FailureCount,
 				m.report.CollectorsTotal,
-				m.report.Concurrency,
+				m.report.Workers,
 			)
 		}
 		return "Completed"
@@ -542,7 +542,7 @@ func (m CollectionProgressModel) footerHint() string {
 	if m.aborting {
 		return "Aborting: waiting for in-progress modules and archive cleanup to finish before exiting."
 	}
-	return fmt.Sprintf("Live progress is streamed from running modules. %d collectors loaded with concurrency=%d.", len(m.rows), m.concurrency)
+	return fmt.Sprintf("Live progress is streamed from running modules. %d modules loaded, %s.", len(m.rows), m.workers)
 }
 
 const (

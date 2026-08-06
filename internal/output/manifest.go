@@ -28,7 +28,11 @@ type Manifest struct {
 	StorageEstimate   resource.StorageEstimate `json:"storage_estimate"`
 	CompressEnabled   bool                     `json:"compress_enabled"`
 	Archive           ArchiveInfo              `json:"archive,omitempty"`
-	Artifacts         []ManifestArtifact       `json:"artifacts"`
+	// UncompressedFiles are delivered next to the archive rather than inside
+	// it. Anyone verifying the evidence needs to know the zip is not the whole
+	// run; the per-file hashes are in Artifacts as usual.
+	UncompressedFiles []string           `json:"uncompressed_files,omitempty"`
+	Artifacts         []ManifestArtifact `json:"artifacts"`
 }
 
 type ManifestArtifact struct {

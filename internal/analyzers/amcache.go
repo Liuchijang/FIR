@@ -228,11 +228,7 @@ func writeAmcacheResults(outDir string, results amcacheResults) ([]module.FileIn
 			continue
 		}
 
-		outCSV := filepath.Join(outDir, dataset.Filename)
-		if err := writeCSVFile(outCSV, dataset.Header, dataset.Rows); err != nil {
-			return nil, err
-		}
-		info, err := utils.FileInfoFromPath(outCSV)
+		info, err := writeCSV(filepath.Join(outDir, dataset.Filename), dataset.Header, dataset.Rows)
 		if err != nil {
 			return nil, err
 		}

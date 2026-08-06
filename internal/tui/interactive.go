@@ -36,6 +36,7 @@ var (
 	subtleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	helpStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	selectedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("218"))
+	noticeStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("221"))
 	menuItemStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	focusedRowStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("175"))
 	focusedDetailStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("175"))
@@ -618,13 +619,13 @@ func (m menuModel) updateRunConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		m.configCursor = moveCursorUp(m.configCursor, 1)
 	case "down", "j":
-		m.configCursor = moveCursorDown(m.configCursor, 5, 1)
+		m.configCursor = moveCursorDown(m.configCursor, runConfigRowCount, 1)
 	case "left", "h":
 		m.adjustRunConfig(-1)
 	case "right", "l":
 		m.adjustRunConfig(1)
 	case " ":
-		if m.configCursor == 4 {
+		if m.configCursor == runConfigRowCompress {
 			m.resourceConfig.Compress = !m.resourceConfig.Compress
 			m.refreshStorageEstimate()
 		}
@@ -655,23 +656,44 @@ func (m menuModel) updateRunConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// Run config rows, in display order. They are named because the cursor index is
+// read in three places and a bare integer silently retargets a row whenever the
+// list changes. Worker counts are not here: they are derived from the storage
+// the run touches, which is not something an operator can judge from this
+// screen, and they are shown read-only below instead.
+const (
+	runConfigRowCPU = iota
+	runConfigRowDiskIO
+	runConfigRowCompress
+	runConfigRowCount
+)
+
 func (m *menuModel) adjustRunConfig(direction int) {
-	host := resource.DetectHostResources()
 	switch m.configCursor {
-	case 0:
+	case runConfigRowCPU:
 		m.resourceConfig.CPULimitPercent = min(max(m.resourceConfig.CPULimitPercent+direction*10, resource.MinCPULimitPercent), resource.MaxCPULimitPercent)
-	case 1:
-		m.resourceConfig.RAMCapBytes += int64(direction) * 512 * 1024 * 1024
-		m.resourceConfig.RAMCapBytes = min(max(m.resourceConfig.RAMCapBytes, resource.MinRAMCapBytes), resource.MaxRAMCapBytes(host))
-	case 2:
-		m.resourceConfig.Workers = min(max(m.resourceConfig.Workers+direction, resource.MinWorkers), resource.MaxWorkers(host))
-	case 3:
-		m.resourceConfig.DiskIOLimitBps += int64(direction) * 10 * 1024 * 1024
-		m.resourceConfig.DiskIOLimitBps = min(max(m.resourceConfig.DiskIOLimitBps, resource.MinDiskIOLimitBps), resource.MaxDiskIOLimitBps)
-	case 4:
+	case runConfigRowDiskIO:
+		// Zero is the leftmost value and means no budget, which is the default:
+		// throttling only earns its cost when collecting from a live production
+		// server. There is no upper clamp — the kernel enforces the cap against
+		// real device traffic, so asking for more than the hardware can do just
+		// gets the hardware's speed.
+		m.resourceConfig.DiskIOLimitBps = max(m.resourceConfig.DiskIOLimitBps+int64(direction)*10*1024*1024, 0)
+	case runConfigRowCompress:
 		m.resourceConfig.Compress = !m.resourceConfig.Compress
 	}
-	m.refreshStorageEstimate()
+	// Re-derive after every change: a disk budget lowers the collector count,
+	// and the CPU limit feeds the analyzer count. This is cheap — the media
+	// probe behind it is cached.
+	m.resourceConfig = m.resourceConfig.ResolveWorkers(m.outputBaseDir)
+
+	// Re-estimating is not cheap: it stats the event log directory, walks the
+	// WMI repository and opens a raw volume handle per drive. Only compression
+	// changes the answer, so the other rows must not pay for it on every
+	// keypress.
+	if m.configCursor == runConfigRowCompress {
+		m.refreshStorageEstimate()
+	}
 }
 
 func (m menuModel) View() string {
@@ -772,9 +794,7 @@ func (m menuModel) renderRunConfig(width, _ int) string {
 		value string
 	}{
 		{"CPU Limit", fmt.Sprintf("%d%%", m.resourceConfig.CPULimitPercent)},
-		{"RAM Cap", resource.FormatBytes(m.resourceConfig.RAMCapBytes)},
-		{"Workers", fmt.Sprintf("%d", m.resourceConfig.Workers)},
-		{"Disk IO", fmt.Sprintf("%s/s", resource.FormatBytes(m.resourceConfig.DiskIOLimitBps))},
+		{"Disk IO", diskBudgetRowValue(m.resourceConfig.DiskIOLimitBps)},
 		{"Compress", onOff(m.resourceConfig.Compress)},
 	}
 
@@ -795,6 +815,18 @@ func (m menuModel) renderRunConfig(width, _ int) string {
 		storage = "ALERT"
 		storageStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("204")).Bold(true)
 	}
+	// Read-only: worker counts follow the storage the run touches, so they are
+	// reviewable before the run rather than only discoverable afterwards in the
+	// manifest, but they are not something to hand-tune from here.
+	lines = append(lines, "")
+	lines = append(lines, trimToWidth(fmt.Sprintf("Workers       %s", m.resourceConfig.WorkerSummary()), width))
+	lines = append(lines, subtleStyle.Render(trimToWidth(fmt.Sprintf("              %s", m.resourceConfig.WorkersRationale), width)))
+
+	if notice := memoryArchiveNotice(m.resourceConfig.Compress, m.moduleResults()); notice != "" {
+		lines = append(lines, "")
+		lines = append(lines, noticeStyle.Render(trimToWidth(notice, width)))
+	}
+
 	lines = append(lines, "")
 	lines = append(lines, storageStyle.Render(trimToWidth(fmt.Sprintf("Storage       %s", storage), width)))
 	lines = append(lines, trimToWidth(fmt.Sprintf("Raw Needed    %s", resource.FormatBytes(m.storageEstimate.EstimatedRawBytes)), width))
@@ -808,6 +840,33 @@ func (m menuModel) renderRunConfig(width, _ int) string {
 		lines = append(lines, trimToWidth(m.storageEstimate.Reason, width))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// memoryArchiveNotice warns that the run will not produce a single archive.
+//
+// Compressing a memory image is all cost and no saving, so the dump is
+// delivered beside the zip instead of inside it. That changes the shape of the
+// evidence being handed over, which the analyst has to know before the run
+// rather than discover afterwards in the output directory.
+func memoryArchiveNotice(compress bool, modules []module.Module) string {
+	if !compress {
+		return ""
+	}
+	for _, mod := range modules {
+		if strings.EqualFold(mod.Name(), "ram") {
+			return "Note: memory.raw is delivered next to the archive, not inside it - a RAM dump barely compresses and zipping it would need a second full-size copy on disk."
+		}
+	}
+	return ""
+}
+
+// diskBudgetRowValue spells out that no budget is the normal state, rather than
+// showing "0 B/s" as if the run were about to be stopped dead.
+func diskBudgetRowValue(bps int64) string {
+	if bps <= 0 {
+		return "unlimited"
+	}
+	return fmt.Sprintf("%s/s (process + children)", resource.FormatBytes(bps))
 }
 
 func onOff(value bool) string {

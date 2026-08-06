@@ -22,12 +22,12 @@ type memoryStatusEx struct {
 	AvailExtendedVirtual uint64
 }
 
-func detectTotalRAMBytes() int64 {
+func detectRAMBytes() (total, available int64) {
 	var mem memoryStatusEx
 	mem.Length = uint32(unsafe.Sizeof(mem))
 	ret, _, _ := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&mem)))
 	if ret == 0 {
-		return 0
+		return 0, 0
 	}
-	return int64(mem.TotalPhys)
+	return int64(mem.TotalPhys), int64(mem.AvailPhys)
 }

@@ -2,8 +2,6 @@ package resource
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/Liuchijang/FIR/internal/module"
@@ -18,10 +16,7 @@ const (
 	// CSV/report output: measured on a real run, a batch like this compressed
 	// to ~24% of its raw size (deflate does very well on structured/text data).
 	defaultArchiveRatioPct = 35
-	// ramArchiveRatioPct applies only to the "ram" module: a physical memory
-	// dump is high-entropy, so generic deflate barely shrinks it.
-	ramArchiveRatioPct = 80
-	safetyMarginPct    = 20
+	safetyMarginPct        = 20
 	// minSafetyMargin covers the run's own logs, manifest and summary plus a little
 	// slack. It is deliberately small: a 1GB floor made a single 2MB EVTX file
 	// report "Required 1.0 GiB", which reads as a broken estimate.
@@ -76,8 +71,13 @@ func EstimateStorage(outputBaseDir string, modules []module.Module, compress boo
 // barely compress while registry/MFT/CSV output compresses very well, so each
 // module's raw bytes are compressed at its own ratio before being summed.
 func estimateBytes(modules []module.Module, compress bool) (raw, archive int64) {
+	// Sizes are memoised for the duration of one estimate: an analyzer sizes
+	// itself from the artifact its collector produces, and measuring $MFT or
+	// the USN journal means opening a raw volume handle per drive. Without this
+	// the mft/mft_parser pair would pay for that twice.
+	sizes := make(map[string]int64, len(modules)*2)
 	for _, mod := range modules {
-		b := estimateModuleBytes(mod)
+		b := estimateModuleBytes(mod, sizes)
 		raw += b
 		if compress {
 			archive += b * archiveRatioForModule(mod) / 100
@@ -92,23 +92,60 @@ func estimateBytes(modules []module.Module, compress bool) (raw, archive int64) 
 	return raw, archive
 }
 
+// archiveRatioForModule reports how much of a module's raw output ends up in
+// the archive, on top of the raw output itself.
+//
+// The memory image contributes nothing: it is delivered beside the archive
+// rather than inside it (see output.MemoryImages), so it is never on disk
+// twice. Every other module compresses well enough to be worth zipping.
 func archiveRatioForModule(mod module.Module) int64 {
 	if strings.ToLower(mod.Name()) == "ram" {
-		return ramArchiveRatioPct
+		return 0
 	}
 	return defaultArchiveRatioPct
 }
 
+// analyzerOutputRatios maps an analyzer to the collector whose artifact it reads
+// and how large its CSV runs relative to that artifact, as a percentage.
+//
+// Analyzers used to be estimated at a flat 32MB each regardless of name, which
+// is a large and systematic undercount for the four below: they emit a row per
+// record of a volume-sized artifact, and a CSV row is routinely bigger than the
+// binary record it came from. Every other analyzer really does produce bounded
+// output — a few hundred registry values, one row per prefetch file — and keeps
+// the flat estimate.
+var analyzerOutputRatios = map[string]struct {
+	collector string
+	ratioPct  int64
+}{
+	// A 1KB MFT record becomes one ~200 byte row, and unused records are dropped.
+	"mft_parser": {"mft", 30},
+	// USN records are compact on disk; the CSV spells out reason and source
+	// flags by name and adds resolved paths.
+	"usnjrnl_parser": {"usnjrnl", 300},
+	// EVTX is binary XML with a template table; flattening it to CSV expands it.
+	"eventlog_parser": {"eventlog", 400},
+	// $SDS security descriptors become SDDL text.
+	"secure_sds_parser": {"secure_sds", 200},
+}
+
 // estimateModuleBytes estimates the additional disk space a module needs.
 //
-// Analyzer modules only read artifacts collected by an earlier collector run (or,
-// as a fallback, a small amount of live data) and write a small CSV/report — they
-// do not duplicate the raw artifact, so they get a small flat estimate regardless
-// of name. Only collector modules, which write the actual raw acquisition (memory
-// dump, registry hives, $MFT, etc.), use the size-by-artifact-type table below.
-func estimateModuleBytes(mod module.Module) int64 {
+// sizes memoises results by module name across one estimate, so that measuring
+// an artifact is not repeated for a collector and the analyzer that reads it.
+func estimateModuleBytes(mod module.Module, sizes map[string]int64) int64 {
+	name := strings.ToLower(mod.Name())
+	if cached, ok := sizes[name]; ok {
+		return cached
+	}
+	size := measureModuleBytes(mod, name, sizes)
+	sizes[name] = size
+	return size
+}
+
+func measureModuleBytes(mod module.Module, name string, sizes map[string]int64) int64 {
 	if module.ModeOf(mod) == module.ModeAnalyzer {
-		return defaultAnalyzerSize
+		return estimateAnalyzerBytes(name, sizes)
 	}
 
 	// A module that knows what it will write — because the user picked specific EVTX
@@ -119,16 +156,15 @@ func estimateModuleBytes(mod module.Module) int64 {
 		}
 	}
 
-	switch strings.ToLower(mod.Name()) {
+	switch name {
 	case "ram":
 		if totalRAM := DetectHostResources().TotalRAMBytes; totalRAM > 0 {
 			return totalRAM
 		}
 		return 8 * gb
 	case "eventlog":
-		if size := liveEventLogSize(); size > 0 {
-			return size
-		}
+		// Only reached when the collector's own estimator found nothing to
+		// measure, which means the log directory is unreadable.
 		return 2 * gb
 	case "mft":
 		// Measured live: sums the real $MFT size across every fixed drive, since
@@ -176,27 +212,21 @@ func estimateModuleBytes(mod module.Module) int64 {
 	}
 }
 
-func liveEventLogSize() int64 {
-	root := os.Getenv("SystemRoot")
-	if root == "" {
-		return 0
+// estimateAnalyzerBytes sizes an analyzer from the artifact it will read. A
+// parser whose source collector cannot be measured, or whose output does not
+// scale with a volume, falls back to the flat estimate.
+func estimateAnalyzerBytes(name string, sizes map[string]int64) int64 {
+	source, ok := analyzerOutputRatios[name]
+	if !ok {
+		return defaultAnalyzerSize
 	}
-	dir := filepath.Join(root, "System32", "winevt", "Logs")
-	entries, err := os.ReadDir(dir)
+	collector, err := module.Get(source.collector)
 	if err != nil {
-		return 0
+		return defaultAnalyzerSize
 	}
-	var total int64
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".evtx") {
-			continue
-		}
-		info, err := entry.Info()
-		if err == nil {
-			total += info.Size()
-		}
-	}
-	return total
+	// The floor matters: a machine with a tiny USN journal should still be
+	// credited the space the CSV, headers and report scaffolding take up.
+	return max(estimateModuleBytes(collector, sizes)*source.ratioPct/100, defaultAnalyzerSize)
 }
 
 func safetyMargin(size int64) int64 {

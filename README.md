@@ -16,23 +16,16 @@
 
 ## Overview
 
-FIR is a Windows-focused DFIR (Digital Forensics and Incident Response) tool for first-response triage. It collects forensic artifacts, runs analyzer modules, writes structured output, and can package the run into a ZIP archive with integrity metadata.
-
-The project is designed around a shared module registry, so collectors and analyzers can be added behind a consistent contract. FIR supports both an interactive terminal UI and a flag-driven CLI mode for repeatable collection workflows.
+FIR is a Windows first-response triage tool: it collects forensic artifacts, parses them into CSV, and packages the run with integrity metadata. Collectors and analyzers sit behind a shared module contract, and one engine drives both an interactive terminal UI and a flag-driven CLI.
 
 ## Features
 
-- **Dual CLI modes**: Run an interactive Bubble Tea workflow or use `fir collect` for automation.
-- **Collect vs. analyze, explicitly**: `fir collect` runs collector modules only by default; pass `--analyze` to also run the matching analyzers.
-- **Modular collectors and analyzers**: Built-in modules cover Browser, Event Logs, Execution, Live Response, Memory, NTFS, Registry, and System artifacts.
-- **Multi-volume NTFS collection**: `$MFT`, `$UsnJrnl:$J`, and `$Secure:$SDS` are collected from every fixed drive, not just `C:`.
-- **Forensic-safe collection**: Uses read-only collection paths where possible and records SHA-256 integrity metadata.
-- **Administrator-only by design**: FIR refuses to run without elevated privileges and enables backup, restore, security, and debug privileges on startup.
-- **Native Windows acquisition**: Uses backup semantics, registry hive save APIs, raw NTFS access, and Windows event log collection.
-- **Resource-aware runs**: Supports workers, CPU limit, RAM cap, disk I/O limit, compression, storage estimates, and optional module timeouts.
-- **Partial-failure tolerant**: A module only reports failure if it collected nothing at all; partial errors are kept visible as warnings instead of masking the artifacts that did come through.
-- **Structured output**: Produces `manifest.json`, `summary.txt`, `collector.log`, optional ZIP archive, and `.zip.sha256` sidecar.
-- **Extensible layout**: Collectors and analyzers live under `internal/` with a shared module contract.
+- **Two modes**: an interactive Bubble Tea workflow, or `fir collect` for automation. Collectors run alone by default; `--analyze` adds the matching parsers.
+- **Native Windows acquisition**: backup semantics, registry hive save APIs, and raw NTFS reads — `$MFT`, `$UsnJrnl:$J` and `$Secure:$SDS` from every fixed drive, not just `C:`. Requires Administrator, and enables the backup, restore, security and debug privileges at startup.
+- **Self-tuning concurrency**: no worker knob. FIR surveys the drives a run reads and writes, then picks a worker count per phase — collection backs off on spinning media, analysis scales with free RAM. The numbers and the reasoning land in `manifest.json`.
+- **Caps that reach child processes**: CPU and disk limits go through a Windows Job Object, so `winpmem` and the PowerShell-hosted analyzers are covered rather than quietly exempt. Disk throttling is opt-in.
+- **Partial-failure tolerant**: a module fails only if it collected nothing; partial errors surface as warnings instead of hiding the artifacts that did come through.
+- **Structured output**: `manifest.json`, `summary.txt`, `collector.log`, a storage estimate before the run, and an optional ZIP with a `.sha256` sidecar.
 
 ## Tech Stack
 
@@ -123,7 +116,7 @@ Use a custom output directory and timeout:
 Run with resource controls:
 
 ```powershell
-.\fir.exe collect --artifact all --output E:\evidence --workers 4 --cpu-limit 60 --ram-cap 2GB --disk-io 80MB
+.\fir.exe collect --artifact all --output E:\evidence --cpu-limit 60 --disk-io 80MB
 ```
 
 Disable compression:
@@ -141,11 +134,8 @@ Disable compression:
 | `-a, --artifact` | Comma-separated list of artifacts or categories |
 | `--analyze` | Also run the analyzer modules for the selected artifacts/categories (default: collect only) |
 | `-t, --timeout` | Optional timeout per module; `0` disables timeout |
-| `--workers` | Maximum number of concurrent modules |
-| `-c, --concurrency` | Deprecated alias for `--workers` |
-| `--cpu-limit` | CPU limit percentage |
-| `--ram-cap` | RAM cap, for example `2GB` |
-| `--disk-io` | Disk I/O limit, for example `80MB` |
+| `--cpu-limit` | CPU limit percentage, applied to FIR and every process it spawns via a Windows Job Object |
+| `--disk-io` | Cap disk bandwidth for FIR and every process it spawns, for example `80MB`. No cap by default |
 | `--compress` | Compress run directory after collection; enabled by default |
 | `--no-compress` | Disable run directory compression |
 
@@ -206,8 +196,17 @@ HOSTNAME_YYYYMMDD_HHMMSS/
 When compression is enabled, FIR writes:
 
 ```text
+HOSTNAME_YYYYMMDD_HHMMSS.zip
 HOSTNAME_YYYYMMDD_HHMMSS.zip.sha256
 ```
+
+A collected memory image is delivered **next to** the archive rather than inside it:
+
+```text
+HOSTNAME_YYYYMMDD_HHMMSS_memory.raw
+```
+
+A RAM dump is high-entropy and barely compresses, while zipping it would need a second full-size copy on disk at the same time — on a 32GB host, the difference between needing ~38GB free and ~69GB. The interactive run config says so before the run starts, and `manifest.json` lists the file under `uncompressed_files`.
 
 `manifest.json` is the source of truth for run configuration, storage estimates, module results, hashes, and output metadata.
 

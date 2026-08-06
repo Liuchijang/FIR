@@ -27,8 +27,11 @@ func runModules(ctx context.Context, modules []module.Module, mgr *output.Manage
 		collectorIdx = append(collectorIdx, idx)
 	}
 
-	runBatch(ctx, modules, results, collectorIdx, mgr, opts, selectedModules)
-	runBatch(ctx, modules, results, analyzerIdx, mgr, opts, selectedModules)
+	// The two batches get their own worker counts: collection is I/O against a
+	// single device, analysis is CPU and memory against artifacts already on
+	// disk, and the right degree of parallelism is not the same number.
+	runBatch(ctx, modules, results, collectorIdx, mgr, opts, selectedModules, opts.Resources.CollectorWorkers)
+	runBatch(ctx, modules, results, analyzerIdx, mgr, opts, selectedModules, opts.Resources.AnalyzerWorkers)
 	return results
 }
 
@@ -40,12 +43,12 @@ func selectedModuleSet(modules []module.Module) map[string]bool {
 	return selected
 }
 
-func runBatch(ctx context.Context, modules []module.Module, results []module.Result, indices []int, mgr *output.Manager, opts Options, selectedModules map[string]bool) {
+func runBatch(ctx context.Context, modules []module.Module, results []module.Result, indices []int, mgr *output.Manager, opts Options, selectedModules map[string]bool, workers int) {
 	if len(indices) == 0 {
 		return
 	}
 
-	workerCount := opts.Concurrency
+	workerCount := workers
 	if workerCount > len(indices) {
 		workerCount = len(indices)
 	}

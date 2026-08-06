@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Liuchijang/FIR/internal/utils"
@@ -19,9 +20,43 @@ type ArchiveInfo struct {
 	Size   int64  `json:"size,omitempty"`
 }
 
-func CompressRunDirectory(outputDir string) (ArchiveInfo, error) {
+// MemoryImages returns the physical memory dumps inside a run directory.
+//
+// They are deliberately kept out of the archive. A memory image is
+// high-entropy, so deflate barely shrinks it — measured at roughly 80% of the
+// original — while zipping it needs a second full-size copy on disk at the same
+// time. On a 32GB host that is the difference between a run needing ~32GB free
+// and needing ~65GB, paid for a saving that does not materialise.
+func MemoryImages(runDir string) []string {
+	matches, err := filepath.Glob(filepath.Join(runDir, "memory", "*.raw"))
+	if err != nil {
+		return nil
+	}
+	sort.Strings(matches)
+	return matches
+}
+
+// PreserveOutsideArchive moves files that were excluded from the archive to sit
+// beside it, so removing the raw run directory does not take them with it. The
+// rename stays on one volume, so even a 32GB image moves instantly.
+func PreserveOutsideArchive(runDir string, paths []string) ([]string, error) {
+	var kept []string
+	var errs []error
+	for _, path := range paths {
+		destination := runDir + "_" + filepath.Base(path)
+		if err := os.Rename(path, destination); err != nil {
+			errs = append(errs, fmt.Errorf("preserve %s: %w", filepath.Base(path), err))
+			continue
+		}
+		kept = append(kept, destination)
+	}
+	return kept, errors.Join(errs...)
+}
+
+// CompressRunDirectory archives outputDir, skipping every path in exclude.
+func CompressRunDirectory(outputDir string, exclude []string) (ArchiveInfo, error) {
 	archivePath := outputDir + ".zip"
-	if err := zipDirectory(outputDir, archivePath); err != nil {
+	if err := zipDirectory(outputDir, archivePath, exclude); err != nil {
 		return ArchiveInfo{}, err
 	}
 	info, err := os.Stat(archivePath)
@@ -77,7 +112,14 @@ func RemoveRawOutputDir(outputDir string, archivePath string) error {
 // zipDirectory archives sourceDir into archivePath. Every failure is reported: the
 // caller deletes the raw output once this returns nil, so a dropped error here would
 // silently trade complete evidence for a truncated archive.
-func zipDirectory(sourceDir string, archivePath string) (err error) {
+func zipDirectory(sourceDir string, archivePath string, exclude []string) (err error) {
+	skip := make(map[string]bool, len(exclude))
+	for _, path := range exclude {
+		if abs, absErr := filepath.Abs(path); absErr == nil {
+			skip[filepath.Clean(abs)] = true
+		}
+	}
+
 	if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
 		return fmt.Errorf("create archive dir: %w", err)
 	}
@@ -111,6 +153,9 @@ func zipDirectory(sourceDir string, archivePath string) (err error) {
 			return nil
 		}
 		if entry.IsDir() || filepath.Clean(path) == archiveClean {
+			return nil
+		}
+		if abs, absErr := filepath.Abs(path); absErr == nil && skip[filepath.Clean(abs)] {
 			return nil
 		}
 

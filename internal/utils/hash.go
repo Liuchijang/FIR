@@ -8,6 +8,8 @@ import (
 	"os"
 )
 
+// HashFile reads the whole file. Collectors that hash a freshly written
+// artifact (the $MFT, the memory dump) move those bytes a second time here.
 func HashFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

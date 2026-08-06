@@ -126,8 +126,7 @@ func (m unifiedInteractiveModel) View() string {
 
 func (m unifiedInteractiveModel) startCollection(modules []module.Module) (tea.Model, tea.Cmd) {
 	runtimeCfg := runtimeConfigFromFlags()
-	runtimeCfg.Resources = m.resources.Normalized()
-	runtimeCfg.Concurrency = runtimeCfg.Resources.Workers
+	runtimeCfg.Resources = m.resources.Normalized().ResolveWorkers(runtimeCfg.OutputBaseDir)
 
 	updates := make(chan tea.Msg, len(modules)*2+2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -136,7 +135,7 @@ func (m unifiedInteractiveModel) startCollection(modules []module.Module) (tea.M
 	m.stage = stageCollection
 	m.updates = updates
 	m.cancel = cancel
-	m.progress = tui.NewCollectionProgressModel(modules, runtimeCfg.Concurrency)
+	m.progress = tui.NewCollectionProgressModel(modules, runtimeCfg.Resources.WorkerSummary())
 	return m, tea.Batch(
 		m.progress.Init(),
 		startCollectionCmd(ctx, modules, runtimeCfg, updates),

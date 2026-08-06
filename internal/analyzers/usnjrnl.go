@@ -12,7 +12,6 @@ import (
 
 	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 	"golang.org/x/sys/windows"
 )
 
@@ -90,12 +89,7 @@ func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 	if enriched {
 		recordsName = "usnjrnl_mft_enriched.csv"
 	}
-	recordsCSV := filepath.Join(outDir, recordsName)
-	if err := writeCSVFile(recordsCSV, header, rows); err != nil {
-		return analyzerError(outDir, err)
-	}
-
-	recordsInfo, err := utils.FileInfoFromPath(recordsCSV)
+	recordsInfo, err := writeCSV(filepath.Join(outDir, recordsName), header, rows)
 	if err != nil {
 		return analyzerError(outDir, err)
 	}
@@ -220,7 +214,7 @@ func readLiveUSNJournal(ctx context.Context, drive string) ([]byte, error) {
 	return payload, nil
 }
 
-func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (map[mftKey]mftRecordRow, map[mftKey]string, bool, error) {
+func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (mftRowIndex, map[mftKey]string, bool, error) {
 	outputDir := req.OutputDir
 	shouldEnrich := req.IsSelected("mft") || req.IsSelected("mft_parser")
 	if !shouldEnrich {
@@ -268,14 +262,16 @@ func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (map[mftKey]m
 		return nil, nil, false, fmt.Errorf("no MFT records available for USN enrichment: %s", strings.Join(parseErrs, "; "))
 	}
 
-	recordMap := make(map[mftKey]mftRecordRow, len(rows))
+	// Whole rows, not just parent links: USN enrichment copies name, extension
+	// and flags out of the matching MFT record.
+	recordMap := make(mftRowIndex, len(rows))
 	for _, row := range rows {
 		recordMap[mftKey{Drive: row.Drive, Record: row.RecordNumber}] = row
 	}
 	return recordMap, make(map[mftKey]string, len(recordMap)), true, nil
 }
 
-func parseUSNJournalRows(data []byte, drive string, recordMap map[mftKey]mftRecordRow, pathCache map[mftKey]string, enriched bool) ([]string, [][]string, int, int, error) {
+func parseUSNJournalRows(data []byte, drive string, recordMap mftRowIndex, pathCache map[mftKey]string, enriched bool) ([]string, [][]string, int, int, error) {
 	header := []string{
 		"RecordOffset",
 		"RecordLength",
@@ -364,7 +360,7 @@ func parseUSNJournalRows(data []byte, drive string, recordMap map[mftKey]mftReco
 	return header, rows, parsedCount, unsupportedCount, nil
 }
 
-func parseUSNRecordV2(record []byte, recordOffset uint64, drive string, recordMap map[mftKey]mftRecordRow, pathCache map[mftKey]string, enriched bool) ([]string, bool) {
+func parseUSNRecordV2(record []byte, recordOffset uint64, drive string, recordMap mftRowIndex, pathCache map[mftKey]string, enriched bool) ([]string, bool) {
 	if len(record) < 60 {
 		return nil, false
 	}

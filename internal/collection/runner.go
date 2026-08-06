@@ -6,21 +6,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
-	"runtime/debug"
 	"time"
 
 	"github.com/Liuchijang/FIR/internal/logging"
 	"github.com/Liuchijang/FIR/internal/module"
 	"github.com/Liuchijang/FIR/internal/output"
+	"github.com/Liuchijang/FIR/internal/platform"
 	"github.com/Liuchijang/FIR/internal/resource"
-	"github.com/Liuchijang/FIR/internal/utils"
 )
 
-const (
-	DefaultTimeout     = 0
-	DefaultConcurrency = 2
-)
+const DefaultTimeout = 0
 
 type Callbacks struct {
 	OnOutputReady  func(string)
@@ -33,7 +28,6 @@ type Options struct {
 	OutputBaseDir   string
 	Verbose         bool
 	Timeout         time.Duration
-	Concurrency     int
 	Resources       resource.Config
 	StorageEstimate resource.StorageEstimate
 	SilentConsole   bool
@@ -45,8 +39,10 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 		ctx = context.Background()
 	}
 	opts = normalizeOptions(opts)
-	restoreRuntime := applyResourceConfig(opts.Resources)
+	cpuMechanism, diskMechanism, restoreRuntime := applyResourceConfig(opts.Resources)
 	defer restoreRuntime()
+	opts.Resources.CPULimitMechanism = cpuMechanism
+	opts.Resources.DiskIOMechanism = diskMechanism
 
 	opts.StorageEstimate = resource.EstimateStorage(opts.OutputBaseDir, modules, opts.Resources.Compress)
 	if !opts.StorageEstimate.Healthy {
@@ -78,6 +74,20 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 	log := logging.G()
 	log.Info(fmt.Sprintf("Output directory: %s", mgr.BaseDir()))
 	log.Info(fmt.Sprintf("Modules to run: %d", len(modules)))
+	log.Info(fmt.Sprintf("CPU limit: %d%% via %s | Disk budget: %s | Workers: %s (%s)",
+		opts.Resources.CPULimitPercent,
+		cpuMechanism,
+		describeDiskBudget(opts.Resources),
+		opts.Resources.WorkerSummary(),
+		opts.Resources.WorkersRationale))
+	if opts.Resources.DiskIOLimitBps > 0 && diskMechanism == platform.DiskMechanismNone {
+		log.Warn("Disk budget was requested but this host does not support storage rate control; the run is unthrottled")
+	}
+	if cpuMechanism == platform.CPUMechanismGOMAXPROCS {
+		// Worth a warning: winpmem and the PowerShell-hosted parsers run
+		// outside the Go runtime, so this path leaves them uncapped.
+		log.Warn("CPU limit could not be applied to child processes; only goroutines are capped")
+	}
 	for idx, mod := range modules {
 		if opts.Callbacks.OnModuleQueued != nil {
 			opts.Callbacks.OnModuleQueued(idx, mod)
@@ -88,7 +98,7 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 	results := runModules(ctx, modules, mgr, opts)
 	totalDuration := time.Since(startedAt)
 	finishedAt := startedAt.Add(totalDuration)
-	report := output.NewSummaryReport(mgr.BaseDir(), startedAt, totalDuration, opts.Timeout, opts.Concurrency, results)
+	report := output.NewSummaryReport(mgr.BaseDir(), startedAt, totalDuration, opts.Timeout, opts.Resources.WorkerSummary(), results)
 	manifest := output.NewManifest(mgr.BaseDir(), startedAt, finishedAt, results)
 	manifest.Resources = opts.Resources
 	manifest.StorageEstimate = opts.StorageEstimate
@@ -113,13 +123,24 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 	// would be missing from collector.log inside the archive that gets delivered as evidence.
 	archivePath := ""
 	if opts.Resources.Compress {
+		// The memory image is archived by reference, not by content: see
+		// output.MemoryImages for why compressing it is all cost and no saving.
+		memoryImages := output.MemoryImages(mgr.BaseDir())
+
 		manifest.CompressEnabled = true
 		manifest.Archive = output.ArchiveInfo{Path: mgr.BaseDir() + ".zip"}
+		for _, image := range memoryImages {
+			manifest.UncompressedFiles = append(manifest.UncompressedFiles, mgr.BaseDir()+"_"+filepath.Base(image))
+		}
 		if err := output.WriteManifest(mgr.BaseDir(), manifest); err != nil {
 			log.Error(fmt.Sprintf("Failed to update manifest compression info: %v", err))
 		}
+		for _, image := range memoryImages {
+			log.Info(fmt.Sprintf("Memory image kept outside the archive: %s", filepath.Base(image)))
+		}
 		log.Info(fmt.Sprintf("Raw output will be removed after successful compression: %s", mgr.BaseDir()))
-		archive, err := output.CompressRunDirectory(mgr.BaseDir())
+
+		archive, err := output.CompressRunDirectory(mgr.BaseDir(), memoryImages)
 		if err != nil {
 			log.Error(fmt.Sprintf("Failed to compress output: %v", err))
 		} else {
@@ -128,6 +149,20 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 				log.Error(fmt.Sprintf("Failed to write archive hash sidecar: %v", err))
 			}
 			log.Info(fmt.Sprintf("Archive: %s", archivePath))
+
+			// Only after the archive is on disk: until then the run directory
+			// is still the evidence, and moving anything out of it early would
+			// leave a failed compression with its artifacts scattered.
+			kept, err := output.PreserveOutsideArchive(mgr.BaseDir(), memoryImages)
+			if err != nil {
+				log.Error(fmt.Sprintf("Failed to preserve memory image outside the archive: %v", err))
+				// The dump is still inside the run directory, so that directory
+				// must not be deleted or the image goes with it.
+				archivePath = ""
+			}
+			for _, path := range kept {
+				log.Info(fmt.Sprintf("Memory image: %s", path))
+			}
 		}
 	}
 
@@ -142,44 +177,44 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 	return report, nil
 }
 
+// describeDiskBudget reports the budget together with how it is enforced, so a
+// log line never implies a cap that was never installed.
+func describeDiskBudget(cfg resource.Config) string {
+	if cfg.DiskIOLimitBps <= 0 {
+		return "unlimited"
+	}
+	return fmt.Sprintf("%s/s via %s", resource.FormatBytes(cfg.DiskIOLimitBps), cfg.DiskIOMechanism)
+}
+
 func normalizeOptions(opts Options) Options {
 	if opts.OutputBaseDir == "" {
 		opts.OutputBaseDir = "."
 	}
-	// Resources must be defaulted before Concurrency is derived from it, otherwise an
-	// explicit Concurrency is read, then discarded when Resources is replaced wholesale.
 	if opts.Resources.IsZero() {
 		opts.Resources = resource.DefaultConfig()
 	}
-	if opts.Concurrency <= 0 {
-		opts.Concurrency = opts.Resources.Workers
-	}
-	if opts.Concurrency <= 0 {
-		opts.Concurrency = DefaultConcurrency
-	}
-	opts.Resources.Workers = opts.Concurrency
-	opts.Resources = opts.Resources.Normalized()
-	opts.Concurrency = opts.Resources.Workers
+	// ResolveWorkers needs the output directory: how many collectors can run in
+	// parallel depends on the device the evidence is being written to.
+	opts.Resources = opts.Resources.Normalized().ResolveWorkers(opts.OutputBaseDir)
 	return opts
 }
 
-func applyResourceConfig(cfg resource.Config) func() {
+// applyResourceConfig installs the run's limits and reports the CPU mechanism
+// that was actually used along with a restore func.
+//
+// There is deliberately no memory cap here. debug.SetMemoryLimit is a soft
+// limit: it cannot refuse an allocation, it only makes the GC run harder as the
+// heap approaches the ceiling. The analyzers read whole artifacts into memory,
+// so a cap below their working set bought continuous GC instead of protection —
+// and still OOMed. Bounding analyzer memory is the analyzers' job (stream the
+// parse) and the scheduler's (fewer concurrent workers), not a runtime knob's.
+func applyResourceConfig(cfg resource.Config) (cpuMechanism, diskMechanism string, restore func()) {
 	cfg = cfg.Normalized()
-	oldProcs := runtime.GOMAXPROCS(0)
-	if cfg.CPULimitPercent > 0 {
-		procs := oldProcs * cfg.CPULimitPercent / 100
-		if procs < 1 {
-			procs = 1
-		}
-		runtime.GOMAXPROCS(procs)
-	}
+	cpuMechanism, restoreCPU := platform.LimitCPU(cfg.CPULimitPercent)
+	diskMechanism, restoreDisk := platform.LimitDiskIO(cfg.DiskIOLimitBps)
 
-	oldMemoryLimit := debug.SetMemoryLimit(cfg.RAMCapBytes)
-	utils.SetDiskIOLimit(cfg.DiskIOLimitBps)
-
-	return func() {
-		runtime.GOMAXPROCS(oldProcs)
-		debug.SetMemoryLimit(oldMemoryLimit)
-		utils.SetDiskIOLimit(0)
+	return cpuMechanism, diskMechanism, func() {
+		restoreCPU()
+		restoreDisk()
 	}
 }

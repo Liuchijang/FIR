@@ -14,7 +14,6 @@ type runtimeConfig struct {
 	OutputBaseDir string
 	Verbose       bool
 	Timeout       time.Duration
-	Concurrency   int
 	Resources     resource.Config
 }
 
@@ -23,11 +22,8 @@ func runtimeConfigFromFlags() runtimeConfig {
 		OutputBaseDir: outputDir,
 		Verbose:       verbose,
 		Timeout:       timeoutFlag,
-		Concurrency:   concurrencyFlag,
 		Resources: resource.Config{
 			CPULimitPercent: cpuLimitFlag,
-			RAMCapBytes:     ramCapBytesFlag,
-			Workers:         workersFlag,
 			DiskIOLimitBps:  diskIOBytesFlag,
 			Compress:        compressFlag,
 		},
@@ -39,15 +35,7 @@ func (c runtimeConfig) normalized() runtimeConfig {
 	if c.OutputBaseDir == "" {
 		c.OutputBaseDir = "."
 	}
-	c.Resources = c.Resources.Normalized()
-	if c.Concurrency <= 0 {
-		c.Concurrency = c.Resources.Workers
-	}
-	if c.Concurrency > 0 {
-		c.Resources.Workers = c.Concurrency
-		c.Resources = c.Resources.Normalized()
-		c.Concurrency = c.Resources.Workers
-	}
+	c.Resources = c.Resources.Normalized().ResolveWorkers(c.OutputBaseDir)
 	return c
 }
 
@@ -57,7 +45,6 @@ func (c runtimeConfig) CollectionOptions(silentConsole bool, callbacks collectio
 		OutputBaseDir: c.OutputBaseDir,
 		Verbose:       c.Verbose,
 		Timeout:       c.Timeout,
-		Concurrency:   c.Concurrency,
 		Resources:     c.Resources,
 		SilentConsole: silentConsole,
 		Callbacks:     callbacks,

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -132,107 +134,157 @@ func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) modu
 		}
 		return rows[i].RecordNumber < rows[j].RecordNumber
 	})
+	// Only name and parent are needed to resolve paths, so the index is built
+	// from those two fields rather than from whole rows.
+	links := make(mftLinkIndex, len(rows))
+	for _, row := range rows {
+		links[mftKey{Drive: row.Drive, Record: row.RecordNumber}] = mftParentLink{
+			Name:      row.Name,
+			ParentRef: row.ParentRef,
+		}
+	}
+
+	// Rows go out as they are resolved. Collecting them into a [][]string first
+	// meant a third full-size copy of the volume's file table, on top of the
+	// records themselves and the index.
+	stream, err := newCSVStream(filepath.Join(outDir, "mft_records.csv"), mftCSVHeader)
+	if err != nil {
+		return analyzerError(outDir, err)
+	}
 	pathCache := make(map[mftKey]string, len(rows))
-	recordMap := make(map[mftKey]mftRecordRow, len(rows))
-	for _, row := range rows {
-		recordMap[mftKey{Drive: row.Drive, Record: row.RecordNumber}] = row
-	}
 	for i := range rows {
-		rows[i].FullPath = resolveMFTPath(recordMap, pathCache, rows[i].Drive, rows[i].RecordNumber)
+		if err := ctx.Err(); err != nil {
+			stream.Abort()
+			return analyzerError(outDir, err)
+		}
+		rows[i].FullPath = resolveMFTPath(links, pathCache, rows[i].Drive, rows[i].RecordNumber)
+		if err := stream.Write(mftCSVRow(rows[i])); err != nil {
+			stream.Abort()
+			return analyzerError(outDir, err)
+		}
 	}
 
-	detailRows := make([][]string, 0, len(rows))
-	for _, row := range rows {
-		detailRows = append(detailRows, []string{
-			row.Drive,
-			fmt.Sprintf("%d", row.RecordNumber),
-			fmt.Sprintf("%d", row.Sequence),
-			fmt.Sprintf("%d", row.HardLinkCount),
-			fmt.Sprintf("%t", row.InUse),
-			fmt.Sprintf("%t", row.IsDirectory),
-			fmt.Sprintf("%d", row.ParentRef),
-			fmt.Sprintf("%d", row.ParentSequence),
-			row.Name,
-			row.ShortName,
-			row.NameNamespace,
-			row.Extension,
-			row.FullPath,
-			row.SICreated,
-			row.SIModified,
-			row.SIMFTModified,
-			row.SIAccessed,
-			row.FNCreated,
-			row.FNModified,
-			row.FNMFTModified,
-			row.FNAccessed,
-			fmt.Sprintf("%d", row.Allocated),
-			fmt.Sprintf("%d", row.RealSize),
-			fmt.Sprintf("%t", row.ResidentData),
-			fmt.Sprintf("%t", row.UnnamedDataStream),
-			fmt.Sprintf("%t", row.HasAlternateData),
-		})
+	fi, err := stream.Close()
+	if err != nil {
+		return analyzerError(outDir, err)
 	}
-
-	return csvResult(outDir, "mft_records.csv", []string{
-		"Drive",
-		"RecordNumber",
-		"SequenceNumber",
-		"HardLinkCount",
-		"IsInUse",
-		"IsDirectory",
-		"ParentRecordNumber",
-		"ParentSequenceNumber",
-		"FileName",
-		"ShortFileName",
-		"NameNamespace",
-		"Extension",
-		"FullPath",
-		"SI_CreatedUTC",
-		"SI_ModifiedUTC",
-		"SI_MFTModifiedUTC",
-		"SI_AccessedUTC",
-		"FN_CreatedUTC",
-		"FN_ModifiedUTC",
-		"FN_MFTModifiedUTC",
-		"FN_AccessedUTC",
-		"AllocatedSize",
-		"RealSize",
-		"ResidentData",
-		"HasUnnamedData",
-		"HasAlternateDataStreams",
-	}, detailRows)
+	return module.AnalyzeResult{Files: []module.FileInfo{fi}, OutputPath: outDir}
 }
 
+var mftCSVHeader = []string{
+	"Drive",
+	"RecordNumber",
+	"SequenceNumber",
+	"HardLinkCount",
+	"IsInUse",
+	"IsDirectory",
+	"ParentRecordNumber",
+	"ParentSequenceNumber",
+	"FileName",
+	"ShortFileName",
+	"NameNamespace",
+	"Extension",
+	"FullPath",
+	"SI_CreatedUTC",
+	"SI_ModifiedUTC",
+	"SI_MFTModifiedUTC",
+	"SI_AccessedUTC",
+	"FN_CreatedUTC",
+	"FN_ModifiedUTC",
+	"FN_MFTModifiedUTC",
+	"FN_AccessedUTC",
+	"AllocatedSize",
+	"RealSize",
+	"ResidentData",
+	"HasUnnamedData",
+	"HasAlternateDataStreams",
+}
+
+func mftCSVRow(row mftRecordRow) []string {
+	return []string{
+		row.Drive,
+		strconv.FormatUint(row.RecordNumber, 10),
+		strconv.FormatUint(uint64(row.Sequence), 10),
+		strconv.FormatUint(uint64(row.HardLinkCount), 10),
+		strconv.FormatBool(row.InUse),
+		strconv.FormatBool(row.IsDirectory),
+		strconv.FormatUint(row.ParentRef, 10),
+		strconv.FormatUint(uint64(row.ParentSequence), 10),
+		row.Name,
+		row.ShortName,
+		row.NameNamespace,
+		row.Extension,
+		row.FullPath,
+		row.SICreated,
+		row.SIModified,
+		row.SIMFTModified,
+		row.SIAccessed,
+		row.FNCreated,
+		row.FNModified,
+		row.FNMFTModified,
+		row.FNAccessed,
+		strconv.FormatInt(row.Allocated, 10),
+		strconv.FormatInt(row.RealSize, 10),
+		strconv.FormatBool(row.ResidentData),
+		strconv.FormatBool(row.UnnamedDataStream),
+		strconv.FormatBool(row.HasAlternateData),
+	}
+}
+
+// parseCollectedMFT reads the artifact in fixed batches instead of slurping it
+// whole. A $MFT is routinely several gigabytes, and os.ReadFile made the file
+// the single largest allocation in a run — larger than the parsed records it
+// was there to produce.
 func parseCollectedMFT(ctx context.Context, path string) ([]mftRecordRow, error) {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("read collected $MFT: %w", err)
 	}
+	defer file.Close()
 
-	totalRecords := len(data) / mftRecordSize
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat collected $MFT: %w", err)
+	}
+
+	totalRecords := int(info.Size() / mftRecordSize)
 	rows := make([]mftRecordRow, 0, totalRecords)
 
-	for i := 0; i < totalRecords; i++ {
+	const batchRecords = 1024
+	batch := make([]byte, batchRecords*mftRecordSize)
+
+	for i := 0; i < totalRecords; {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 
-		start := i * mftRecordSize
-		record := append([]byte(nil), data[start:start+mftRecordSize]...)
-		if string(record[:4]) != "FILE" {
-			continue
-		}
-		if err := applyMFTFixup(record); err != nil {
-			continue
+		count := min(batchRecords, totalRecords-i)
+		if _, err := io.ReadFull(file, batch[:count*mftRecordSize]); err != nil {
+			return nil, fmt.Errorf("read collected $MFT: %w", err)
 		}
 
-		row, ok, err := parseMFTRecord(record, uint64(i))
-		if err != nil {
-			return nil, err
+		for j := 0; j < count; j++ {
+			record := batch[j*mftRecordSize : (j+1)*mftRecordSize]
+			if string(record[:4]) != "FILE" {
+				continue
+			}
+			// applyMFTFixup rewrites the record in place and the parsed row can
+			// alias what it is handed, so each record is copied out of the
+			// batch buffer before it is reused by the next read.
+			record = append([]byte(nil), record...)
+			if err := applyMFTFixup(record); err != nil {
+				continue
+			}
+
+			row, ok, err := parseMFTRecord(record, uint64(i+j))
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				rows = append(rows, row)
+			}
 		}
-		if ok {
-			rows = append(rows, row)
-		}
+		i += count
 	}
 
 	return rows, nil
@@ -625,13 +677,43 @@ type mftKey struct {
 	Record uint64
 }
 
-func resolveMFTPath(records map[mftKey]mftRecordRow, cache map[mftKey]string, drive string, recordNumber uint64) string {
+// mftPathSource supplies the only two fields path resolution needs. It exists
+// so each caller can keep the record representation it already has: mft_parser
+// holds a compact name/parent index, while usnjrnl_parser needs whole rows for
+// enrichment and would otherwise have to carry a second copy of them.
+type mftPathSource interface {
+	parentLink(key mftKey) (name string, parent uint64, ok bool)
+}
+
+// mftParentLink is the compact form. A full mftRecordRow is 27 fields wide, and
+// indexing several million of them by value doubled the parser's peak memory
+// for the sake of two of those fields.
+type mftParentLink struct {
+	Name      string
+	ParentRef uint64
+}
+
+type mftLinkIndex map[mftKey]mftParentLink
+
+func (m mftLinkIndex) parentLink(key mftKey) (string, uint64, bool) {
+	link, ok := m[key]
+	return link.Name, link.ParentRef, ok
+}
+
+type mftRowIndex map[mftKey]mftRecordRow
+
+func (m mftRowIndex) parentLink(key mftKey) (string, uint64, bool) {
+	row, ok := m[key]
+	return row.Name, row.ParentRef, ok
+}
+
+func resolveMFTPath(records mftPathSource, cache map[mftKey]string, drive string, recordNumber uint64) string {
 	key := mftKey{Drive: drive, Record: recordNumber}
 	if cached, ok := cache[key]; ok {
 		return cached
 	}
 
-	row, ok := records[key]
+	name, parentRef, ok := records.parentLink(key)
 	if !ok {
 		return fmt.Sprintf(`\record_%d`, recordNumber)
 	}
@@ -643,18 +725,18 @@ func resolveMFTPath(records map[mftKey]mftRecordRow, cache map[mftKey]string, dr
 		cache[key] = `\`
 		return `\`
 	}
-	if row.ParentRef == 0 || row.ParentRef == recordNumber {
-		path := `\` + row.Name
+	if parentRef == 0 || parentRef == recordNumber {
+		path := `\` + name
 		cache[key] = path
 		return path
 	}
 
-	parent := resolveMFTPath(records, cache, drive, row.ParentRef)
+	parent := resolveMFTPath(records, cache, drive, parentRef)
 	if parent == `\` {
-		cache[key] = parent + row.Name
-		return parent + row.Name
+		cache[key] = parent + name
+		return parent + name
 	}
-	path := strings.TrimRight(parent, `\`) + `\` + row.Name
+	path := strings.TrimRight(parent, `\`) + `\` + name
 	cache[key] = path
 	return path
 }

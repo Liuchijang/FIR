@@ -12,7 +12,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const copyBufferSize = 64 * 1024
+// copyBufferSize is 1 MiB: large enough that per-call overhead disappears
+// against the syscall, small enough that N concurrent copies do not commit an
+// unreasonable amount of memory to buffers.
+const copyBufferSize = 1024 * 1024
 
 func SafeCopyFile(src, dst string) (module.FileInfo, error) {
 	srcFile, err := os.Open(src)
@@ -76,7 +79,7 @@ func copyToDestination(srcFile *os.File, dst string) (module.FileInfo, error) {
 	hasher := sha256.New()
 	writer := io.MultiWriter(dstFile, hasher)
 	buf := make([]byte, copyBufferSize)
-	written, copyErr := io.CopyBuffer(writer, diskLimitedReader(srcFile), buf)
+	written, copyErr := io.CopyBuffer(writer, srcFile, buf)
 	if copyErr != nil {
 		err = fmt.Errorf("copy to %s: %w", dst, copyErr)
 		return module.FileInfo{}, err

@@ -2,6 +2,6 @@
 
 package resource
 
-func detectTotalRAMBytes() int64 {
-	return 0
+func detectRAMBytes() (total, available int64) {
+	return 0, 0
 }

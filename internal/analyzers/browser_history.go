@@ -105,7 +105,7 @@ func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRe
 				row.LastVisitUTC,
 			})
 		}
-		if err := writeCSVFile(outCSV, []string{
+		fi, err := writeCSV(outCSV, []string{
 			"Username",
 			"Browser",
 			"Profile",
@@ -119,14 +119,9 @@ func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRe
 			"Transition",
 			"VisitType",
 			"LastVisitUTC",
-		}, csvRows); err != nil {
-			parseErrors = append(parseErrors, fmt.Sprintf("%s/%s/%s: write csv %v", source.Profile.User, source.Profile.Browser, source.Profile.Name, err))
-			continue
-		}
-
-		fi, err := utils.FileInfoFromPath(outCSV)
+		}, csvRows)
 		if err != nil {
-			parseErrors = append(parseErrors, fmt.Sprintf("%s/%s/%s: file info %v", source.Profile.User, source.Profile.Browser, source.Profile.Name, err))
+			parseErrors = append(parseErrors, fmt.Sprintf("%s/%s/%s: write csv %v", source.Profile.User, source.Profile.Browser, source.Profile.Name, err))
 			continue
 		}
 		files = append(files, fi)
