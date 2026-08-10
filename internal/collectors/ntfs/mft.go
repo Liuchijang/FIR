@@ -10,7 +10,6 @@ import (
 	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/logging"
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func init() { module.RegisterArtifact("ntfs", &mftCollector{}) }
@@ -78,15 +77,11 @@ func collectMFTForDrive(log *logging.Logger, outDir, drive string) (module.FileI
 	}
 	log.Debug(fmt.Sprintf("NTFS Volume %s: MFT at LCN %d, size %d bytes, %d bytes/cluster", drive, volData.MFTStartLCN, volData.MFTValidDataLength, volData.BytesPerCluster))
 
-	written, err := vol.CopyMFTToFile(volData, mftPath)
+	written, hash, err := vol.CopyMFTToFile(volData, mftPath)
 	if err != nil {
 		return module.FileInfo{}, fmt.Errorf("copy MFT: %w", err)
 	}
 
-	hash, err := utils.HashFile(mftPath)
-	if err != nil {
-		log.Warn(fmt.Sprintf("Failed to hash $MFT for drive %s: %v", drive, err))
-	}
 	log.Debug(fmt.Sprintf("$MFT collected for drive %s: %d bytes, SHA256: %s", drive, written, hash))
 	return module.FileInfo{Path: relName, SHA256: hash, Size: written}, nil
 }

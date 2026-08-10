@@ -92,23 +92,6 @@ func All() []Module {
 	return result
 }
 
-func Categories() []string {
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-
-	seen := make(map[string]bool)
-	for _, m := range registry.collectors {
-		seen[m.Category()] = true
-	}
-
-	cats := make([]string, 0, len(seen))
-	for cat := range seen {
-		cats = append(cats, cat)
-	}
-	sort.Strings(cats)
-	return cats
-}
-
 func Modes() []string {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()

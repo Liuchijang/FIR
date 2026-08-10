@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	browsercollector "github.com/Liuchijang/FIR/internal/collectors/browser"
 	"github.com/Liuchijang/FIR/internal/module"
@@ -401,22 +400,16 @@ func sqliteSidecarPaths(sourceDB string) []string {
 }
 
 func chromiumTimeString(value int64) string {
-	if value <= 0 {
-		return ""
-	}
+	// Chromium counts microseconds from 1601-01-01, Firefox from the Unix epoch.
 	const chromiumEpochDelta = 11644473600000000
 	if value < chromiumEpochDelta {
 		return ""
 	}
-	unixMicros := value - chromiumEpochDelta
-	return time.UnixMicro(unixMicros).UTC().Format("2006-01-02 15:04:05")
+	return formatUnixMicro(value-chromiumEpochDelta, "")
 }
 
 func firefoxTimeString(value int64) string {
-	if value <= 0 {
-		return ""
-	}
-	return time.UnixMicro(value).UTC().Format("2006-01-02 15:04:05")
+	return formatUnixMicro(value, "")
 }
 
 func browserHistoryCSVName(profile browsercollector.BrowserProfile) string {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/ntfs"
 	"golang.org/x/sys/windows"
 )
 
@@ -380,14 +381,14 @@ func parseUSNRecordV2(record []byte, recordOffset uint64, drive string, recordMa
 	sourceInfo := binary.LittleEndian.Uint32(record[44:48])
 	securityID := binary.LittleEndian.Uint32(record[48:52])
 	fileAttrs := binary.LittleEndian.Uint32(record[52:56])
-	fileName := utf16LEString(record[nameOff : nameOff+nameLen])
+	fileName := ntfs.UTF16String(record[nameOff : nameOff+nameLen])
 
 	row := []string{
 		fmt.Sprintf("%d", recordOffset),
 		fmt.Sprintf("%d", len(record)),
 		"2",
 		fmt.Sprintf("%d", binary.LittleEndian.Uint16(record[6:8])),
-		ntfsFiletimeString(binary.LittleEndian.Uint64(record[32:40])),
+		formatFiletime(binary.LittleEndian.Uint64(record[32:40]), ""),
 		fmt.Sprintf("%d", usn),
 		fmt.Sprintf("%d", fileRef),
 		fmt.Sprintf("%d", fileSeq),
@@ -460,14 +461,14 @@ func parseUSNRecordV3(record []byte, recordOffset uint64, enriched bool) ([]stri
 	sourceInfo := binary.LittleEndian.Uint32(record[60:64])
 	securityID := binary.LittleEndian.Uint32(record[64:68])
 	fileAttrs := binary.LittleEndian.Uint32(record[68:72])
-	fileName := utf16LEString(record[nameOff : nameOff+nameLen])
+	fileName := ntfs.UTF16String(record[nameOff : nameOff+nameLen])
 
 	row := []string{
 		fmt.Sprintf("%d", recordOffset),
 		fmt.Sprintf("%d", len(record)),
 		"3",
 		fmt.Sprintf("%d", binary.LittleEndian.Uint16(record[6:8])),
-		ntfsFiletimeString(binary.LittleEndian.Uint64(record[48:56])),
+		formatFiletime(binary.LittleEndian.Uint64(record[48:56]), ""),
 		fmt.Sprintf("%d", usn),
 		bytesToHex(record[8:24]),
 		"",

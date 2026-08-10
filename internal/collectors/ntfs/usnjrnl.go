@@ -2,7 +2,10 @@ package ntfs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +14,6 @@ import (
 	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/logging"
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 	"golang.org/x/sys/windows"
 )
 
@@ -119,6 +121,10 @@ func collectUSNJournalForDrive(ctx context.Context, log *logging.Logger, outDir,
 	readData := readUsnJournalData{StartUsn: journalData.FirstUsn, ReasonMask: 0xFFFFFFFF, UsnJournalID: journalData.UsnJournalID}
 	buf := make([]byte, 64*1024)
 	var totalWritten int64
+	// Hash the journal as it streams out: a $UsnJrnl:$J is routinely gigabytes,
+	// and re-reading it off the evidence drive just to digest it doubled the I/O.
+	digest := sha256.New()
+	sink := io.MultiWriter(outFile, digest)
 
 	for {
 		select {
@@ -131,7 +137,7 @@ func collectUSNJournalForDrive(ctx context.Context, log *logging.Logger, outDir,
 		}
 
 		nextUsn := *(*int64)(unsafe.Pointer(&buf[0]))
-		n, writeErr := outFile.Write(buf[8:bytesReturned])
+		n, writeErr := sink.Write(buf[8:bytesReturned])
 		if writeErr != nil {
 			return module.FileInfo{}, fmt.Errorf("write USN data: %w", writeErr)
 		}
@@ -139,10 +145,7 @@ func collectUSNJournalForDrive(ctx context.Context, log *logging.Logger, outDir,
 		readData.StartUsn = nextUsn
 	}
 
-	hash, err := utils.HashFile(outputPath)
-	if err != nil {
-		log.Warn(fmt.Sprintf("Failed to hash $UsnJrnl for drive %s: %v", drive, err))
-	}
+	hash := hex.EncodeToString(digest.Sum(nil))
 	log.Debug(fmt.Sprintf("$UsnJrnl:$J collected for drive %s: %d bytes, SHA256: %s", drive, totalWritten, hash))
 	return module.FileInfo{Path: relName, SHA256: hash, Size: totalWritten}, nil
 }

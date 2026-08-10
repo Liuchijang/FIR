@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/ntfs"
 	winreg "golang.org/x/sys/windows/registry"
 )
 
@@ -219,8 +220,8 @@ func decodeRecentDocsBinary(data []byte) string {
 	}
 	for end := 2; end <= len(data); end += 2 {
 		if end+1 < len(data) && data[end] == 0 && data[end+1] == 0 {
-			return utf16LEString(data[:end])
+			return ntfs.UTF16String(data[:end])
 		}
 	}
-	return utf16LEString(data)
+	return ntfs.UTF16String(data)
 }

@@ -8,8 +8,9 @@ import (
 	"os"
 )
 
-// HashFile reads the whole file. Collectors that hash a freshly written
-// artifact (the $MFT, the memory dump) move those bytes a second time here.
+// HashFile reads the whole file, so it is the wrong tool for an artifact this
+// process just wrote — hash those on the way out instead. What is left is the
+// memory image, whose bytes winpmem writes from a child process we never see.
 func HashFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

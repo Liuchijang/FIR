@@ -40,24 +40,6 @@ func (m *Manager) BaseDir() string {
 	return m.baseDir
 }
 
-func (m *Manager) CategoryDir(category string) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	dir := filepath.Join(m.baseDir, category)
-	if !m.created[category] {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", fmt.Errorf("create category dir %s: %w", category, err)
-		}
-		m.created[category] = true
-	}
-	return dir, nil
-}
-
-func (m *Manager) LogsDir() (string, error) {
-	return m.CategoryDir("logs")
-}
-
 // sanitizeDirName removes characters that are invalid in Windows directory names.
 func sanitizeDirName(name string) string {
 	invalid := []string{"<", ">", ":", "\"", "/", "\\", "|", "?", "*"}

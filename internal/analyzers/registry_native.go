@@ -124,7 +124,7 @@ func registryKeyLastWriteString(key winreg.Key) string {
 	if r1 != 0 {
 		return ""
 	}
-	return filetimeUint64String((uint64(lastWrite.HighDateTime) << 32) | uint64(lastWrite.LowDateTime))
+	return formatFiletimeParts(lastWrite.LowDateTime, lastWrite.HighDateTime, "")
 }
 
 func registryValueNames(key winreg.Key) map[string]bool {
@@ -158,7 +158,7 @@ func normalizeRegistryDateString(value string) string {
 	}
 	for _, layout := range layouts {
 		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed.UTC().Format("2006-01-02 15:04:05")
+			return formatTime(parsed, "")
 		}
 	}
 	return value

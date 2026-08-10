@@ -472,23 +472,6 @@ func (m *CollectionProgressModel) syncViewport() {
 	m.viewport.SetContent(m.renderRunningContent(m.viewport.Width))
 }
 
-func renderProgressBannerLines(lines []string, width int) string {
-	if len(lines) == 0 {
-		return ""
-	}
-
-	rendered := make([]string, 0, len(lines))
-	for idx, line := range lines {
-		line = trimToWidth(line, width)
-		if idx == 0 {
-			rendered = append(rendered, bannerTitleStyle.Render(line))
-			continue
-		}
-		rendered = append(rendered, line)
-	}
-	return strings.Join(rendered, "\n")
-}
-
 func (m CollectionProgressModel) bannerStateSummary() string {
 	if m.completed {
 		if m.err != nil {

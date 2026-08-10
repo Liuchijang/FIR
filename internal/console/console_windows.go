@@ -220,10 +220,6 @@ func PauseBeforeExit() {
 	fmt.Fprintln(os.Stderr)
 }
 
-func LikelyExplorerLaunch() bool {
-	return shouldPauseBeforeExit()
-}
-
 // Legacy conhost prints '?' for glyphs its font lacks, and neither the raster
 // "Terminal" font nor Lucida Console carries rounded borders (U+256D-U+2570) or
 // braille spinner frames (U+28xx) — a codepage switch cannot fix glyph coverage.

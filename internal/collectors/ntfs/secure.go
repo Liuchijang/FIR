@@ -9,7 +9,6 @@ import (
 	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/logging"
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 func init() { module.RegisterArtifact("ntfs", &secureCollector{}) }
@@ -76,15 +75,11 @@ func collectSecureSDSForDrive(log *logging.Logger, outDir, drive string) (module
 		return module.FileInfo{}, fmt.Errorf("get NTFS volume data: %w", err)
 	}
 
-	written, err := acquisition.CopyNamedDataStreamFromMFTRecord(vol, volData, 9, "$SDS", outputPath)
+	written, hash, err := acquisition.CopyNamedDataStreamFromMFTRecord(vol, volData, 9, "$SDS", outputPath)
 	if err != nil {
 		return module.FileInfo{}, fmt.Errorf("$Secure:$SDS raw NTFS extraction failed: %w", err)
 	}
 
-	hash, err := utils.HashFile(outputPath)
-	if err != nil {
-		log.Warn(fmt.Sprintf("Failed to hash $Secure:$SDS for drive %s: %v", drive, err))
-	}
 	log.Debug(fmt.Sprintf("$Secure:$SDS collected for drive %s via raw NTFS record 9: %d bytes, SHA256: %s", drive, written, hash))
 	return module.FileInfo{Path: relName, SHA256: hash, Size: written}, nil
 }

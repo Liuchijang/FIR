@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/Liuchijang/FIR/internal/module"
 )
@@ -122,15 +121,15 @@ func parsePrefetchMetadata(path string) ([]string, error) {
 }
 
 func fileTimesUTC(stat os.FileInfo) (string, string, string) {
-	modified := stat.ModTime().UTC().Format(time.RFC3339)
+	modified := formatTime(stat.ModTime(), "")
 	created := ""
 	accessed := ""
 
 	data, ok := stat.Sys().(*syscall.Win32FileAttributeData)
 	if ok {
-		created = filetimeToRFC3339(data.CreationTime)
-		accessed = filetimeToRFC3339(data.LastAccessTime)
-		if value := filetimeToRFC3339(data.LastWriteTime); value != "" {
+		created = win32FiletimeString(data.CreationTime)
+		accessed = win32FiletimeString(data.LastAccessTime)
+		if value := win32FiletimeString(data.LastWriteTime); value != "" {
 			modified = value
 		}
 	}
@@ -138,9 +137,6 @@ func fileTimesUTC(stat os.FileInfo) (string, string, string) {
 	return created, accessed, modified
 }
 
-func filetimeToRFC3339(ft syscall.Filetime) string {
-	if ft == (syscall.Filetime{}) {
-		return ""
-	}
-	return time.Unix(0, ft.Nanoseconds()).UTC().Format(time.RFC3339)
+func win32FiletimeString(ft syscall.Filetime) string {
+	return formatFiletimeParts(ft.LowDateTime, ft.HighDateTime, "")
 }
