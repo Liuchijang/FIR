@@ -47,7 +47,8 @@ Available artifact names:
   prefetch, amcache, wmi, srum, browser,
   process_explorer, autoruns, mft_parser, usnjrnl_parser,
   secure_sds_parser, prefetch_parser, amcache_parser,
-  browser_history_parser,
+  browser_history_parser, browser_cookies_parser,
+  browser_credentials_parser, browser_profile_parser, srum_parser,
   shimcache_parser, eventlog_parser, wmi_parser
 
 Category shortcuts:

@@ -175,7 +175,7 @@ func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 		errs = append(errs, "parse live registry: "+err.Error())
 	}
 
-	autoCollectedHive, cleanupAutoCollect, err := collectAmcacheSourceForParser(ctx, req)
+	autoCollectedHive, cleanupAutoCollect, err := collectAmcacheSourceForParser(ctx, req, outDir)
 	if err == nil {
 		if cleanupAutoCollect != nil {
 			defer cleanupAutoCollect()
@@ -195,7 +195,7 @@ func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 		errs = append(errs, "auto-collect failed: "+err.Error())
 	}
 
-	hivePath, cleanup, err := stageLiveAmcacheHive()
+	hivePath, cleanup, err := stageLiveAmcacheHive(outDir)
 	if err == nil {
 		defer cleanup()
 		if results, parseErr := parseAmcacheResultsFromHiveFile(hivePath); parseErr == nil && len(results.Datasets) > 0 {
@@ -722,13 +722,21 @@ func normalizeAmcacheSHA1(value string) string {
 	return strings.TrimPrefix(value, "0000")
 }
 
-func stageLiveAmcacheHive() (string, func(), error) {
+// stageLiveAmcacheHive puts a mountable copy of the live Amcache.hve under
+// workDir, because RegLoadAppKeyW needs a file it can open for write to replay
+// the hive's pending transactions.
+//
+// workDir is the analyzer's own output directory rather than the machine's
+// %TEMP%: staging here would otherwise write the hive and both of its
+// transaction logs onto the volume being investigated, and a run that is killed
+// mid-parse would leave them there.
+func stageLiveAmcacheHive(workDir string) (string, func(), error) {
 	src := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve")
 	if _, err := os.Stat(src); err != nil {
 		return "", nil, err
 	}
 
-	tempDir, err := os.MkdirTemp("", "fir-amcache-")
+	tempDir, err := os.MkdirTemp(workDir, "amcache-stage-")
 	if err != nil {
 		return "", nil, err
 	}
@@ -816,7 +824,7 @@ func collectAmcacheSource(ctx context.Context, outputDir string) error {
 	return err
 }
 
-func collectAmcacheSourceForParser(ctx context.Context, req module.AnalyzeRequest) (string, func(), error) {
+func collectAmcacheSourceForParser(ctx context.Context, req module.AnalyzeRequest, workDir string) (string, func(), error) {
 	if req.IsSelected("amcache") {
 		if collected, ok := collectedAmcacheHive(req.OutputDir); ok {
 			return collected, nil, nil
@@ -824,9 +832,12 @@ func collectAmcacheSourceForParser(ctx context.Context, req module.AnalyzeReques
 		return "", nil, fmt.Errorf("amcache collector was selected but Amcache.hve was not found in run output")
 	}
 
-	tempDir, err := os.MkdirTemp("", "fir-amcache-parser-source-")
+	// Under the analyzer's own directory, not %TEMP%: this runs the whole amcache
+	// collector, so the destination receives a full copy of the hive on the
+	// volume under investigation if it points at the subject's temp directory.
+	tempDir, err := os.MkdirTemp(workDir, "amcache-collect-")
 	if err != nil {
-		return "", nil, fmt.Errorf("create temp dir for hidden amcache collection: %w", err)
+		return "", nil, fmt.Errorf("create work dir for hidden amcache collection: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(tempDir) }
 

@@ -83,42 +83,9 @@ func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) modu
 		return analyzerError(outDir, fmt.Errorf("create MFT parser output dir: %w", err))
 	}
 
-	var rows []mftRecordRow
-	var parseErrs []string
-	if dir, ok := existingModuleDir(req.OutputDir, "mft"); ok {
-		for _, drive := range collectedMFTDrives(dir) {
-			mftPath := filepath.Join(dir, "$MFT_"+drive)
-			driveRows, err := parseCollectedMFT(ctx, mftPath)
-			if err != nil {
-				parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", drive, err))
-				continue
-			}
-			for i := range driveRows {
-				driveRows[i].Drive = drive
-			}
-			rows = append(rows, driveRows...)
-		}
-		if len(rows) == 0 {
-			// Fall back to the legacy single-drive filename for older collection runs.
-			if legacyPath := filepath.Join(dir, "$MFT"); fileExists(legacyPath) {
-				legacyRows, err := parseCollectedMFT(ctx, legacyPath)
-				if err != nil {
-					parseErrs = append(parseErrs, fmt.Sprintf("C: %v", err))
-				} else {
-					for i := range legacyRows {
-						legacyRows[i].Drive = "C"
-					}
-					rows = append(rows, legacyRows...)
-				}
-			}
-		}
-	}
-	if len(rows) == 0 {
-		var err error
-		rows, err = parseLiveMFT(ctx)
-		if err != nil {
-			return analyzerError(outDir, err)
-		}
+	rows, parseErrs, err := loadMFTRows(ctx, req.OutputDir)
+	if err != nil {
+		return analyzerError(outDir, err)
 	}
 	if len(rows) == 0 {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no MFT records parsed: %s", strings.Join(parseErrs, "; "))}
@@ -225,6 +192,55 @@ func mftCSVRow(row mftRecordRow) []string {
 		strconv.FormatBool(row.UnnamedDataStream),
 		strconv.FormatBool(row.HasAlternateData),
 	}
+}
+
+// loadMFTRows parses every $MFT this run has available: one per collected
+// drive, the legacy single-drive filename for output written by older versions,
+// and finally the live volumes when nothing was collected.
+//
+// Both mft_parser and usnjrnl_parser need exactly this — the USN parser for the
+// name/path/timestamp enrichment it joins onto each journal record — and each
+// used to carry its own copy of the fallback chain. The two copies are what
+// decides which artifact a run's output was actually derived from, so they have
+// to agree.
+//
+// The returned errors are per-drive parse failures, not a reason to stop: a
+// second volume's $MFT is still worth parsing when the first one is corrupt.
+// Only a live-parse failure with nothing collected comes back as an error.
+func loadMFTRows(ctx context.Context, outputDir string) ([]mftRecordRow, []string, error) {
+	var rows []mftRecordRow
+	var parseErrs []string
+
+	appendDrive := func(path, drive string) {
+		driveRows, err := parseCollectedMFT(ctx, path)
+		if err != nil {
+			parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", drive, err))
+			return
+		}
+		for i := range driveRows {
+			driveRows[i].Drive = drive
+		}
+		rows = append(rows, driveRows...)
+	}
+
+	if dir, ok := existingModuleDir(outputDir, "mft"); ok {
+		for _, drive := range collectedMFTDrives(dir) {
+			appendDrive(filepath.Join(dir, "$MFT_"+drive), drive)
+		}
+		if len(rows) == 0 {
+			if legacyPath := filepath.Join(dir, "$MFT"); fileExists(legacyPath) {
+				appendDrive(legacyPath, "C")
+			}
+		}
+	}
+	if len(rows) == 0 {
+		liveRows, err := parseLiveMFT(ctx)
+		if err != nil {
+			return nil, parseErrs, err
+		}
+		rows = liveRows
+	}
+	return rows, parseErrs, nil
 }
 
 // parseCollectedMFT reads the artifact in fixed batches instead of slurping it

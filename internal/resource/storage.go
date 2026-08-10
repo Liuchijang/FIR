@@ -127,6 +127,28 @@ var analyzerOutputRatios = map[string]struct {
 	"eventlog_parser": {"eventlog", 400},
 	// $SDS security descriptors become SDDL text.
 	"secure_sds_parser": {"secure_sds", 200},
+	// The browser analyzers turn SQLite and JSON into CSV per profile. Measured on
+	// a real 3-profile collection (Chrome, Edge, Firefox; 202 MB collected):
+	// history 10.3%, cookies 0.8%, credentials 0.1%, profile 0.1%.
+	//
+	// The ratios below sit above those with room to spare, because the denominator
+	// is the whole collected tree and most of it is artifacts these analyzers never
+	// read — Favicons alone was 32 MB of it. A host whose browsing history is large
+	// relative to its favicon cache shifts every figure up.
+	//
+	// Note that estimateAnalyzerBytes floors each of these at defaultAnalyzerSize,
+	// so on a collection this size the ratio changes nothing; it starts to matter
+	// once a browser tree runs to gigabytes, which is exactly where the previous
+	// guesses would have reserved hundreds of megabytes for a 1 MB CSV.
+	"browser_history_parser":     {"browser", 20},
+	"browser_cookies_parser":     {"browser", 5},
+	"browser_credentials_parser": {"browser", 3},
+	"browser_profile_parser":     {"browser", 3},
+	// One CSV per SRUM provider table. Measured at 48% of SRUDB.dat on a real
+	// 92MB database (221k rows); the estimate keeps headroom above that because
+	// the ratio rises with how densely the providers are populated, and an
+	// under-estimate here is what fills the evidence drive mid-run.
+	"srum_parser": {"srum", 100},
 }
 
 // estimateModuleBytes estimates the additional disk space a module needs.

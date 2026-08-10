@@ -39,11 +39,21 @@ func MemoryImages(runDir string) []string {
 // PreserveOutsideArchive moves files that were excluded from the archive to sit
 // beside it, so removing the raw run directory does not take them with it. The
 // rename stays on one volume, so even a 32GB image moves instantly.
+//
+// An occupied destination is refused rather than replaced. On Windows os.Rename
+// is MoveFileEx with MOVEFILE_REPLACE_EXISTING, so the move would silently
+// destroy whatever memory image is already sitting there; the caller treats a
+// failure here by keeping the run directory, which leaves this run's image where
+// it is instead of overwriting somebody else's.
 func PreserveOutsideArchive(runDir string, paths []string) ([]string, error) {
 	var kept []string
 	var errs []error
 	for _, path := range paths {
 		destination := runDir + "_" + filepath.Base(path)
+		if _, err := os.Lstat(destination); err == nil {
+			errs = append(errs, fmt.Errorf("preserve %s: %s already exists", filepath.Base(path), filepath.Base(destination)))
+			continue
+		}
 		if err := os.Rename(path, destination); err != nil {
 			errs = append(errs, fmt.Errorf("preserve %s: %w", filepath.Base(path), err))
 			continue

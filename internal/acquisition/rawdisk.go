@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unsafe"
@@ -225,18 +226,24 @@ func (v *RawVolume) ReadAtOffset(offset int64, size int64) ([]byte, error) {
 	}
 
 	buf := make([]byte, totalRead)
-	var totalBytesRead uint32
-	for totalBytesRead < uint32(totalRead) {
+	var totalBytesRead int64
+	for totalBytesRead < totalRead {
 		var n uint32
-		remaining := uint32(totalRead) - totalBytesRead
-		err := windows.ReadFile(v.handle, buf[totalBytesRead:totalBytesRead+remaining], &n, nil)
+		err := windows.ReadFile(v.handle, buf[totalBytesRead:totalRead], &n, nil)
 		if err != nil {
-			return nil, fmt.Errorf("ReadFile at offset %d: %w", alignedOffset+int64(totalBytesRead), err)
+			return nil, fmt.Errorf("ReadFile at offset %d: %w", alignedOffset+totalBytesRead, err)
 		}
 		if n == 0 {
 			break
 		}
-		totalBytesRead += n
+		totalBytesRead += int64(n)
+	}
+	// A short read used to fall through and hand back the tail of a zeroed
+	// buffer. Those zeros are indistinguishable from real volume content: they
+	// get written into the artifact and into the SHA-256 taken on the way out,
+	// so the run reports intact evidence for bytes it never read.
+	if totalBytesRead < totalRead {
+		return nil, fmt.Errorf("short read at offset %d: got %d of %d bytes", alignedOffset, totalBytesRead, totalRead)
 	}
 
 	return buf[leadingBytes : leadingBytes+size], nil
@@ -290,16 +297,7 @@ func CopyNamedDataStreamFromMFTRecord(vol *RawVolume, volData *NTFSVolumeData, r
 	if len(attrs) == 0 {
 		return 0, "", fmt.Errorf("named data stream %s not found", streamName)
 	}
-	sort.Slice(attrs, func(i, j int) bool { return attrs[i].StartVCN < attrs[j].StartVCN })
-
-	var runs []DataRun
-	var realSize int64
-	for _, attr := range attrs {
-		runs = append(runs, attr.Runs...)
-		if attr.RealSize > realSize {
-			realSize = attr.RealSize
-		}
-	}
+	runs, realSize := mergeDataAttributes(attrs)
 	return vol.CopyDataRunsToFile(volData, runs, realSize, outputPath)
 }
 
@@ -311,16 +309,7 @@ func ReadNamedDataStreamFromMFTRecord(vol *RawVolume, volData *NTFSVolumeData, r
 	if len(attrs) == 0 {
 		return nil, fmt.Errorf("named data stream %s not found", streamName)
 	}
-	sort.Slice(attrs, func(i, j int) bool { return attrs[i].StartVCN < attrs[j].StartVCN })
-
-	var runs []DataRun
-	var realSize int64
-	for _, attr := range attrs {
-		runs = append(runs, attr.Runs...)
-		if attr.RealSize > realSize {
-			realSize = attr.RealSize
-		}
-	}
+	runs, realSize := mergeDataAttributes(attrs)
 	return vol.ReadDataRuns(volData, runs, realSize)
 }
 
@@ -339,6 +328,21 @@ func CopyFileFromRawPath(vol *RawVolume, volData *NTFSVolumeData, path string, o
 	if len(attrs) == 0 {
 		return 0, fmt.Errorf("default data stream not found for %s", path)
 	}
+	runs, realSize := mergeDataAttributes(attrs)
+	written, _, err := vol.CopyDataRunsToFile(volData, runs, realSize, outputPath)
+	return written, err
+}
+
+// mergeDataAttributes flattens every extent of one data stream into a single
+// run list.
+//
+// A stream large enough to outgrow its base record is described by several
+// $DATA attributes spread across extension records, each covering a range of
+// VCNs. Reading them in the order the attribute list happened to yield would
+// splice the file's fragments together out of order — the copy would be the
+// right length and the wrong bytes — so they are sorted by StartVCN first.
+// RealSize is only stored on the first extent, hence the max rather than a sum.
+func mergeDataAttributes(attrs []DataAttribute) ([]DataRun, int64) {
 	sort.Slice(attrs, func(i, j int) bool { return attrs[i].StartVCN < attrs[j].StartVCN })
 
 	var runs []DataRun
@@ -349,8 +353,7 @@ func CopyFileFromRawPath(vol *RawVolume, volData *NTFSVolumeData, path string, o
 			realSize = attr.RealSize
 		}
 	}
-	written, _, err := vol.CopyDataRunsToFile(volData, runs, realSize, outputPath)
-	return written, err
+	return runs, realSize
 }
 
 // CopyDataRunsToFile returns the SHA-256 of the bytes it wrote alongside the
@@ -359,7 +362,7 @@ func CopyFileFromRawPath(vol *RawVolume, volData *NTFSVolumeData, path string, o
 // second pass used to read the whole file back off the evidence drive purely to
 // digest bytes this function already had in hand.
 func (v *RawVolume) CopyDataRunsToFile(volData *NTFSVolumeData, runs []DataRun, realSize int64, outputPath string) (int64, string, error) {
-	if err := os.MkdirAll(filepathDir(outputPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return 0, "", fmt.Errorf("create output dir: %w", err)
 	}
 
@@ -548,16 +551,7 @@ func (v *RawVolume) ensureMFTDataRuns(volData *NTFSVolumeData) error {
 	if err != nil {
 		return fmt.Errorf("collect MFT data runs: %w", err)
 	}
-	sort.Slice(attrs, func(i, j int) bool { return attrs[i].StartVCN < attrs[j].StartVCN })
-
-	var runs []DataRun
-	var realSize int64
-	for _, attr := range attrs {
-		runs = append(runs, attr.Runs...)
-		if attr.RealSize > realSize {
-			realSize = attr.RealSize
-		}
-	}
+	runs, realSize := mergeDataAttributes(attrs)
 	if len(runs) == 0 {
 		return fmt.Errorf("no data runs found for $MFT")
 	}
@@ -1020,15 +1014,4 @@ func readSignedLittleEndian(data []byte) int64 {
 		value -= 1 << (uint(len(data)) * 8)
 	}
 	return value
-}
-
-func filepathDir(path string) string {
-	idx := len(path) - 1
-	for idx >= 0 && path[idx] != '\\' && path[idx] != '/' {
-		idx--
-	}
-	if idx <= 0 {
-		return "."
-	}
-	return path[:idx]
 }

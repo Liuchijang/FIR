@@ -20,7 +20,7 @@ var (
 )
 
 func loadRegistryAppKey(path string) (winreg.Key, error) {
-	absPath, err := filepathAbs(path)
+	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return 0, err
 	}
@@ -162,8 +162,4 @@ func normalizeRegistryDateString(value string) string {
 		}
 	}
 	return value
-}
-
-func filepathAbs(path string) (string, error) {
-	return filepath.Abs(path)
 }

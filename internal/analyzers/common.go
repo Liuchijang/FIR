@@ -98,6 +98,9 @@ func (s *csvStream) Close() (module.FileInfo, error) {
 		return module.FileInfo{}, fmt.Errorf("stat csv: %w", err)
 	}
 	if err := s.file.Close(); err != nil {
+		// Close is where a buffered write finally fails, so what is on disk here
+		// is a partial CSV — the same thing Abort exists to remove.
+		s.Abort()
 		return module.FileInfo{}, fmt.Errorf("close csv: %w", err)
 	}
 	return module.FileInfo{
@@ -162,7 +165,19 @@ func maskString[T ~uint16 | ~uint32](mask T, flags []maskFlag[T]) string {
 // output directory could not be joined on time without reformatting one of them
 // first. RFC3339 won because it carries the zone explicitly and because
 // manifest.json and summary.txt already record the run's own timestamps that way.
-const analyzerTimeLayout = time.RFC3339
+//
+// The Nano variant, not plain RFC3339, because a FILETIME carries 100ns and
+// truncating to the second throws that away. It matters for ordering: a USN
+// journal or an MFT records many events inside one second, and $J entries that
+// differ by milliseconds collapsed into identical timestamps. Comparison against
+// another SRUM parser on the same database showed the loss concretely —
+// ConnectStartTime .789 and StartTime .012 were being written as whole seconds.
+//
+// This is not a format change for output that has no sub-second component:
+// RFC3339Nano omits the fraction entirely when it is zero, so a whole-second
+// instant renders byte-for-byte as it did before, and both forms parse as
+// RFC3339.
+const analyzerTimeLayout = time.RFC3339Nano
 
 // windowsEpoch100ns is 1601-01-01 expressed in FILETIME ticks since the Unix epoch.
 const windowsEpoch100ns = 116444736000000000

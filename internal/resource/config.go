@@ -57,14 +57,17 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	host := DetectHostResources()
-	return SuggestConfig(host)
+	return SuggestConfig()
 }
 
-// SuggestConfig returns the host defaults. Worker counts are left at zero here
-// because they also depend on where the output lands; ResolveWorkers fills them
-// in once that is known.
-func SuggestConfig(host HostResources) Config {
+// SuggestConfig returns the starting configuration for a run.
+//
+// None of these three depend on the host: the CPU cap is a share of whatever
+// cores exist, the disk budget is opt-in, and compression is a policy choice.
+// Worker counts are the host-dependent part and are left at zero here, because
+// they also depend on where the output lands; ResolveWorkers fills them in once
+// that is known.
+func SuggestConfig() Config {
 	return Config{
 		CPULimitPercent: DefaultCPULimitPercent,
 		DiskIOLimitBps:  DefaultDiskIOLimitBps,
@@ -73,8 +76,7 @@ func SuggestConfig(host HostResources) Config {
 }
 
 func (c Config) Normalized() Config {
-	host := DetectHostResources()
-	defaults := SuggestConfig(host)
+	defaults := SuggestConfig()
 	if c.CPULimitPercent <= 0 {
 		c.CPULimitPercent = defaults.CPULimitPercent
 	}

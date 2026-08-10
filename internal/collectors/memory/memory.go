@@ -2,12 +2,14 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/Liuchijang/FIR/internal/logging"
 	"github.com/Liuchijang/FIR/internal/module"
@@ -41,12 +43,22 @@ func (c *memoryCollector) Collect(ctx context.Context, req module.CollectRequest
 	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("winpmem not found: %w\nPlace winpmem in the same directory as FIR or add it to PATH", err).Error()}
 	}
-	log.Debug(fmt.Sprintf("Using winpmem: %s", winpmemPath))
+	// Info, not Debug: the imaging tool is part of the acquisition's chain of
+	// custody, and findWinpmem picks it from three different places. Which
+	// binary produced the image has to be in collector.log without needing
+	// -verbose to have been passed.
+	log.Info(fmt.Sprintf("Acquiring memory with %s", winpmemPath))
 
 	outputPath := filepath.Join(outDir, "memory.raw")
 	cmd := exec.CommandContext(ctx, winpmemPath, outputPath)
+	// winpmem reports why it refused (no driver signature, PAGE_SIZE mismatch,
+	// destination unwritable) on its own streams; without them the run records
+	// only an exit status for a failed memory acquisition.
+	var toolOutput bytes.Buffer
+	cmd.Stdout = &toolOutput
+	cmd.Stderr = &toolOutput
 	if err := cmd.Run(); err != nil {
-		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("winpmem execution failed: %w", err).Error()}
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("winpmem execution failed: %w\nOutput: %s", err, strings.TrimSpace(toolOutput.String())).Error()}
 	}
 
 	stat, err := os.Stat(outputPath)
@@ -57,14 +69,26 @@ func (c *memoryCollector) Collect(ctx context.Context, req module.CollectRequest
 		return module.CollectResult{OutputPath: outDir, Error: "memory dump is empty (0 bytes)"}
 	}
 
+	// This is the one artifact FIR cannot hash while writing it — winpmem writes
+	// the image from a child process — so the digest costs a second full pass.
 	hash, err := utils.HashFile(outputPath)
+	hashErr := ""
 	if err != nil {
 		log.Warn(fmt.Sprintf("Failed to hash memory dump: %v", err))
-		hash = "HASH_FAILED"
+		// An unhashed image is still evidence, but the manifest must not imply
+		// it was verified. The SHA-256 stays empty and the failure is returned
+		// alongside the file so it shows up as a warning on the run instead of
+		// only in the log.
+		hash = ""
+		hashErr = fmt.Errorf("memory image collected but not hashed: %w", err).Error()
 	}
 
 	log.Debug(fmt.Sprintf("RAM acquired: %d bytes, SHA256: %s", stat.Size(), hash))
-	return module.CollectResult{Files: []module.FileInfo{{Path: "memory.raw", SHA256: hash, Size: stat.Size()}}, OutputPath: outDir}
+	return module.CollectResult{
+		Files:      []module.FileInfo{{Path: "memory.raw", SHA256: hash, Size: stat.Size()}},
+		OutputPath: outDir,
+		Error:      hashErr,
+	}
 }
 
 func findWinpmem() (string, error) {
