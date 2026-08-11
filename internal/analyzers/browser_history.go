@@ -9,11 +9,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	browsercollector "github.com/Liuchijang/FIR/internal/collectors/browser"
 	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/output"
 	"github.com/Liuchijang/FIR/internal/utils"
 	_ "modernc.org/sqlite"
 )
@@ -21,10 +19,6 @@ import (
 func init() { module.RegisterAnalyzer(&browserHistoryParser{}) }
 
 type browserHistoryParser struct{}
-
-type browserHistorySource struct {
-	Profile browsercollector.BrowserProfile
-}
 
 type browserHistoryRow struct {
 	Username     string
@@ -54,7 +48,7 @@ func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRe
 		return analyzerError(outDir, fmt.Errorf("create browser history parser output dir: %w", err))
 	}
 
-	sources, err := resolveBrowserHistorySources(req)
+	sources, err := resolveBrowserProfileSources(req)
 	if err != nil {
 		return analyzerError(outDir, err)
 	}
@@ -86,7 +80,7 @@ func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRe
 			return rows[i].VisitTimeUTC > rows[j].VisitTimeUTC
 		})
 
-		outCSV := filepath.Join(outDir, browserHistoryCSVName(source.Profile))
+		outCSV := filepath.Join(outDir, browserCSVName(source.Profile, "history.csv"))
 		csvRows := make([][]string, 0, len(rows))
 		for _, row := range rows {
 			csvRows = append(csvRows, []string{
@@ -125,6 +119,15 @@ func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRe
 			continue
 		}
 		files = append(files, fi)
+
+		// Downloads come out of the same database, so they are exported here
+		// rather than by a module that would copy it a second time.
+		downloads, err := exportProfileDownloads(ctx, outDir, source.Profile)
+		if err != nil {
+			parseErrors = append(parseErrors, fmt.Sprintf("%s: downloads %v", browserProfileLabel(source.Profile), err))
+		} else if downloads.Path != "" {
+			files = append(files, downloads)
+		}
 	}
 
 	if len(files) == 0 {
@@ -137,10 +140,10 @@ func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRe
 	return module.AnalyzeResult{Files: files, OutputPath: outDir}
 }
 
-func resolveBrowserHistorySources(req module.AnalyzeRequest) ([]browserHistorySource, error) {
+func resolveBrowserProfileSources(req module.AnalyzeRequest) ([]browserProfileSource, error) {
 	if req.IsSelected(browsercollector.BrowserCollectorName) {
 		if sourceDir, ok := existingModuleDir(req.OutputDir, browsercollector.BrowserCollectorName); ok {
-			sources, err := collectedBrowserHistorySources(sourceDir)
+			sources, err := collectedBrowserProfileSources(sourceDir)
 			if err == nil && len(sources) > 0 {
 				return sources, nil
 			}
@@ -153,20 +156,20 @@ func resolveBrowserHistorySources(req module.AnalyzeRequest) ([]browserHistorySo
 		return nil, err
 	}
 
-	sources := make([]browserHistorySource, 0, len(profiles))
+	sources := make([]browserProfileSource, 0, len(profiles))
 	for _, profile := range profiles {
-		sources = append(sources, browserHistorySource{Profile: profile})
+		sources = append(sources, browserProfileSource{Profile: profile})
 	}
 	return sources, nil
 }
 
-func collectedBrowserHistorySources(sourceDir string) ([]browserHistorySource, error) {
+func collectedBrowserProfileSources(sourceDir string) ([]browserProfileSource, error) {
 	userEntries, err := os.ReadDir(sourceDir)
 	if err != nil {
 		return nil, fmt.Errorf("read browser source dir: %w", err)
 	}
 
-	var sources []browserHistorySource
+	var sources []browserProfileSource
 	for _, userEntry := range userEntries {
 		if !userEntry.IsDir() {
 			continue
@@ -197,7 +200,7 @@ func collectedBrowserHistorySources(sourceDir string) ([]browserHistorySource, e
 				}
 
 				profileDir := filepath.Join(browserDir, profileEntry.Name())
-				sources = append(sources, browserHistorySource{
+				sources = append(sources, browserProfileSource{
 					Profile: browsercollector.BrowserProfile{
 						User:    username,
 						Browser: browserName,
@@ -368,10 +371,19 @@ ORDER BY moz_historyvisits.visit_date DESC
 	return rows, nil
 }
 
-func prepareSQLiteWorkingCopy(_ string, sourceDB string) (string, func(), error) {
-	tempDir, err := os.MkdirTemp("", "fir-sqlite-work-*")
+// prepareSQLiteWorkingCopy copies a history database somewhere it can be opened
+// read-write, because SQLite has to be able to replay the -wal file and the
+// original is on a live, locked profile.
+//
+// The copy lands under the run's own output directory, not the machine's %TEMP%.
+// The subject of a triage run is evidence: dropping a full copy of every
+// browser profile's history into its temp directory writes to the volume under
+// investigation, and anything left behind by a killed run stays there. Under
+// outDir it is on the evidence drive and goes away with the run directory.
+func prepareSQLiteWorkingCopy(outDir string, sourceDB string) (string, func(), error) {
+	tempDir, err := os.MkdirTemp(outDir, "sqlite-work-*")
 	if err != nil {
-		return "", nil, fmt.Errorf("create sqlite temp dir: %w", err)
+		return "", nil, fmt.Errorf("create sqlite work dir: %w", err)
 	}
 
 	cleanup := func() { _ = os.RemoveAll(tempDir) }
@@ -401,30 +413,14 @@ func sqliteSidecarPaths(sourceDB string) []string {
 }
 
 func chromiumTimeString(value int64) string {
-	if value <= 0 {
-		return ""
-	}
+	// Chromium counts microseconds from 1601-01-01, Firefox from the Unix epoch.
 	const chromiumEpochDelta = 11644473600000000
 	if value < chromiumEpochDelta {
 		return ""
 	}
-	unixMicros := value - chromiumEpochDelta
-	return time.UnixMicro(unixMicros).UTC().Format("2006-01-02 15:04:05")
+	return formatUnixMicro(value-chromiumEpochDelta, "")
 }
 
 func firefoxTimeString(value int64) string {
-	if value <= 0 {
-		return ""
-	}
-	return time.UnixMicro(value).UTC().Format("2006-01-02 15:04:05")
-}
-
-func browserHistoryCSVName(profile browsercollector.BrowserProfile) string {
-	parts := []string{
-		output.SanitizeDirNameForExport(profile.User),
-		output.SanitizeDirNameForExport(profile.Browser),
-		output.SanitizeDirNameForExport(profile.Name),
-		"history.csv",
-	}
-	return strings.Join(parts, "_")
+	return formatUnixMicro(value, "")
 }

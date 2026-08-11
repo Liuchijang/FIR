@@ -2,14 +2,18 @@
 package acquisition
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unsafe"
 
+	"github.com/Liuchijang/FIR/internal/ntfs"
 	"golang.org/x/sys/windows"
 )
 
@@ -222,18 +226,24 @@ func (v *RawVolume) ReadAtOffset(offset int64, size int64) ([]byte, error) {
 	}
 
 	buf := make([]byte, totalRead)
-	var totalBytesRead uint32
-	for totalBytesRead < uint32(totalRead) {
+	var totalBytesRead int64
+	for totalBytesRead < totalRead {
 		var n uint32
-		remaining := uint32(totalRead) - totalBytesRead
-		err := windows.ReadFile(v.handle, buf[totalBytesRead:totalBytesRead+remaining], &n, nil)
+		err := windows.ReadFile(v.handle, buf[totalBytesRead:totalRead], &n, nil)
 		if err != nil {
-			return nil, fmt.Errorf("ReadFile at offset %d: %w", alignedOffset+int64(totalBytesRead), err)
+			return nil, fmt.Errorf("ReadFile at offset %d: %w", alignedOffset+totalBytesRead, err)
 		}
 		if n == 0 {
 			break
 		}
-		totalBytesRead += n
+		totalBytesRead += int64(n)
+	}
+	// A short read used to fall through and hand back the tail of a zeroed
+	// buffer. Those zeros are indistinguishable from real volume content: they
+	// get written into the artifact and into the SHA-256 taken on the way out,
+	// so the run reports intact evidence for bytes it never read.
+	if totalBytesRead < totalRead {
+		return nil, fmt.Errorf("short read at offset %d: got %d of %d bytes", alignedOffset, totalBytesRead, totalRead)
 	}
 
 	return buf[leadingBytes : leadingBytes+size], nil
@@ -246,9 +256,9 @@ func (v *RawVolume) ReadAtOffset(offset int64, size int64) ([]byte, error) {
 // extent of a linear read is unrelated file data. The analyzer path already reads
 // through these runs, so a linear copy here also made collector and analyzer
 // disagree about the same volume.
-func (v *RawVolume) CopyMFTToFile(volData *NTFSVolumeData, outputPath string) (int64, error) {
+func (v *RawVolume) CopyMFTToFile(volData *NTFSVolumeData, outputPath string) (int64, string, error) {
 	if err := v.ensureMFTDataRuns(volData); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	size := int64(volData.MFTValidDataLength)
@@ -273,30 +283,21 @@ func (v *RawVolume) ReadMFTRecord(volData *NTFSVolumeData, recordNumber uint64) 
 	if err != nil {
 		return nil, fmt.Errorf("read MFT record %d: %w", recordNumber, err)
 	}
-	if err := applyNTFSFixup(record, int(volData.BytesPerSector)); err != nil {
+	if err := ntfs.ApplyFixup(record, int(volData.BytesPerSector)); err != nil {
 		return nil, fmt.Errorf("apply fixup record %d: %w", recordNumber, err)
 	}
 	return record, nil
 }
 
-func CopyNamedDataStreamFromMFTRecord(vol *RawVolume, volData *NTFSVolumeData, recordNumber uint64, streamName, outputPath string) (int64, error) {
+func CopyNamedDataStreamFromMFTRecord(vol *RawVolume, volData *NTFSVolumeData, recordNumber uint64, streamName, outputPath string) (int64, string, error) {
 	attrs, err := collectDataAttributesForRecord(vol, volData, recordNumber, streamName)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if len(attrs) == 0 {
-		return 0, fmt.Errorf("named data stream %s not found", streamName)
+		return 0, "", fmt.Errorf("named data stream %s not found", streamName)
 	}
-	sort.Slice(attrs, func(i, j int) bool { return attrs[i].StartVCN < attrs[j].StartVCN })
-
-	var runs []DataRun
-	var realSize int64
-	for _, attr := range attrs {
-		runs = append(runs, attr.Runs...)
-		if attr.RealSize > realSize {
-			realSize = attr.RealSize
-		}
-	}
+	runs, realSize := mergeDataAttributes(attrs)
 	return vol.CopyDataRunsToFile(volData, runs, realSize, outputPath)
 }
 
@@ -308,19 +309,13 @@ func ReadNamedDataStreamFromMFTRecord(vol *RawVolume, volData *NTFSVolumeData, r
 	if len(attrs) == 0 {
 		return nil, fmt.Errorf("named data stream %s not found", streamName)
 	}
-	sort.Slice(attrs, func(i, j int) bool { return attrs[i].StartVCN < attrs[j].StartVCN })
-
-	var runs []DataRun
-	var realSize int64
-	for _, attr := range attrs {
-		runs = append(runs, attr.Runs...)
-		if attr.RealSize > realSize {
-			realSize = attr.RealSize
-		}
-	}
+	runs, realSize := mergeDataAttributes(attrs)
 	return vol.ReadDataRuns(volData, runs, realSize)
 }
 
+// CopyFileFromRawPath drops the digest CopyDataRunsToFile computes: its callers
+// are locked-file fallbacks that record their own FileInfo, and none of them ask
+// for a hash.
 func CopyFileFromRawPath(vol *RawVolume, volData *NTFSVolumeData, path string, outputPath string) (int64, error) {
 	recordNumber, err := FindRecordByPath(vol, volData, path)
 	if err != nil {
@@ -333,6 +328,21 @@ func CopyFileFromRawPath(vol *RawVolume, volData *NTFSVolumeData, path string, o
 	if len(attrs) == 0 {
 		return 0, fmt.Errorf("default data stream not found for %s", path)
 	}
+	runs, realSize := mergeDataAttributes(attrs)
+	written, _, err := vol.CopyDataRunsToFile(volData, runs, realSize, outputPath)
+	return written, err
+}
+
+// mergeDataAttributes flattens every extent of one data stream into a single
+// run list.
+//
+// A stream large enough to outgrow its base record is described by several
+// $DATA attributes spread across extension records, each covering a range of
+// VCNs. Reading them in the order the attribute list happened to yield would
+// splice the file's fragments together out of order — the copy would be the
+// right length and the wrong bytes — so they are sorted by StartVCN first.
+// RealSize is only stored on the first extent, hence the max rather than a sum.
+func mergeDataAttributes(attrs []DataAttribute) ([]DataRun, int64) {
 	sort.Slice(attrs, func(i, j int) bool { return attrs[i].StartVCN < attrs[j].StartVCN })
 
 	var runs []DataRun
@@ -343,23 +353,30 @@ func CopyFileFromRawPath(vol *RawVolume, volData *NTFSVolumeData, path string, o
 			realSize = attr.RealSize
 		}
 	}
-	return vol.CopyDataRunsToFile(volData, runs, realSize, outputPath)
+	return runs, realSize
 }
 
-func (v *RawVolume) CopyDataRunsToFile(volData *NTFSVolumeData, runs []DataRun, realSize int64, outputPath string) (int64, error) {
-	if err := os.MkdirAll(filepathDir(outputPath), 0o755); err != nil {
-		return 0, fmt.Errorf("create output dir: %w", err)
+// CopyDataRunsToFile returns the SHA-256 of the bytes it wrote alongside the
+// byte count. Hashing here rather than re-opening outputPath afterwards halves
+// the I/O on artifacts that are routinely gigabytes ($MFT, $Secure:$SDS) — the
+// second pass used to read the whole file back off the evidence drive purely to
+// digest bytes this function already had in hand.
+func (v *RawVolume) CopyDataRunsToFile(volData *NTFSVolumeData, runs []DataRun, realSize int64, outputPath string) (int64, string, error) {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return 0, "", fmt.Errorf("create output dir: %w", err)
 	}
 
 	outFile, err := os.Create(outputPath)
 	if err != nil {
-		return 0, fmt.Errorf("create output file: %w", err)
+		return 0, "", fmt.Errorf("create output file: %w", err)
 	}
 	defer outFile.Close()
 
 	const chunkSize = 1024 * 1024
 	var totalWritten int64
 	bytesPerCluster := int64(volData.BytesPerCluster)
+	digest := sha256.New()
+	sink := io.MultiWriter(outFile, digest)
 
 	for _, run := range runs {
 		runBytes := run.Length * bytesPerCluster
@@ -374,9 +391,9 @@ func (v *RawVolume) CopyDataRunsToFile(volData *NTFSVolumeData, runs []DataRun, 
 			zero := make([]byte, min(chunkSize, runBytes))
 			for written := int64(0); written < runBytes; {
 				toWrite := min(int64(len(zero)), runBytes-written)
-				n, err := outFile.Write(zero[:toWrite])
+				n, err := sink.Write(zero[:toWrite])
 				if err != nil {
-					return totalWritten, fmt.Errorf("write sparse run: %w", err)
+					return totalWritten, "", fmt.Errorf("write sparse run: %w", err)
 				}
 				written += int64(n)
 				totalWritten += int64(n)
@@ -389,11 +406,11 @@ func (v *RawVolume) CopyDataRunsToFile(volData *NTFSVolumeData, runs []DataRun, 
 			toRead := min(chunkSize, runBytes-consumed)
 			buf, err := v.ReadAtOffset(runOffset+consumed, toRead)
 			if err != nil {
-				return totalWritten, fmt.Errorf("read run at offset %d: %w", runOffset+consumed, err)
+				return totalWritten, "", fmt.Errorf("read run at offset %d: %w", runOffset+consumed, err)
 			}
-			n, err := outFile.Write(buf)
+			n, err := sink.Write(buf)
 			if err != nil {
-				return totalWritten, fmt.Errorf("write output: %w", err)
+				return totalWritten, "", fmt.Errorf("write output: %w", err)
 			}
 			consumed += int64(n)
 			totalWritten += int64(n)
@@ -401,14 +418,14 @@ func (v *RawVolume) CopyDataRunsToFile(volData *NTFSVolumeData, runs []DataRun, 
 	}
 
 	if err := outFile.Sync(); err != nil {
-		return totalWritten, fmt.Errorf("sync output: %w", err)
+		return totalWritten, "", fmt.Errorf("sync output: %w", err)
 	}
 	// A run list that does not cover realSize means the copy is truncated. Reporting
 	// success here would hand the caller a short file to hash and record as evidence.
 	if totalWritten < realSize {
-		return totalWritten, fmt.Errorf("run list covers %d of %d bytes", totalWritten, realSize)
+		return totalWritten, "", fmt.Errorf("run list covers %d of %d bytes", totalWritten, realSize)
 	}
-	return totalWritten, nil
+	return totalWritten, hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func (v *RawVolume) ReadDataRuns(volData *NTFSVolumeData, runs []DataRun, realSize int64) ([]byte, error) {
@@ -526,7 +543,7 @@ func (v *RawVolume) ensureMFTDataRuns(volData *NTFSVolumeData) error {
 	if err != nil {
 		return fmt.Errorf("read base MFT record: %w", err)
 	}
-	if err := applyNTFSFixup(record0, int(volData.BytesPerSector)); err != nil {
+	if err := ntfs.ApplyFixup(record0, int(volData.BytesPerSector)); err != nil {
 		return fmt.Errorf("apply fixup base MFT record: %w", err)
 	}
 
@@ -534,56 +551,13 @@ func (v *RawVolume) ensureMFTDataRuns(volData *NTFSVolumeData) error {
 	if err != nil {
 		return fmt.Errorf("collect MFT data runs: %w", err)
 	}
-	sort.Slice(attrs, func(i, j int) bool { return attrs[i].StartVCN < attrs[j].StartVCN })
-
-	var runs []DataRun
-	var realSize int64
-	for _, attr := range attrs {
-		runs = append(runs, attr.Runs...)
-		if attr.RealSize > realSize {
-			realSize = attr.RealSize
-		}
-	}
+	runs, realSize := mergeDataAttributes(attrs)
 	if len(runs) == 0 {
 		return fmt.Errorf("no data runs found for $MFT")
 	}
 
 	volData.mftDataRuns = runs
 	volData.mftRealSize = realSize
-	return nil
-}
-
-func applyNTFSFixup(record []byte, sectorSize int) error {
-	if len(record) < 8 {
-		return fmt.Errorf("record too small")
-	}
-	if sectorSize <= 0 {
-		return fmt.Errorf("invalid sector size %d", sectorSize)
-	}
-	usaOffset := int(binary.LittleEndian.Uint16(record[4:6]))
-	usaCount := int(binary.LittleEndian.Uint16(record[6:8]))
-	if usaOffset <= 0 || usaCount < 2 {
-		return fmt.Errorf("invalid update sequence array")
-	}
-	usaEnd := usaOffset + usaCount*2
-	if usaEnd > len(record) {
-		return fmt.Errorf("update sequence array out of bounds")
-	}
-
-	updateSeq := record[usaOffset : usaOffset+2]
-	replacements := record[usaOffset+2 : usaEnd]
-	for i := 1; i < usaCount; i++ {
-		sectorEnd := i*sectorSize - 2
-		replOff := (i - 1) * 2
-		if sectorEnd+2 > len(record) || replOff+2 > len(replacements) {
-			return fmt.Errorf("fixup index out of bounds")
-		}
-		if record[sectorEnd] != updateSeq[0] || record[sectorEnd+1] != updateSeq[1] {
-			return fmt.Errorf("update sequence mismatch")
-		}
-		record[sectorEnd] = replacements[replOff]
-		record[sectorEnd+1] = replacements[replOff+1]
-	}
 	return nil
 }
 
@@ -695,7 +669,7 @@ func parseDataAttributes(record []byte) ([]DataAttribute, []attributeListRef, *n
 		}
 		attr := record[attrOff : attrOff+attrLen]
 		nonResident := attr[8] != 0
-		name := attributeName(attr)
+		name := ntfs.AttributeName(attr)
 
 		if attrType == 0x80 && nonResident {
 			if len(attr) < 56 {
@@ -772,7 +746,7 @@ func parseAttributeList(data []byte) ([]attributeListRef, error) {
 		recordNumber := baseRefRaw & 0x0000FFFFFFFFFFFF
 		name := ""
 		if nameLen > 0 && nameOff > 0 && off+nameOff+nameLen*2 <= len(data) {
-			name = windows.UTF16ToString(bytesToUint16(data[off+nameOff : off+nameOff+nameLen*2]))
+			name = ntfs.UTF16String(data[off+nameOff : off+nameOff+nameLen*2])
 		}
 		if attrType == 0x80 {
 			refs = append(refs, attributeListRef{
@@ -873,7 +847,7 @@ func (v *RawVolume) ensurePathIndex(volData *NTFSVolumeData) (*mftPathIndex, err
 
 		for i := 0; i < count; i++ {
 			record := batch[int64(i)*recordSize : int64(i+1)*recordSize]
-			if err := applyNTFSFixup(record, int(volData.BytesPerSector)); err != nil || !isRecordInUse(record) {
+			if err := ntfs.ApplyFixup(record, int(volData.BytesPerSector)); err != nil || !isRecordInUse(record) {
 				continue
 			}
 			indexMFTRecord(index, record, uint64(start+i))
@@ -903,7 +877,7 @@ func (v *RawVolume) ReadMFTRecordsBatch(volData *NTFSVolumeData, startRecord uin
 	records := make([][]byte, count)
 	for i := 0; i < count; i++ {
 		record := batch[int64(i)*recordSize : int64(i+1)*recordSize]
-		if err := applyNTFSFixup(record, int(volData.BytesPerSector)); err == nil {
+		if err := ntfs.ApplyFixup(record, int(volData.BytesPerSector)); err == nil {
 			records[i] = record
 		}
 	}
@@ -956,7 +930,7 @@ func parseFileNameRefs(record []byte, recordNumber uint64) ([]FileNameRef, error
 				attrOff += attrLen
 				continue
 			}
-			name := windows.UTF16ToString(bytesToUint16(content[66 : 66+nameLen*2]))
+			name := ntfs.UTF16String(content[66 : 66+nameLen*2])
 			refs = append(refs, FileNameRef{
 				RecordNumber: recordNumber,
 				ParentRef:    parentRef,
@@ -975,18 +949,6 @@ func isRecordInUse(record []byte) bool {
 	}
 	flags := binary.LittleEndian.Uint16(record[22:24])
 	return flags&0x0001 != 0
-}
-
-func attributeName(attr []byte) string {
-	if len(attr) < 12 {
-		return ""
-	}
-	nameLen := int(attr[9])
-	nameOff := int(binary.LittleEndian.Uint16(attr[10:12]))
-	if nameLen <= 0 || nameOff <= 0 || nameOff+nameLen*2 > len(attr) {
-		return ""
-	}
-	return windows.UTF16ToString(bytesToUint16(attr[nameOff : nameOff+nameLen*2]))
 }
 
 func parseDataRuns(data []byte) ([]DataRun, error) {
@@ -1052,23 +1014,4 @@ func readSignedLittleEndian(data []byte) int64 {
 		value -= 1 << (uint(len(data)) * 8)
 	}
 	return value
-}
-
-func bytesToUint16(data []byte) []uint16 {
-	out := make([]uint16, len(data)/2)
-	for i := 0; i+1 < len(data); i += 2 {
-		out[i/2] = binary.LittleEndian.Uint16(data[i : i+2])
-	}
-	return out
-}
-
-func filepathDir(path string) string {
-	idx := len(path) - 1
-	for idx >= 0 && path[idx] != '\\' && path[idx] != '/' {
-		idx--
-	}
-	if idx <= 0 {
-		return "."
-	}
-	return path[:idx]
 }

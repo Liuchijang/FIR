@@ -3,15 +3,18 @@ package analyzers
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unsafe"
 
 	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/ntfs"
 	"golang.org/x/sys/windows"
 )
 
@@ -55,97 +58,197 @@ func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 		return analyzerError(outDir, fmt.Errorf("create USN parser output dir: %w", err))
 	}
 
-	sources, sourceErrs := readUSNJournalSources(ctx, req.OutputDir)
-
 	recordMap, pathCache, enriched, err := loadMFTForUSN(ctx, req)
 	if err != nil {
 		return analyzerError(outDir, err)
 	}
 
-	var header []string
-	var rows [][]string
-	var parseErrs []string
-	for _, src := range sources {
-		if err := ctx.Err(); err != nil {
-			return analyzerError(outDir, err)
-		}
-
-		h, driveRows, _, _, err := parseUSNJournalRows(src.data, src.drive, recordMap, pathCache, enriched)
-		if err != nil {
-			parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", src.drive, err))
-			continue
-		}
-		header = h
-		for _, row := range driveRows {
-			rows = append(rows, append([]string{src.drive}, row...))
-		}
-	}
-	if len(rows) == 0 {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no USN records parsed: %s", strings.Join(append(sourceErrs, parseErrs...), "; "))}
-	}
-	header = append([]string{"Drive"}, header...)
-
 	recordsName := "usnjrnl_records.csv"
 	if enriched {
 		recordsName = "usnjrnl_mft_enriched.csv"
 	}
-	recordsInfo, err := writeCSV(filepath.Join(outDir, recordsName), header, rows)
+	// Rows stream out as they are parsed. A $UsnJrnl:$J is a volume-sized
+	// artifact whose CSV runs several times the size of the binary it came from
+	// (see analyzerOutputRatios), and holding every row as [][]string before the
+	// first byte reached disk put that whole expansion in memory on top of the
+	// journal itself and the MFT index the enrichment needs.
+	stream, err := newCSVStream(filepath.Join(outDir, recordsName), usnCSVHeader(enriched))
+	if err != nil {
+		return analyzerError(outDir, err)
+	}
+
+	writer := usnStreamWriter{
+		stream:    stream,
+		recordMap: recordMap,
+		pathCache: pathCache,
+		enriched:  enriched,
+	}
+
+	var errs []string
+	loaded, rows := 0, 0
+	for _, src := range collectedUSNJournalSources(req.OutputDir) {
+		if err := ctx.Err(); err != nil {
+			stream.Abort()
+			return analyzerError(outDir, err)
+		}
+		if err := writer.run(src, &loaded, &rows); err != nil {
+			if streamFailed(err) {
+				stream.Abort()
+				return analyzerError(outDir, err)
+			}
+			errs = append(errs, fmt.Sprintf("%s: %v", src.drive, err))
+		}
+	}
+	// The live journals are read only when no collected one could be opened,
+	// which is the same rule the eagerly-loading version applied.
+	if loaded == 0 {
+		for _, src := range liveUSNJournalSources(ctx) {
+			if err := ctx.Err(); err != nil {
+				stream.Abort()
+				return analyzerError(outDir, err)
+			}
+			if err := writer.run(src, &loaded, &rows); err != nil {
+				if streamFailed(err) {
+					stream.Abort()
+					return analyzerError(outDir, err)
+				}
+				errs = append(errs, fmt.Sprintf("%s: %v", src.drive, err))
+			}
+		}
+	}
+
+	if rows == 0 {
+		stream.Abort()
+		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no USN records parsed: %s", strings.Join(errs, "; "))}
+	}
+
+	recordsInfo, err := stream.Close()
 	if err != nil {
 		return analyzerError(outDir, err)
 	}
 	return module.AnalyzeResult{Files: []module.FileInfo{recordsInfo}, OutputPath: outDir}
 }
 
+// usnJournalSource names a journal and how to read it. Loading is deferred so a
+// multi-drive run holds one journal in memory at a time instead of all of them.
 type usnJournalSource struct {
 	drive string
-	data  []byte
+	load  func() ([]byte, error)
 }
 
-// readUSNJournalSources loads $UsnJrnl:$J for every drive it can, preferring
-// already-collected $UsnJrnl_J_<drive> files, falling back to the legacy
-// single-drive filename, and finally to a live read across every fixed drive.
-func readUSNJournalSources(ctx context.Context, outputDir string) ([]usnJournalSource, []string) {
+// collectedUSNJournalSources lists this run's collected journals, preferring the
+// per-drive filenames and falling back to the legacy single-drive one.
+func collectedUSNJournalSources(outputDir string) []usnJournalSource {
+	dir, ok := existingModuleDir(outputDir, "usnjrnl")
+	if !ok {
+		return nil
+	}
+
 	var sources []usnJournalSource
-	var errs []string
-
-	if dir, ok := existingModuleDir(outputDir, "usnjrnl"); ok {
-		for _, drive := range collectedUSNJournalDrives(dir) {
-			path := filepath.Join(dir, "$UsnJrnl_J_"+drive)
-			data, err := os.ReadFile(path)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", drive, err))
-				continue
-			}
-			sources = append(sources, usnJournalSource{drive: drive, data: data})
-		}
-		if len(sources) == 0 {
-			if legacyPath := filepath.Join(dir, "$UsnJrnl_J"); fileExists(legacyPath) {
-				data, err := os.ReadFile(legacyPath)
-				if err != nil {
-					errs = append(errs, fmt.Sprintf("C: %v", err))
-				} else {
-					sources = append(sources, usnJournalSource{drive: "C", data: data})
-				}
-			}
-		}
+	for _, drive := range collectedUSNJournalDrives(dir) {
+		path := filepath.Join(dir, "$UsnJrnl_J_"+drive)
+		sources = append(sources, usnJournalSource{
+			drive: drive,
+			load:  func() ([]byte, error) { return os.ReadFile(path) },
+		})
 	}
-
 	if len(sources) == 0 {
-		drives, err := acquisition.ListFixedDrives()
-		if err != nil || len(drives) == 0 {
-			drives = []string{"C"}
-		}
-		for _, drive := range drives {
-			data, err := readLiveUSNJournal(ctx, drive)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", drive, err))
-				continue
-			}
-			sources = append(sources, usnJournalSource{drive: drive, data: data})
+		if legacyPath := filepath.Join(dir, "$UsnJrnl_J"); fileExists(legacyPath) {
+			sources = append(sources, usnJournalSource{
+				drive: "C",
+				load:  func() ([]byte, error) { return os.ReadFile(legacyPath) },
+			})
 		}
 	}
+	return sources
+}
 
-	return sources, errs
+func liveUSNJournalSources(ctx context.Context) []usnJournalSource {
+	drives, err := acquisition.ListFixedDrives()
+	if err != nil || len(drives) == 0 {
+		drives = []string{"C"}
+	}
+
+	sources := make([]usnJournalSource, 0, len(drives))
+	for _, drive := range drives {
+		sources = append(sources, usnJournalSource{
+			drive: drive,
+			load:  func() ([]byte, error) { return readLiveUSNJournal(ctx, drive) },
+		})
+	}
+	return sources
+}
+
+// usnStreamWriter turns one journal into CSV rows on the open stream.
+type usnStreamWriter struct {
+	stream    *csvStream
+	recordMap mftRowIndex
+	pathCache map[mftKey]string
+	enriched  bool
+}
+
+// run loads one source and appends its rows. loaded counts journals that could
+// be read at all — the live fallback keys off it — and rows counts what reached
+// the CSV. A journal that loads but does not parse leaves both untouched beyond
+// its load, exactly as the discarded per-drive row slice used to.
+func (w usnStreamWriter) run(src usnJournalSource, loaded, rows *int) error {
+	data, err := src.load()
+	if err != nil {
+		return err
+	}
+	*loaded++
+
+	written, err := w.write(data, src.drive)
+	*rows += written
+	return err
+}
+
+func (w usnStreamWriter) write(data []byte, drive string) (int, error) {
+	// The whole buffer is validated before a single row is emitted. A malformed
+	// record length means the offsets past it are guesses, and a drive that
+	// fails this check has always contributed nothing rather than a prefix —
+	// streaming must not turn that into a half-written volume.
+	if err := walkUSNRecords(data, nil); err != nil {
+		return 0, err
+	}
+
+	written := 0
+	var writeErr error
+	_ = walkUSNRecords(data, func(record []byte, offset int, major uint16) {
+		if writeErr != nil {
+			return
+		}
+		var row []string
+		var ok bool
+		switch major {
+		case 2:
+			row, ok = parseUSNRecordV2(record, uint64(offset), drive, w.recordMap, w.pathCache, w.enriched)
+		case 3:
+			row, ok = parseUSNRecordV3(record, uint64(offset), w.enriched)
+		}
+		if !ok {
+			return
+		}
+		if err := w.stream.Write(append([]string{drive}, row...)); err != nil {
+			writeErr = errStreamWrite{err}
+			return
+		}
+		written++
+	})
+	return written, writeErr
+}
+
+// errStreamWrite marks a failure of the CSV itself rather than of one journal.
+// The first kind is fatal — the output file is already compromised — while the
+// second only costs that drive its rows.
+type errStreamWrite struct{ err error }
+
+func (e errStreamWrite) Error() string { return e.err.Error() }
+func (e errStreamWrite) Unwrap() error { return e.err }
+
+func streamFailed(err error) bool {
+	var target errStreamWrite
+	return errors.As(err, &target)
 }
 
 func collectedUSNJournalDrives(dir string) []string {
@@ -221,42 +324,9 @@ func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (mftRowIndex,
 		return nil, nil, false, nil
 	}
 
-	var rows []mftRecordRow
-	var parseErrs []string
-	if dir, ok := existingModuleDir(outputDir, "mft"); ok {
-		for _, drive := range collectedMFTDrives(dir) {
-			mftPath := filepath.Join(dir, "$MFT_"+drive)
-			driveRows, err := parseCollectedMFT(ctx, mftPath)
-			if err != nil {
-				parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", drive, err))
-				continue
-			}
-			for i := range driveRows {
-				driveRows[i].Drive = drive
-			}
-			rows = append(rows, driveRows...)
-		}
-		if len(rows) == 0 {
-			// Fall back to the legacy single-drive filename for older collection runs.
-			if legacyPath := filepath.Join(dir, "$MFT"); fileExists(legacyPath) {
-				legacyRows, err := parseCollectedMFT(ctx, legacyPath)
-				if err != nil {
-					parseErrs = append(parseErrs, fmt.Sprintf("C: %v", err))
-				} else {
-					for i := range legacyRows {
-						legacyRows[i].Drive = "C"
-					}
-					rows = append(rows, legacyRows...)
-				}
-			}
-		}
-	}
-	if len(rows) == 0 {
-		var err error
-		rows, err = parseLiveMFT(ctx)
-		if err != nil {
-			return nil, nil, false, fmt.Errorf("parse live $MFT for USN enrichment: %w", err)
-		}
+	rows, parseErrs, err := loadMFTRows(ctx, outputDir)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("parse live $MFT for USN enrichment: %w", err)
 	}
 	if len(rows) == 0 {
 		return nil, nil, false, fmt.Errorf("no MFT records available for USN enrichment: %s", strings.Join(parseErrs, "; "))
@@ -271,8 +341,13 @@ func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (mftRowIndex,
 	return recordMap, make(map[mftKey]string, len(recordMap)), true, nil
 }
 
-func parseUSNJournalRows(data []byte, drive string, recordMap mftRowIndex, pathCache map[mftKey]string, enriched bool) ([]string, [][]string, int, int, error) {
+// usnCSVHeader is the column list for a journal CSV. Enrichment appends the
+// joined-in MFT columns; parseUSNRecordV3 pads the same width with empty values
+// because a V3 record carries 128-bit file references that do not index the MFT
+// row map.
+func usnCSVHeader(enriched bool) []string {
 	header := []string{
+		"Drive",
 		"RecordOffset",
 		"RecordLength",
 		"MajorVersion",
@@ -312,52 +387,32 @@ func parseUSNJournalRows(data []byte, drive string, recordMap mftRowIndex, pathC
 			"MFT_FN_AccessedUTC",
 		)
 	}
+	return header
+}
 
-	rows := make([][]string, 0, 1024)
-	offset := 0
-	parsedCount := 0
-	unsupportedCount := 0
-
-	for offset+8 <= len(data) {
-		chunkEnd := offset + 16
-		if chunkEnd > len(data) {
-			chunkEnd = len(data)
-		}
-		if allZero(data[offset:chunkEnd]) {
-			break
+// walkUSNRecords iterates a $UsnJrnl:$J buffer, calling visit for each record.
+// A nil visit validates the record chain without producing anything, which is
+// how the writer checks a whole journal before committing any of it to the CSV.
+//
+// The zero check is the journal's own end marker: $J is a sparse file whose
+// unwritten head reads back as zeros, so the first all-zero record header is
+// the end of the data rather than a corrupt record.
+func walkUSNRecords(data []byte, visit func(record []byte, offset int, major uint16)) error {
+	for offset := 0; offset+8 <= len(data); {
+		if allZero(data[offset:min(offset+16, len(data))]) {
+			return nil
 		}
 
 		recordLen := int(binary.LittleEndian.Uint32(data[offset : offset+4]))
 		if recordLen <= 8 || offset+recordLen > len(data) {
-			return nil, nil, 0, 0, fmt.Errorf("invalid USN record length %d at offset %d", recordLen, offset)
+			return fmt.Errorf("invalid USN record length %d at offset %d", recordLen, offset)
 		}
-
-		major := binary.LittleEndian.Uint16(data[offset+4 : offset+6])
-		minor := binary.LittleEndian.Uint16(data[offset+6 : offset+8])
-		record := data[offset : offset+recordLen]
-
-		switch major {
-		case 2:
-			row, ok := parseUSNRecordV2(record, uint64(offset), drive, recordMap, pathCache, enriched)
-			if ok {
-				rows = append(rows, row)
-				parsedCount++
-			}
-		case 3:
-			row, ok := parseUSNRecordV3(record, uint64(offset), enriched)
-			if ok {
-				rows = append(rows, row)
-				parsedCount++
-			}
-		default:
-			_ = minor
-			unsupportedCount++
+		if visit != nil {
+			visit(data[offset:offset+recordLen], offset, binary.LittleEndian.Uint16(data[offset+4:offset+6]))
 		}
-
 		offset += recordLen
 	}
-
-	return header, rows, parsedCount, unsupportedCount, nil
+	return nil
 }
 
 func parseUSNRecordV2(record []byte, recordOffset uint64, drive string, recordMap mftRowIndex, pathCache map[mftKey]string, enriched bool) ([]string, bool) {
@@ -380,27 +435,29 @@ func parseUSNRecordV2(record []byte, recordOffset uint64, drive string, recordMa
 	sourceInfo := binary.LittleEndian.Uint32(record[44:48])
 	securityID := binary.LittleEndian.Uint32(record[48:52])
 	fileAttrs := binary.LittleEndian.Uint32(record[52:56])
-	fileName := utf16LEString(record[nameOff : nameOff+nameLen])
+	fileName := ntfs.UTF16String(record[nameOff : nameOff+nameLen])
 
+	// strconv rather than fmt for the plain integers: this runs once per journal
+	// record, and a busy volume's $J holds millions of them.
 	row := []string{
-		fmt.Sprintf("%d", recordOffset),
-		fmt.Sprintf("%d", len(record)),
+		strconv.FormatUint(recordOffset, 10),
+		strconv.Itoa(len(record)),
 		"2",
-		fmt.Sprintf("%d", binary.LittleEndian.Uint16(record[6:8])),
-		ntfsFiletimeString(binary.LittleEndian.Uint64(record[32:40])),
-		fmt.Sprintf("%d", usn),
-		fmt.Sprintf("%d", fileRef),
-		fmt.Sprintf("%d", fileSeq),
-		fmt.Sprintf("%d", parentRef),
-		fmt.Sprintf("%d", parentSeq),
+		strconv.FormatUint(uint64(binary.LittleEndian.Uint16(record[6:8])), 10),
+		formatFiletime(binary.LittleEndian.Uint64(record[32:40]), ""),
+		strconv.FormatInt(usn, 10),
+		strconv.FormatUint(fileRef, 10),
+		strconv.FormatUint(uint64(fileSeq), 10),
+		strconv.FormatUint(parentRef, 10),
+		strconv.FormatUint(uint64(parentSeq), 10),
 		fileName,
 		usnReasonString(reason),
-		fmt.Sprintf("0x%08X", reason),
+		hexMask(reason),
 		usnSourceInfoString(sourceInfo),
-		fmt.Sprintf("0x%08X", sourceInfo),
-		fmt.Sprintf("%d", securityID),
+		hexMask(sourceInfo),
+		strconv.FormatUint(uint64(securityID), 10),
 		fileAttributesString(fileAttrs),
-		fmt.Sprintf("0x%08X", fileAttrs),
+		hexMask(fileAttrs),
 	}
 
 	if !enriched {
@@ -428,10 +485,10 @@ func parseUSNRecordV2(record []byte, recordOffset uint64, drive string, recordMa
 		fullPath,
 		mftRow.Name,
 		mftRow.Extension,
-		fmt.Sprintf("%t", mftRow.InUse),
-		fmt.Sprintf("%t", mftRow.IsDirectory),
-		fmt.Sprintf("%d", mftRow.Allocated),
-		fmt.Sprintf("%d", mftRow.RealSize),
+		strconv.FormatBool(mftRow.InUse),
+		strconv.FormatBool(mftRow.IsDirectory),
+		strconv.FormatInt(mftRow.Allocated, 10),
+		strconv.FormatInt(mftRow.RealSize, 10),
 		mftRow.SICreated,
 		mftRow.SIModified,
 		mftRow.SIMFTModified,
@@ -460,27 +517,27 @@ func parseUSNRecordV3(record []byte, recordOffset uint64, enriched bool) ([]stri
 	sourceInfo := binary.LittleEndian.Uint32(record[60:64])
 	securityID := binary.LittleEndian.Uint32(record[64:68])
 	fileAttrs := binary.LittleEndian.Uint32(record[68:72])
-	fileName := utf16LEString(record[nameOff : nameOff+nameLen])
+	fileName := ntfs.UTF16String(record[nameOff : nameOff+nameLen])
 
 	row := []string{
-		fmt.Sprintf("%d", recordOffset),
-		fmt.Sprintf("%d", len(record)),
+		strconv.FormatUint(recordOffset, 10),
+		strconv.Itoa(len(record)),
 		"3",
-		fmt.Sprintf("%d", binary.LittleEndian.Uint16(record[6:8])),
-		ntfsFiletimeString(binary.LittleEndian.Uint64(record[48:56])),
-		fmt.Sprintf("%d", usn),
+		strconv.FormatUint(uint64(binary.LittleEndian.Uint16(record[6:8])), 10),
+		formatFiletime(binary.LittleEndian.Uint64(record[48:56]), ""),
+		strconv.FormatInt(usn, 10),
 		bytesToHex(record[8:24]),
 		"",
 		bytesToHex(record[24:40]),
 		"",
 		fileName,
 		usnReasonString(reason),
-		fmt.Sprintf("0x%08X", reason),
+		hexMask(reason),
 		usnSourceInfoString(sourceInfo),
-		fmt.Sprintf("0x%08X", sourceInfo),
-		fmt.Sprintf("%d", securityID),
+		hexMask(sourceInfo),
+		strconv.FormatUint(uint64(securityID), 10),
 		fileAttributesString(fileAttrs),
-		fmt.Sprintf("0x%08X", fileAttrs),
+		hexMask(fileAttrs),
 	}
 
 	if enriched {
@@ -547,18 +604,33 @@ var fileAttributesFlags = []maskFlag[uint32]{
 
 func fileAttributesString(mask uint32) string { return maskString(mask, fileAttributesFlags) }
 
+const hexDigits = "0123456789ABCDEF"
+
+// hexMask renders a 32-bit flag word as the CSV's 0xXXXXXXXX form. It is one of
+// the per-record hot paths, so it builds the eleven bytes directly rather than
+// going through fmt's format parser for every USN record on the volume.
+func hexMask(value uint32) string {
+	out := []byte("0x00000000")
+	for i := 0; i < 8; i++ {
+		out[len(out)-1-i] = hexDigits[(value>>(4*i))&0xF]
+	}
+	return string(out)
+}
+
+// bytesToHex renders the 128-bit file references a V3 record carries, as
+// space-separated uppercase pairs.
 func bytesToHex(data []byte) string {
 	if len(data) == 0 {
 		return ""
 	}
-	var b strings.Builder
+	out := make([]byte, 0, len(data)*3-1)
 	for i, value := range data {
 		if i > 0 {
-			b.WriteByte(' ')
+			out = append(out, ' ')
 		}
-		b.WriteString(fmt.Sprintf("%02X", value))
+		out = append(out, hexDigits[value>>4], hexDigits[value&0xF])
 	}
-	return b.String()
+	return string(out)
 }
 
 func allZero(data []byte) bool {

@@ -14,8 +14,6 @@ func EnsureInteractive() {}
 
 func PauseBeforeExit() {}
 
-func LikelyExplorerLaunch() bool { return false }
-
 func SupportsUnicodeGlyphs() bool { return true }
 
 func SyncBufferToWindow() {}

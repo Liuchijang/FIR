@@ -420,44 +420,111 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m menuModel) updateCollectors(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.cancelled = true
-		return m, tea.Quit
+// listBinding is the mutable state one pick screen hands to the shared keys.
+type listBinding struct {
+	cursor   *int
+	count    int
+	selected map[int]bool
+	// plural fills "3 modules selected."; subject fills "Module selection
+	// cleared.". Neither is derivable from the other — "EVTX files" against
+	// "EVTX", "browser profiles" against "Browser profile".
+	plural  string
+	subject string
+	chosen  func() int
+}
+
+// updateListKeys runs the navigation and selection keys that the collector,
+// browser-profile and EVTX screens have in common, and reports whether the key
+// was one of them.
+//
+// esc and enter stay with each screen on purpose: where "back" goes and what
+// "continue" needs discovered next is the only thing that genuinely differs
+// between the three, and folding those into a table would hide the wizard's
+// actual shape behind an indirection.
+func (m *menuModel) updateListKeys(key string, list listBinding) bool {
+	switch key {
 	case "up", "k":
-		m.collectorCursor = moveCursorUp(m.collectorCursor, 1)
+		*list.cursor = moveCursorUp(*list.cursor, 1)
 	case "down", "j":
-		m.collectorCursor = moveCursorDown(m.collectorCursor, len(m.modules), 1)
+		*list.cursor = moveCursorDown(*list.cursor, list.count, 1)
 	case "pgup", "b":
-		m.collectorCursor = moveCursorUp(m.collectorCursor, pageStep(m.height))
+		*list.cursor = moveCursorUp(*list.cursor, pageStep(m.height))
 	case "pgdown", "f":
-		m.collectorCursor = moveCursorDown(m.collectorCursor, len(m.modules), pageStep(m.height))
+		*list.cursor = moveCursorDown(*list.cursor, list.count, pageStep(m.height))
 	case "home", "g":
-		m.collectorCursor = 0
+		*list.cursor = 0
 	case "end", "G":
-		m.collectorCursor = max(0, len(m.modules)-1)
+		*list.cursor = max(0, list.count-1)
 	case " ":
-		if len(m.modules) > 0 {
-			m.selectedCollectors[m.collectorCursor] = !m.selectedCollectors[m.collectorCursor]
-			m.status = fmt.Sprintf("%d modules selected.", len(m.moduleResults()))
+		if list.count > 0 {
+			list.selected[*list.cursor] = !list.selected[*list.cursor]
+			m.status = fmt.Sprintf("%d %s selected.", list.chosen(), list.plural)
 		}
 	case "a":
-		allSelected := len(m.modules) > 0
-		for idx := range m.modules {
-			if !m.selectedCollectors[idx] {
+		allSelected := list.count > 0
+		for idx := 0; idx < list.count; idx++ {
+			if !list.selected[idx] {
 				allSelected = false
 				break
 			}
 		}
-		for idx := range m.modules {
-			m.selectedCollectors[idx] = !allSelected
+		for idx := 0; idx < list.count; idx++ {
+			list.selected[idx] = !allSelected
 		}
 		if allSelected {
-			m.status = "Module selection cleared."
+			m.status = list.subject + " selection cleared."
 		} else {
-			m.status = fmt.Sprintf("Selected all %d modules.", len(m.modules))
+			m.status = fmt.Sprintf("Selected all %d %s.", list.count, list.plural)
 		}
+	default:
+		return false
+	}
+	return true
+}
+
+func (m *menuModel) collectorList() listBinding {
+	return listBinding{
+		cursor:   &m.collectorCursor,
+		count:    len(m.modules),
+		selected: m.selectedCollectors,
+		plural:   "modules",
+		subject:  "Module",
+		chosen:   func() int { return len(m.moduleResults()) },
+	}
+}
+
+func (m *menuModel) profileList() listBinding {
+	return listBinding{
+		cursor:   &m.profileCursor,
+		count:    len(m.profiles),
+		selected: m.selectedProfiles,
+		plural:   "browser profiles",
+		subject:  "Browser profile",
+		chosen:   func() int { return len(m.profileResults()) },
+	}
+}
+
+func (m *menuModel) eventLogList() listBinding {
+	return listBinding{
+		cursor:   &m.eventLogCursor,
+		count:    len(m.eventLogs),
+		selected: m.selectedEventLogs,
+		plural:   "EVTX files",
+		subject:  "EVTX",
+		chosen:   func() int { return len(m.eventLogResults()) },
+	}
+}
+
+func (m menuModel) updateCollectors(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if m.updateListKeys(key, m.collectorList()) {
+		return m, nil
+	}
+
+	switch key {
+	case "esc":
+		m.cancelled = true
+		return m, tea.Quit
 	case "enter":
 		if len(m.moduleResults()) == 0 {
 			m.status = "Select at least one module."
@@ -480,40 +547,12 @@ func (m menuModel) updateCollectors(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m menuModel) updateProfiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "up", "k":
-		m.profileCursor = moveCursorUp(m.profileCursor, 1)
-	case "down", "j":
-		m.profileCursor = moveCursorDown(m.profileCursor, len(m.profiles), 1)
-	case "pgup", "b":
-		m.profileCursor = moveCursorUp(m.profileCursor, pageStep(m.height))
-	case "pgdown", "f":
-		m.profileCursor = moveCursorDown(m.profileCursor, len(m.profiles), pageStep(m.height))
-	case "home", "g":
-		m.profileCursor = 0
-	case "end", "G":
-		m.profileCursor = max(0, len(m.profiles)-1)
-	case " ":
-		if len(m.profiles) > 0 {
-			m.selectedProfiles[m.profileCursor] = !m.selectedProfiles[m.profileCursor]
-			m.status = fmt.Sprintf("%d browser profiles selected.", len(m.profileResults()))
-		}
-	case "a":
-		allSelected := len(m.profiles) > 0
-		for idx := range m.profiles {
-			if !m.selectedProfiles[idx] {
-				allSelected = false
-				break
-			}
-		}
-		for idx := range m.profiles {
-			m.selectedProfiles[idx] = !allSelected
-		}
-		if allSelected {
-			m.status = "Browser profile selection cleared."
-		} else {
-			m.status = fmt.Sprintf("Selected all %d browser profiles.", len(m.profiles))
-		}
+	key := msg.String()
+	if m.updateListKeys(key, m.profileList()) {
+		return m, nil
+	}
+
+	switch key {
 	case "esc":
 		m.phase = phaseCollectors
 		m.status = fmt.Sprintf("%d modules selected.", len(m.moduleResults()))
@@ -534,40 +573,12 @@ func (m menuModel) updateProfiles(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m menuModel) updateEventLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "up", "k":
-		m.eventLogCursor = moveCursorUp(m.eventLogCursor, 1)
-	case "down", "j":
-		m.eventLogCursor = moveCursorDown(m.eventLogCursor, len(m.eventLogs), 1)
-	case "pgup", "b":
-		m.eventLogCursor = moveCursorUp(m.eventLogCursor, pageStep(m.height))
-	case "pgdown", "f":
-		m.eventLogCursor = moveCursorDown(m.eventLogCursor, len(m.eventLogs), pageStep(m.height))
-	case "home", "g":
-		m.eventLogCursor = 0
-	case "end", "G":
-		m.eventLogCursor = max(0, len(m.eventLogs)-1)
-	case " ":
-		if len(m.eventLogs) > 0 {
-			m.selectedEventLogs[m.eventLogCursor] = !m.selectedEventLogs[m.eventLogCursor]
-			m.status = fmt.Sprintf("%d EVTX files selected.", len(m.eventLogResults()))
-		}
-	case "a":
-		allSelected := len(m.eventLogs) > 0
-		for idx := range m.eventLogs {
-			if !m.selectedEventLogs[idx] {
-				allSelected = false
-				break
-			}
-		}
-		for idx := range m.eventLogs {
-			m.selectedEventLogs[idx] = !allSelected
-		}
-		if allSelected {
-			m.status = "EVTX selection cleared."
-		} else {
-			m.status = fmt.Sprintf("Selected all %d EVTX files.", len(m.eventLogs))
-		}
+	key := msg.String()
+	if m.updateListKeys(key, m.eventLogList()) {
+		return m, nil
+	}
+
+	switch key {
 	case "esc":
 		if m.needsBrowserProfiles() {
 			m.phase = phaseProfiles

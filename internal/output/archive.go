@@ -2,6 +2,8 @@ package output
 
 import (
 	"archive/zip"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -10,8 +12,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/Liuchijang/FIR/internal/utils"
 )
 
 type ArchiveInfo struct {
@@ -39,11 +39,21 @@ func MemoryImages(runDir string) []string {
 // PreserveOutsideArchive moves files that were excluded from the archive to sit
 // beside it, so removing the raw run directory does not take them with it. The
 // rename stays on one volume, so even a 32GB image moves instantly.
+//
+// An occupied destination is refused rather than replaced. On Windows os.Rename
+// is MoveFileEx with MOVEFILE_REPLACE_EXISTING, so the move would silently
+// destroy whatever memory image is already sitting there; the caller treats a
+// failure here by keeping the run directory, which leaves this run's image where
+// it is instead of overwriting somebody else's.
 func PreserveOutsideArchive(runDir string, paths []string) ([]string, error) {
 	var kept []string
 	var errs []error
 	for _, path := range paths {
 		destination := runDir + "_" + filepath.Base(path)
+		if _, err := os.Lstat(destination); err == nil {
+			errs = append(errs, fmt.Errorf("preserve %s: %s already exists", filepath.Base(path), filepath.Base(destination)))
+			continue
+		}
 		if err := os.Rename(path, destination); err != nil {
 			errs = append(errs, fmt.Errorf("preserve %s: %w", filepath.Base(path), err))
 			continue
@@ -56,16 +66,13 @@ func PreserveOutsideArchive(runDir string, paths []string) ([]string, error) {
 // CompressRunDirectory archives outputDir, skipping every path in exclude.
 func CompressRunDirectory(outputDir string, exclude []string) (ArchiveInfo, error) {
 	archivePath := outputDir + ".zip"
-	if err := zipDirectory(outputDir, archivePath, exclude); err != nil {
+	hash, err := zipDirectory(outputDir, archivePath, exclude)
+	if err != nil {
 		return ArchiveInfo{}, err
 	}
 	info, err := os.Stat(archivePath)
 	if err != nil {
 		return ArchiveInfo{}, fmt.Errorf("stat archive: %w", err)
-	}
-	hash, err := utils.HashFile(archivePath)
-	if err != nil {
-		return ArchiveInfo{}, err
 	}
 	return ArchiveInfo{
 		Path:   archivePath,
@@ -112,7 +119,12 @@ func RemoveRawOutputDir(outputDir string, archivePath string) error {
 // zipDirectory archives sourceDir into archivePath. Every failure is reported: the
 // caller deletes the raw output once this returns nil, so a dropped error here would
 // silently trade complete evidence for a truncated archive.
-func zipDirectory(sourceDir string, archivePath string, exclude []string) (err error) {
+// zipDirectory returns the SHA-256 of the archive it wrote. The digest is taken
+// from the bytes on their way to disk, so the finished archive is never read back
+// just to hash it — on a run whose zip is gigabytes that second pass cost as much
+// as the compression itself. It is only set once the deferred Close has flushed
+// the central directory, since those bytes are part of the archive too.
+func zipDirectory(sourceDir string, archivePath string, exclude []string) (sha string, err error) {
 	skip := make(map[string]bool, len(exclude))
 	for _, path := range exclude {
 		if abs, absErr := filepath.Abs(path); absErr == nil {
@@ -121,14 +133,15 @@ func zipDirectory(sourceDir string, archivePath string, exclude []string) (err e
 	}
 
 	if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
-		return fmt.Errorf("create archive dir: %w", err)
+		return "", fmt.Errorf("create archive dir: %w", err)
 	}
 	out, err := os.Create(archivePath)
 	if err != nil {
-		return fmt.Errorf("create archive: %w", err)
+		return "", fmt.Errorf("create archive: %w", err)
 	}
 
-	zipWriter := zip.NewWriter(out)
+	digest := sha256.New()
+	zipWriter := zip.NewWriter(io.MultiWriter(out, digest))
 	defer func() {
 		// The central directory is written by Close, so its error is the one that
 		// decides whether the archive is readable at all.
@@ -140,6 +153,9 @@ func zipDirectory(sourceDir string, archivePath string, exclude []string) (err e
 		}
 		if closeErr := out.Close(); closeErr != nil && err == nil {
 			err = fmt.Errorf("close archive: %w", closeErr)
+		}
+		if err == nil {
+			sha = hex.EncodeToString(digest.Sum(nil))
 		}
 	}()
 
@@ -193,7 +209,7 @@ func zipDirectory(sourceDir string, archivePath string, exclude []string) (err e
 		return nil
 	})
 	if walkErr != nil {
-		return walkErr
+		return "", walkErr
 	}
-	return errors.Join(skipped...)
+	return "", errors.Join(skipped...)
 }

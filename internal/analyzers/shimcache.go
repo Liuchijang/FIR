@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/ntfs"
 	winreg "golang.org/x/sys/windows/registry"
 )
 
@@ -307,9 +307,9 @@ func parseWin10ShimEntries(data []byte, statsSize int, format string, source shi
 			break
 		}
 
-		path := utf16LEString(entry[2 : 2+pathLen])
+		path := ntfs.UTF16String(entry[2 : 2+pathLen])
 		cursor := 2 + pathLen
-		lastModified := filetimeUint64String(binary.LittleEndian.Uint64(entry[cursor : cursor+8]))
+		lastModified := formatFiletime(binary.LittleEndian.Uint64(entry[cursor:cursor+8]), shimNotAvailable)
 		cursor += 8
 
 		if cursor+4 > len(entry) {
@@ -366,7 +366,7 @@ func parseWin8ShimEntries(data []byte, statsSize int, format string, source shim
 			break
 		}
 
-		path := utf16LEString(entry[2 : 2+pathLen])
+		path := ntfs.UTF16String(entry[2 : 2+pathLen])
 		cursor := 2 + pathLen
 		packageLen := int(binary.LittleEndian.Uint16(entry[cursor : cursor+2]))
 		cursor += 2
@@ -377,9 +377,10 @@ func parseWin8ShimEntries(data []byte, statsSize int, format string, source shim
 		cursor += packageLen
 		flags := binary.LittleEndian.Uint32(entry[cursor : cursor+4])
 		cursor += 8 // flags + unknown
-		lastModified := filetimePartsString(
+		lastModified := formatFiletimeParts(
 			binary.LittleEndian.Uint32(entry[cursor:cursor+4]),
 			binary.LittleEndian.Uint32(entry[cursor+4:cursor+8]),
+			shimNotAvailable,
 		)
 
 		rows = append(rows, shimCacheRow{
@@ -450,7 +451,7 @@ func parseLegacyNt61Entries(data []byte, is32Bit bool, source shimCacheSource) (
 		score++
 
 		rows = append(rows, shimCacheRow{
-			LastModifiedUTC: filetimePartsString(low, high),
+			LastModifiedUTC: formatFiletimeParts(low, high, shimNotAvailable),
 			LastUpdateUTC:   shimNotAvailable,
 			Path:            strings.ReplaceAll(path, `\??\`, ""),
 			FileSize:        shimNotAvailable,
@@ -531,7 +532,7 @@ func parseLegacyNt52Entries(data []byte, is32Bit bool, source shimCacheSource) (
 		}
 
 		candidates = append(candidates, candidate{
-			lastMod: filetimePartsString(low, high),
+			lastMod: formatFiletimeParts(low, high, shimNotAvailable),
 			path:    strings.ReplaceAll(path, `\??\`, ""),
 			sizeLo:  sizeLo,
 			sizeHi:  sizeHi,
@@ -566,23 +567,7 @@ func readUTF16Path(data []byte, off, length int) (string, bool) {
 	if length <= 0 || off < 0 || off+length > len(data) {
 		return "", false
 	}
-	return utf16LEString(data[off : off+length]), true
-}
-
-func filetimePartsString(low, high uint32) string {
-	return filetimeUint64String((uint64(high) << 32) | uint64(low))
-}
-
-func filetimeUint64String(value uint64) string {
-	if value == 0 {
-		return shimNotAvailable
-	}
-	const windowsEpoch = 116444736000000000
-	if value < windowsEpoch {
-		return shimNotAvailable
-	}
-	unix100ns := int64(value - windowsEpoch)
-	return time.Unix(0, unix100ns*100).UTC().Format("2006-01-02 15:04:05")
+	return ntfs.UTF16String(data[off : off+length]), true
 }
 
 func boolString(value bool) string {

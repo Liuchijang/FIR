@@ -189,7 +189,7 @@ func parseUserAssistValue(data []byte) (runCount, focusCount, focusTimeMS, lastE
 		runCount = uint32DecimalString(binary.LittleEndian.Uint32(data[4:8]))
 		focusCount = uint32DecimalString(binary.LittleEndian.Uint32(data[8:12]))
 		focusTimeMS = uint32DecimalString(binary.LittleEndian.Uint32(data[12:16]))
-		lastExecutedUTC = ntfsFiletimeString(binary.LittleEndian.Uint64(data[60:68]))
+		lastExecutedUTC = formatFiletime(binary.LittleEndian.Uint64(data[60:68]), "")
 		format = "Vista+"
 	case len(data) >= 16:
 		count := binary.LittleEndian.Uint32(data[4:8])
@@ -197,7 +197,7 @@ func parseUserAssistValue(data []byte) (runCount, focusCount, focusTimeMS, lastE
 			count -= 5
 		}
 		runCount = uint32DecimalString(count)
-		lastExecutedUTC = ntfsFiletimeString(binary.LittleEndian.Uint64(data[8:16]))
+		lastExecutedUTC = formatFiletime(binary.LittleEndian.Uint64(data[8:16]), "")
 		format = "XP"
 	default:
 		format = fmt.Sprintf("Unknown(%d)", len(data))

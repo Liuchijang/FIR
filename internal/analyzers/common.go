@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Liuchijang/FIR/internal/module"
 )
@@ -97,6 +98,9 @@ func (s *csvStream) Close() (module.FileInfo, error) {
 		return module.FileInfo{}, fmt.Errorf("stat csv: %w", err)
 	}
 	if err := s.file.Close(); err != nil {
+		// Close is where a buffered write finally fails, so what is on disk here
+		// is a partial CSV — the same thing Abort exists to remove.
+		s.Abort()
 		return module.FileInfo{}, fmt.Errorf("close csv: %w", err)
 	}
 	return module.FileInfo{
@@ -151,6 +155,66 @@ func maskString[T ~uint16 | ~uint32](mask T, flags []maskFlag[T]) string {
 		}
 	}
 	return strings.Join(names, "|")
+}
+
+// analyzerTimeLayout is the one timestamp layout every analyzer CSV emits.
+//
+// It used to be per-analyzer: mft_parser and prefetch_parser wrote RFC3339 while
+// shimcache, browser history and the registry parsers wrote "2006-01-02
+// 15:04:05". Both halves are UTC, but only one said so, and the two halves of an
+// output directory could not be joined on time without reformatting one of them
+// first. RFC3339 won because it carries the zone explicitly and because
+// manifest.json and summary.txt already record the run's own timestamps that way.
+//
+// The Nano variant, not plain RFC3339, because a FILETIME carries 100ns and
+// truncating to the second throws that away. It matters for ordering: a USN
+// journal or an MFT records many events inside one second, and $J entries that
+// differ by milliseconds collapsed into identical timestamps. Comparison against
+// another SRUM parser on the same database showed the loss concretely —
+// ConnectStartTime .789 and StartTime .012 were being written as whole seconds.
+//
+// This is not a format change for output that has no sub-second component:
+// RFC3339Nano omits the fraction entirely when it is zero, so a whole-second
+// instant renders byte-for-byte as it did before, and both forms parse as
+// RFC3339.
+const analyzerTimeLayout = time.RFC3339Nano
+
+// windowsEpoch100ns is 1601-01-01 expressed in FILETIME ticks since the Unix epoch.
+const windowsEpoch100ns = 116444736000000000
+
+// formatTime renders an analyzer timestamp. empty is the marker the calling
+// analyzer uses for a missing value — most write "", shimcache writes "N/A"
+// across every one of its columns and stays internally consistent by passing it.
+func formatTime(value time.Time, empty string) string {
+	if value.IsZero() {
+		return empty
+	}
+	return value.UTC().Format(analyzerTimeLayout)
+}
+
+// formatFiletime renders a Windows FILETIME. Anything below the epoch is an
+// unset field rather than a real timestamp in 1601, so it takes empty. The
+// epoch itself is a representable instant and formats normally.
+func formatFiletime(value uint64, empty string) string {
+	if value < windowsEpoch100ns {
+		return empty
+	}
+	return formatTime(time.Unix(0, int64(value-windowsEpoch100ns)*100), empty)
+}
+
+// formatFiletimeParts renders a FILETIME still split across its two halves, as
+// the raw registry and ShimCache structures store it.
+func formatFiletimeParts(low, high uint32, empty string) string {
+	return formatFiletime((uint64(high)<<32)|uint64(low), empty)
+}
+
+// formatUnixMicro renders a microsecond timestamp, the unit both SQLite-backed
+// browser history schemas use.
+func formatUnixMicro(value int64, empty string) string {
+	if value <= 0 {
+		return empty
+	}
+	return formatTime(time.UnixMicro(value), empty)
 }
 
 func analyzerError(outDir string, err error) module.AnalyzeResult {

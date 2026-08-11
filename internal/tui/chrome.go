@@ -137,10 +137,6 @@ func RenderBannerInfoRow(label, value string, width int, labelStyle, valueStyle 
 		valueStyle.Render("-- "+trimToWidth(valueText, max(1, valueWidth-3)))
 }
 
-func PadViewport(value string, width, height int) string {
-	return padToViewport(value, width, height)
-}
-
 func RootViewportSize(totalWidth, totalHeight, marginX, marginY int) (int, int) {
 	return max(20, totalWidth-marginX*2-1), max(10, totalHeight-marginY*2-1)
 }
@@ -267,19 +263,4 @@ func chromeBodyHeight(height int, header, footer string) int {
 func chromeFrame(width, height int, header, body, footer string) string {
 	ui := padToViewport(lipgloss.JoinVertical(lipgloss.Left, header, body, footer), width, height)
 	return lipgloss.NewStyle().Padding(chromeMarginY, chromeMarginX).Render(ui)
-}
-
-// chromeApplySize folds a WindowSizeMsg into width/height, reporting whether the
-// terminal actually changed size.
-func chromeApplySize(msg tea.WindowSizeMsg, width, height *int) bool {
-	changed := false
-	if msg.Width > 0 {
-		changed = changed || msg.Width != *width
-		*width = msg.Width
-	}
-	if msg.Height > 0 {
-		changed = changed || msg.Height != *height
-		*height = msg.Height
-	}
-	return changed
 }

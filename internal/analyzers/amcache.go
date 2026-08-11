@@ -53,96 +53,96 @@ var amcacheUnassociatedHeaders = []string{
 	"Description",
 }
 
-var amcacheDeviceContainerHeaders = []string{
-	"KeyName",
-	"KeyLastWriteTimestamp",
-	"Categories",
-	"DiscoveryMethod",
-	"FriendlyName",
-	"Icon",
-	"IsActive",
-	"IsConnected",
-	"IsMachineContainer",
-	"IsNetworked",
-	"IsPaired",
-	"Manufacturer",
-	"ModelId",
-	"ModelName",
-	"ModelNumber",
-	"PrimaryCategory",
-	"State",
+var amcacheDeviceContainerColumns = []amcacheColumn{
+	amcacheKeyName("KeyName"),
+	amcacheLastWrite("KeyLastWriteTimestamp"),
+	amcacheJoined("Categories"),
+	amcacheString("DiscoveryMethod"),
+	amcacheString("FriendlyName"),
+	amcacheString("Icon"),
+	amcacheBool("IsActive"),
+	amcacheBool("IsConnected"),
+	amcacheBool("IsMachineContainer"),
+	amcacheBool("IsNetworked"),
+	amcacheBool("IsPaired"),
+	amcacheString("Manufacturer"),
+	amcacheString("ModelId"),
+	amcacheString("ModelName"),
+	amcacheString("ModelNumber"),
+	amcacheString("PrimaryCategory"),
+	amcacheDecimal("State"),
 }
 
-var amcacheDevicePnpHeaders = []string{
-	"KeyName",
-	"KeyLastWriteTimestamp",
-	"BusReportedDescription",
-	"Class",
-	"ClassGuid",
-	"Compid",
-	"ContainerId",
-	"Description",
-	"DriverId",
-	"DriverPackageStrongName",
-	"DriverName",
-	"DriverVerDate",
-	"DriverVerVersion",
-	"Enumerator",
-	"HWID",
-	"Inf",
-	"InstallState",
-	"Manufacturer",
-	"MatchingId",
-	"Model",
-	"ParentId",
-	"ProblemCode",
-	"Provider",
-	"Service",
-	"Stackid",
+var amcacheDevicePnpColumns = []amcacheColumn{
+	amcacheKeyName("KeyName"),
+	amcacheLastWrite("KeyLastWriteTimestamp"),
+	amcacheString("BusReportedDescription"),
+	amcacheString("Class"),
+	amcacheString("ClassGuid"),
+	amcacheString("Compid"),
+	amcacheString("ContainerId"),
+	amcacheString("Description"),
+	amcacheSHA1("DriverId"),
+	amcacheString("DriverPackageStrongName"),
+	amcacheString("DriverName"),
+	amcacheDate("DriverVerDate"),
+	amcacheString("DriverVerVersion"),
+	amcacheString("Enumerator"),
+	amcacheJoined("HWID"),
+	amcacheString("Inf"),
+	amcacheDecimal("InstallState"),
+	amcacheString("Manufacturer"),
+	amcacheString("MatchingId"),
+	amcacheString("Model"),
+	amcacheString("ParentId"),
+	amcacheDecimal("ProblemCode"),
+	amcacheString("Provider"),
+	amcacheString("Service"),
+	amcacheJoined("Stackid"),
 }
 
-var amcacheDriveBinaryHeaders = []string{
-	"KeyName",
-	"KeyLastWriteTimestamp",
-	"DriverTimeStamp",
-	"DriverLastWriteTime",
-	"DriverName",
-	"DriverInBox",
-	"DriverIsKernelMode",
-	"DriverSigned",
-	"DriverCheckSum",
-	"DriverCompany",
-	"DriverId",
-	"DriverPackageStrongName",
-	"DriverType",
-	"DriverVersion",
-	"ImageSize",
-	"Inf",
-	"Product",
-	"ProductVersion",
-	"Service",
-	"WdfVersion",
+var amcacheDriveBinaryColumns = []amcacheColumn{
+	amcacheKeyName("KeyName"),
+	amcacheLastWrite("KeyLastWriteTimestamp"),
+	amcacheDate("DriverTimeStamp"),
+	amcacheDate("DriverLastWriteTime"),
+	amcacheString("DriverName"),
+	amcacheBool("DriverInBox"),
+	amcacheBool("DriverIsKernelMode"),
+	amcacheBool("DriverSigned"),
+	amcacheDecimal("DriverCheckSum"),
+	amcacheString("DriverCompany", "DriverCompany", "Company"),
+	amcacheSHA1("DriverId"),
+	amcacheString("DriverPackageStrongName"),
+	amcacheDecimal("DriverType"),
+	amcacheString("DriverVersion"),
+	amcacheDecimal("ImageSize"),
+	amcacheString("Inf"),
+	amcacheString("Product"),
+	amcacheString("ProductVersion"),
+	amcacheString("Service"),
+	amcacheString("WdfVersion"),
 }
 
-var amcacheDriverPackageHeaders = []string{
-	"KeyName",
-	"KeyLastWriteTimestamp",
-	"Date",
-	"Class",
-	"Directory",
-	"DriverInBox",
-	"Hwids",
-	"Inf",
-	"Provider",
-	"SubmissionId",
-	"SYSFILE",
-	"Version",
+var amcacheDriverPackageColumns = []amcacheColumn{
+	amcacheKeyName("KeyName"),
+	amcacheLastWrite("KeyLastWriteTimestamp"),
+	amcacheDate("Date"),
+	amcacheString("Class"),
+	amcacheString("Directory"),
+	amcacheBool("DriverInBox"),
+	amcacheJoined("Hwids", "Hwids", "HWID"),
+	amcacheString("Inf"),
+	amcacheString("Provider"),
+	amcacheString("SubmissionId"),
+	amcacheString("SYSFILE", "SYSFILE", "SysFile"),
+	amcacheString("Version"),
 }
 
-var amcacheShortcutHeaders = []string{
-	"KeyName",
-	"LnkName",
-	"KeyLastWriteTimestamp",
+var amcacheShortcutColumns = []amcacheColumn{
+	amcacheKeyName("KeyName"),
+	amcacheString("LnkName", "LnkName", "ShortcutPath", "Path", "TargetPath"),
+	amcacheLastWrite("KeyLastWriteTimestamp"),
 }
 
 func (c *amcacheParser) Name() string     { return "amcache_parser" }
@@ -175,7 +175,7 @@ func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 		errs = append(errs, "parse live registry: "+err.Error())
 	}
 
-	autoCollectedHive, cleanupAutoCollect, err := collectAmcacheSourceForParser(ctx, req)
+	autoCollectedHive, cleanupAutoCollect, err := collectAmcacheSourceForParser(ctx, req, outDir)
 	if err == nil {
 		if cleanupAutoCollect != nil {
 			defer cleanupAutoCollect()
@@ -195,7 +195,7 @@ func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 		errs = append(errs, "auto-collect failed: "+err.Error())
 	}
 
-	hivePath, cleanup, err := stageLiveAmcacheHive()
+	hivePath, cleanup, err := stageLiveAmcacheHive(outDir)
 	if err == nil {
 		defer cleanup()
 		if results, parseErr := parseAmcacheResultsFromHiveFile(hivePath); parseErr == nil && len(results.Datasets) > 0 {
@@ -283,14 +283,13 @@ func parseAmcacheResultsFromRoot(root winreg.Key) (amcacheResults, error) {
 var amcacheInventories = []struct {
 	paths    []string
 	filename string
-	header   []string
-	rows     func(winreg.Key) ([][]string, error)
+	columns  []amcacheColumn
 }{
-	{[]string{`Root\InventoryDeviceContainer`}, "amcache_device_containers.csv", amcacheDeviceContainerHeaders, parseInventoryDeviceContainerRows},
-	{[]string{`Root\InventoryDevicePnp`}, "amcache_device_pnps.csv", amcacheDevicePnpHeaders, parseInventoryDevicePnpRows},
-	{[]string{`Root\InventoryDriverBinary`}, "amcache_drive_binaries.csv", amcacheDriveBinaryHeaders, parseInventoryDriverBinaryRows},
-	{[]string{`Root\InventoryDriverPackage`}, "amcache_driver_packages.csv", amcacheDriverPackageHeaders, parseInventoryDriverPackageRows},
-	{[]string{`Root\InventoryApplicationShortcut`, `Root\InventoryShortcut`}, "amcache_shortcuts.csv", amcacheShortcutHeaders, parseInventoryShortcutRows},
+	{[]string{`Root\InventoryDeviceContainer`}, "amcache_device_containers.csv", amcacheDeviceContainerColumns},
+	{[]string{`Root\InventoryDevicePnp`}, "amcache_device_pnps.csv", amcacheDevicePnpColumns},
+	{[]string{`Root\InventoryDriverBinary`}, "amcache_drive_binaries.csv", amcacheDriveBinaryColumns},
+	{[]string{`Root\InventoryDriverPackage`}, "amcache_driver_packages.csv", amcacheDriverPackageColumns},
+	{[]string{`Root\InventoryApplicationShortcut`, `Root\InventoryShortcut`}, "amcache_shortcuts.csv", amcacheShortcutColumns},
 }
 
 func parseNewAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
@@ -358,13 +357,14 @@ func parseNewAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 		if !present[i] {
 			continue
 		}
-		rows, err := inv.rows(inventoryKeys[i])
+		label := strings.TrimPrefix(inv.paths[0], `Root\`)
+		rows, err := amcacheSubkeyRows(inventoryKeys[i], label, inv.columns)
 		if err != nil {
 			return amcacheResults{}, true, err
 		}
 		results.Datasets = append(results.Datasets, amcacheDataset{
 			Filename: inv.filename,
-			Header:   inv.header,
+			Header:   amcacheHeaders(inv.columns),
 			Rows:     rows,
 		})
 	}
@@ -430,160 +430,97 @@ func parseInventoryApplicationFileRows(filesKey winreg.Key, programIDs map[strin
 	return rows, nil
 }
 
-func parseInventoryDeviceContainerRows(root winreg.Key) ([][]string, error) {
-	names, err := root.ReadSubKeyNames(-1)
-	if err != nil {
-		return nil, fmt.Errorf("enumerate InventoryDeviceContainer: %w", err)
-	}
+// amcacheField pulls one CSV column out of an inventory subkey.
+type amcacheField func(key winreg.Key, keyName string) string
 
-	rows := make([][]string, 0, len(names))
-	for _, name := range names {
-		key, err := winreg.OpenKey(root, name, winreg.READ)
-		if err != nil {
-			continue
-		}
-		rows = append(rows, []string{
-			name,
-			registryKeyLastWriteString(key),
-			readRegistryFirstJoinedString(key, "Categories"),
-			readRegistryFirstString(key, "DiscoveryMethod"),
-			readRegistryFirstString(key, "FriendlyName"),
-			readRegistryFirstString(key, "Icon"),
-			readRegistryFirstBoolStringDefault(key, "False", "IsActive"),
-			readRegistryFirstBoolStringDefault(key, "False", "IsConnected"),
-			readRegistryFirstBoolStringDefault(key, "False", "IsMachineContainer"),
-			readRegistryFirstBoolStringDefault(key, "False", "IsNetworked"),
-			readRegistryFirstBoolStringDefault(key, "False", "IsPaired"),
-			readRegistryFirstString(key, "Manufacturer"),
-			readRegistryFirstString(key, "ModelId"),
-			readRegistryFirstString(key, "ModelName"),
-			readRegistryFirstString(key, "ModelNumber"),
-			readRegistryFirstString(key, "PrimaryCategory"),
-			readRegistryFirstDecimalString(key, "State"),
-		})
-		key.Close()
-	}
-	return rows, nil
+// amcacheColumn keeps a column's header next to the value that fills it. The two
+// used to be a package-level header slice and a positional row literal three
+// hundred lines apart, so adding a column to one and not the other silently
+// shifted every value after it one column left.
+type amcacheColumn struct {
+	header  string
+	extract amcacheField
 }
 
-func parseInventoryDevicePnpRows(root winreg.Key) ([][]string, error) {
-	names, err := root.ReadSubKeyNames(-1)
-	if err != nil {
-		return nil, fmt.Errorf("enumerate InventoryDevicePnp: %w", err)
+// amcacheValueNames defaults a column's registry value names to its header, which
+// is what all but four of them use.
+func amcacheValueNames(header string, names []string) []string {
+	if len(names) == 0 {
+		return []string{header}
 	}
-
-	rows := make([][]string, 0, len(names))
-	for _, name := range names {
-		key, err := winreg.OpenKey(root, name, winreg.READ)
-		if err != nil {
-			continue
-		}
-		rows = append(rows, []string{
-			name,
-			registryKeyLastWriteString(key),
-			readRegistryFirstString(key, "BusReportedDescription"),
-			readRegistryFirstString(key, "Class"),
-			readRegistryFirstString(key, "ClassGuid"),
-			readRegistryFirstString(key, "Compid"),
-			readRegistryFirstString(key, "ContainerId"),
-			readRegistryFirstString(key, "Description"),
-			normalizeAmcacheSHA1(readRegistryFirstString(key, "DriverId")),
-			readRegistryFirstString(key, "DriverPackageStrongName"),
-			readRegistryFirstString(key, "DriverName"),
-			normalizeRegistryDateString(readRegistryFirstString(key, "DriverVerDate")),
-			readRegistryFirstString(key, "DriverVerVersion"),
-			readRegistryFirstString(key, "Enumerator"),
-			readRegistryFirstJoinedString(key, "HWID"),
-			readRegistryFirstString(key, "Inf"),
-			readRegistryFirstDecimalString(key, "InstallState"),
-			readRegistryFirstString(key, "Manufacturer"),
-			readRegistryFirstString(key, "MatchingId"),
-			readRegistryFirstString(key, "Model"),
-			readRegistryFirstString(key, "ParentId"),
-			readRegistryFirstDecimalString(key, "ProblemCode"),
-			readRegistryFirstString(key, "Provider"),
-			readRegistryFirstString(key, "Service"),
-			readRegistryFirstJoinedString(key, "Stackid"),
-		})
-		key.Close()
-	}
-	return rows, nil
+	return names
 }
 
-func parseInventoryDriverBinaryRows(root winreg.Key) ([][]string, error) {
-	names, err := root.ReadSubKeyNames(-1)
-	if err != nil {
-		return nil, fmt.Errorf("enumerate InventoryDriverBinary: %w", err)
-	}
-
-	rows := make([][]string, 0, len(names))
-	for _, name := range names {
-		key, err := winreg.OpenKey(root, name, winreg.READ)
-		if err != nil {
-			continue
-		}
-		rows = append(rows, []string{
-			name,
-			registryKeyLastWriteString(key),
-			normalizeRegistryDateString(readRegistryFirstString(key, "DriverTimeStamp")),
-			normalizeRegistryDateString(readRegistryFirstString(key, "DriverLastWriteTime")),
-			readRegistryFirstString(key, "DriverName"),
-			readRegistryFirstBoolStringDefault(key, "False", "DriverInBox"),
-			readRegistryFirstBoolStringDefault(key, "False", "DriverIsKernelMode"),
-			readRegistryFirstBoolStringDefault(key, "False", "DriverSigned"),
-			readRegistryFirstDecimalString(key, "DriverCheckSum"),
-			readRegistryFirstString(key, "DriverCompany", "Company"),
-			normalizeAmcacheSHA1(readRegistryFirstString(key, "DriverId")),
-			readRegistryFirstString(key, "DriverPackageStrongName"),
-			readRegistryFirstDecimalString(key, "DriverType"),
-			readRegistryFirstString(key, "DriverVersion"),
-			readRegistryFirstDecimalString(key, "ImageSize"),
-			readRegistryFirstString(key, "Inf"),
-			readRegistryFirstString(key, "Product"),
-			readRegistryFirstString(key, "ProductVersion"),
-			readRegistryFirstString(key, "Service"),
-			readRegistryFirstString(key, "WdfVersion"),
-		})
-		key.Close()
-	}
-	return rows, nil
+func amcacheKeyName(header string) amcacheColumn {
+	return amcacheColumn{header, func(_ winreg.Key, keyName string) string { return keyName }}
 }
 
-func parseInventoryDriverPackageRows(root winreg.Key) ([][]string, error) {
-	names, err := root.ReadSubKeyNames(-1)
-	if err != nil {
-		return nil, fmt.Errorf("enumerate InventoryDriverPackage: %w", err)
-	}
-
-	rows := make([][]string, 0, len(names))
-	for _, name := range names {
-		key, err := winreg.OpenKey(root, name, winreg.READ)
-		if err != nil {
-			continue
-		}
-		rows = append(rows, []string{
-			name,
-			registryKeyLastWriteString(key),
-			normalizeRegistryDateString(readRegistryFirstString(key, "Date")),
-			readRegistryFirstString(key, "Class"),
-			readRegistryFirstString(key, "Directory"),
-			readRegistryFirstBoolStringDefault(key, "False", "DriverInBox"),
-			readRegistryFirstJoinedString(key, "Hwids", "HWID"),
-			readRegistryFirstString(key, "Inf"),
-			readRegistryFirstString(key, "Provider"),
-			readRegistryFirstString(key, "SubmissionId"),
-			readRegistryFirstString(key, "SYSFILE", "SysFile"),
-			readRegistryFirstString(key, "Version"),
-		})
-		key.Close()
-	}
-	return rows, nil
+func amcacheLastWrite(header string) amcacheColumn {
+	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+		return registryKeyLastWriteString(key)
+	}}
 }
 
-func parseInventoryShortcutRows(root winreg.Key) ([][]string, error) {
+func amcacheString(header string, names ...string) amcacheColumn {
+	names = amcacheValueNames(header, names)
+	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+		return readRegistryFirstString(key, names...)
+	}}
+}
+
+func amcacheJoined(header string, names ...string) amcacheColumn {
+	names = amcacheValueNames(header, names)
+	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+		return readRegistryFirstJoinedString(key, names...)
+	}}
+}
+
+func amcacheDecimal(header string, names ...string) amcacheColumn {
+	names = amcacheValueNames(header, names)
+	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+		return readRegistryFirstDecimalString(key, names...)
+	}}
+}
+
+// amcacheBool defaults to "False" rather than "" so a missing flag reads as the
+// flag being off, which is what Amcache means by omitting it.
+func amcacheBool(header string, names ...string) amcacheColumn {
+	names = amcacheValueNames(header, names)
+	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+		return readRegistryFirstBoolStringDefault(key, "False", names...)
+	}}
+}
+
+func amcacheDate(header string, names ...string) amcacheColumn {
+	names = amcacheValueNames(header, names)
+	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+		return normalizeRegistryDateString(readRegistryFirstString(key, names...))
+	}}
+}
+
+func amcacheSHA1(header string, names ...string) amcacheColumn {
+	names = amcacheValueNames(header, names)
+	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+		return normalizeAmcacheSHA1(readRegistryFirstString(key, names...))
+	}}
+}
+
+func amcacheHeaders(columns []amcacheColumn) []string {
+	headers := make([]string, len(columns))
+	for i, column := range columns {
+		headers[i] = column.header
+	}
+	return headers
+}
+
+// amcacheSubkeyRows emits one row per subkey of root. Every Root\Inventory*
+// export has this shape; only the columns differ. A subkey that will not open is
+// skipped rather than failing the inventory, because one unreadable device entry
+// should not cost the other few thousand.
+func amcacheSubkeyRows(root winreg.Key, label string, columns []amcacheColumn) ([][]string, error) {
 	names, err := root.ReadSubKeyNames(-1)
 	if err != nil {
-		return nil, fmt.Errorf("enumerate InventoryApplicationShortcut: %w", err)
+		return nil, fmt.Errorf("enumerate %s: %w", label, err)
 	}
 
 	rows := make([][]string, 0, len(names))
@@ -592,11 +529,11 @@ func parseInventoryShortcutRows(root winreg.Key) ([][]string, error) {
 		if err != nil {
 			continue
 		}
-		rows = append(rows, []string{
-			name,
-			readRegistryFirstString(key, "LnkName", "ShortcutPath", "Path", "TargetPath"),
-			registryKeyLastWriteString(key),
-		})
+		row := make([]string, len(columns))
+		for i, column := range columns {
+			row[i] = column.extract(key, name)
+		}
+		rows = append(rows, row)
 		key.Close()
 	}
 	return rows, nil
@@ -785,13 +722,21 @@ func normalizeAmcacheSHA1(value string) string {
 	return strings.TrimPrefix(value, "0000")
 }
 
-func stageLiveAmcacheHive() (string, func(), error) {
+// stageLiveAmcacheHive puts a mountable copy of the live Amcache.hve under
+// workDir, because RegLoadAppKeyW needs a file it can open for write to replay
+// the hive's pending transactions.
+//
+// workDir is the analyzer's own output directory rather than the machine's
+// %TEMP%: staging here would otherwise write the hive and both of its
+// transaction logs onto the volume being investigated, and a run that is killed
+// mid-parse would leave them there.
+func stageLiveAmcacheHive(workDir string) (string, func(), error) {
 	src := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve")
 	if _, err := os.Stat(src); err != nil {
 		return "", nil, err
 	}
 
-	tempDir, err := os.MkdirTemp("", "fir-amcache-")
+	tempDir, err := os.MkdirTemp(workDir, "amcache-stage-")
 	if err != nil {
 		return "", nil, err
 	}
@@ -879,7 +824,7 @@ func collectAmcacheSource(ctx context.Context, outputDir string) error {
 	return err
 }
 
-func collectAmcacheSourceForParser(ctx context.Context, req module.AnalyzeRequest) (string, func(), error) {
+func collectAmcacheSourceForParser(ctx context.Context, req module.AnalyzeRequest, workDir string) (string, func(), error) {
 	if req.IsSelected("amcache") {
 		if collected, ok := collectedAmcacheHive(req.OutputDir); ok {
 			return collected, nil, nil
@@ -887,9 +832,12 @@ func collectAmcacheSourceForParser(ctx context.Context, req module.AnalyzeReques
 		return "", nil, fmt.Errorf("amcache collector was selected but Amcache.hve was not found in run output")
 	}
 
-	tempDir, err := os.MkdirTemp("", "fir-amcache-parser-source-")
+	// Under the analyzer's own directory, not %TEMP%: this runs the whole amcache
+	// collector, so the destination receives a full copy of the hive on the
+	// volume under investigation if it points at the subject's temp directory.
+	tempDir, err := os.MkdirTemp(workDir, "amcache-collect-")
 	if err != nil {
-		return "", nil, fmt.Errorf("create temp dir for hidden amcache collection: %w", err)
+		return "", nil, fmt.Errorf("create work dir for hidden amcache collection: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(tempDir) }
 

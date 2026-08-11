@@ -109,24 +109,62 @@ func archiveRatioForModule(mod module.Module) int64 {
 // and how large its CSV runs relative to that artifact, as a percentage.
 //
 // Analyzers used to be estimated at a flat 32MB each regardless of name, which
-// is a large and systematic undercount for the four below: they emit a row per
-// record of a volume-sized artifact, and a CSV row is routinely bigger than the
-// binary record it came from. Every other analyzer really does produce bounded
-// output — a few hundred registry values, one row per prefetch file — and keeps
-// the flat estimate.
+// is a large and systematic undercount for the ones listed here: they emit a row
+// per record of a volume-sized artifact. Every other analyzer really does produce
+// bounded output — a few hundred registry values, one row per prefetch file — and
+// keeps the flat estimate.
+//
+// The direction of error is not symmetric. Over-estimating only reserves space
+// that goes unused; under-estimating is how a run passes the gate and then fills
+// the evidence drive halfway through writing a CSV. Every ratio here therefore
+// sits above what was measured, and the two that were below it — mft_parser and
+// usnjrnl_parser — were corrected once a full run made the real figures visible.
 var analyzerOutputRatios = map[string]struct {
 	collector string
 	ratioPct  int64
 }{
-	// A 1KB MFT record becomes one ~200 byte row, and unused records are dropped.
-	"mft_parser": {"mft", 30},
-	// USN records are compact on disk; the CSV spells out reason and source
-	// flags by name and adds resolved paths.
-	"usnjrnl_parser": {"usnjrnl", 300},
-	// EVTX is binary XML with a template table; flattening it to CSV expands it.
-	"eventlog_parser": {"eventlog", 400},
-	// $SDS security descriptors become SDDL text.
-	"secure_sds_parser": {"secure_sds", 200},
+	// Every figure below is measured, on one full run over a 3.4 GB collection of
+	// this host: two NTFS volumes, 382 EVTX files, 29 modules.
+	//
+	// A 1 KB MFT record becomes one row of thirteen text fields, eight of them
+	// RFC3339 timestamps, plus a resolved full path — not the ~200 bytes an
+	// earlier estimate assumed. Measured 46.3%.
+	"mft_parser": {"mft", 70},
+	// A USN record is compact on disk and expands hard: the CSV names every reason
+	// and source flag, and MFT enrichment adds sixteen more columns including eight
+	// timestamps. Measured 566.9% with enrichment on, which is the case the gate
+	// has to survive.
+	"usnjrnl_parser": {"usnjrnl", 800},
+	// EVTX shrinks rather than expands. The parser writes twelve narrow columns per
+	// event and leaves the message body out, so the CSV is a fraction of the binary
+	// log it came from — measured 23.2%, against an assumption of 400% that was
+	// reserving 1.2 GB for 74 MB of output.
+	"eventlog_parser": {"eventlog", 60},
+	// $SDS security descriptors become SDDL text, which is more compact than the
+	// binary descriptors on a real volume: measured 40.9%.
+	"secure_sds_parser": {"secure_sds", 75},
+	// The browser analyzers turn SQLite and JSON into CSV per profile. Measured on
+	// a real 3-profile collection (Chrome, Edge, Firefox; 202 MB collected):
+	// history 10.3%, cookies 0.8%, credentials 0.1%, profile 0.1%.
+	//
+	// The ratios below sit above those with room to spare, because the denominator
+	// is the whole collected tree and most of it is artifacts these analyzers never
+	// read — Favicons alone was 32 MB of it. A host whose browsing history is large
+	// relative to its favicon cache shifts every figure up.
+	//
+	// Note that estimateAnalyzerBytes floors each of these at defaultAnalyzerSize,
+	// so on a collection this size the ratio changes nothing; it starts to matter
+	// once a browser tree runs to gigabytes, which is exactly where the previous
+	// guesses would have reserved hundreds of megabytes for a 1 MB CSV.
+	"browser_history_parser":     {"browser", 20},
+	"browser_cookies_parser":     {"browser", 5},
+	"browser_credentials_parser": {"browser", 3},
+	"browser_profile_parser":     {"browser", 3},
+	// One CSV per SRUM provider table. Measured at 49.3% of SRUDB.dat on the same
+	// 92MB database (221k rows); the estimate keeps headroom above that because
+	// the ratio rises with how densely the providers are populated, and an
+	// under-estimate here is what fills the evidence drive mid-run.
+	"srum_parser": {"srum", 100},
 }
 
 // estimateModuleBytes estimates the additional disk space a module needs.

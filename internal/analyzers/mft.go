@@ -10,17 +10,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
-	"unicode/utf16"
 
 	"github.com/Liuchijang/FIR/internal/acquisition"
 	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/FIR/internal/ntfs"
 )
 
-const (
-	mftRecordSize      = 1024
-	ntfsWindowsEpochNs = 116444736000000000
-)
+const mftRecordSize = 1024
 
 const (
 	attrTypeStandardInformation = 0x10
@@ -87,42 +83,9 @@ func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) modu
 		return analyzerError(outDir, fmt.Errorf("create MFT parser output dir: %w", err))
 	}
 
-	var rows []mftRecordRow
-	var parseErrs []string
-	if dir, ok := existingModuleDir(req.OutputDir, "mft"); ok {
-		for _, drive := range collectedMFTDrives(dir) {
-			mftPath := filepath.Join(dir, "$MFT_"+drive)
-			driveRows, err := parseCollectedMFT(ctx, mftPath)
-			if err != nil {
-				parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", drive, err))
-				continue
-			}
-			for i := range driveRows {
-				driveRows[i].Drive = drive
-			}
-			rows = append(rows, driveRows...)
-		}
-		if len(rows) == 0 {
-			// Fall back to the legacy single-drive filename for older collection runs.
-			if legacyPath := filepath.Join(dir, "$MFT"); fileExists(legacyPath) {
-				legacyRows, err := parseCollectedMFT(ctx, legacyPath)
-				if err != nil {
-					parseErrs = append(parseErrs, fmt.Sprintf("C: %v", err))
-				} else {
-					for i := range legacyRows {
-						legacyRows[i].Drive = "C"
-					}
-					rows = append(rows, legacyRows...)
-				}
-			}
-		}
-	}
-	if len(rows) == 0 {
-		var err error
-		rows, err = parseLiveMFT(ctx)
-		if err != nil {
-			return analyzerError(outDir, err)
-		}
+	rows, parseErrs, err := loadMFTRows(ctx, req.OutputDir)
+	if err != nil {
+		return analyzerError(outDir, err)
 	}
 	if len(rows) == 0 {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no MFT records parsed: %s", strings.Join(parseErrs, "; "))}
@@ -231,6 +194,55 @@ func mftCSVRow(row mftRecordRow) []string {
 	}
 }
 
+// loadMFTRows parses every $MFT this run has available: one per collected
+// drive, the legacy single-drive filename for output written by older versions,
+// and finally the live volumes when nothing was collected.
+//
+// Both mft_parser and usnjrnl_parser need exactly this — the USN parser for the
+// name/path/timestamp enrichment it joins onto each journal record — and each
+// used to carry its own copy of the fallback chain. The two copies are what
+// decides which artifact a run's output was actually derived from, so they have
+// to agree.
+//
+// The returned errors are per-drive parse failures, not a reason to stop: a
+// second volume's $MFT is still worth parsing when the first one is corrupt.
+// Only a live-parse failure with nothing collected comes back as an error.
+func loadMFTRows(ctx context.Context, outputDir string) ([]mftRecordRow, []string, error) {
+	var rows []mftRecordRow
+	var parseErrs []string
+
+	appendDrive := func(path, drive string) {
+		driveRows, err := parseCollectedMFT(ctx, path)
+		if err != nil {
+			parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", drive, err))
+			return
+		}
+		for i := range driveRows {
+			driveRows[i].Drive = drive
+		}
+		rows = append(rows, driveRows...)
+	}
+
+	if dir, ok := existingModuleDir(outputDir, "mft"); ok {
+		for _, drive := range collectedMFTDrives(dir) {
+			appendDrive(filepath.Join(dir, "$MFT_"+drive), drive)
+		}
+		if len(rows) == 0 {
+			if legacyPath := filepath.Join(dir, "$MFT"); fileExists(legacyPath) {
+				appendDrive(legacyPath, "C")
+			}
+		}
+	}
+	if len(rows) == 0 {
+		liveRows, err := parseLiveMFT(ctx)
+		if err != nil {
+			return nil, parseErrs, err
+		}
+		rows = liveRows
+	}
+	return rows, parseErrs, nil
+}
+
 // parseCollectedMFT reads the artifact in fixed batches instead of slurping it
 // whole. A $MFT is routinely several gigabytes, and os.ReadFile made the file
 // the single largest allocation in a run — larger than the parsed records it
@@ -268,11 +280,11 @@ func parseCollectedMFT(ctx context.Context, path string) ([]mftRecordRow, error)
 			if string(record[:4]) != "FILE" {
 				continue
 			}
-			// applyMFTFixup rewrites the record in place and the parsed row can
+			// ntfs.ApplyFixup rewrites the record in place and the parsed row can
 			// alias what it is handed, so each record is copied out of the
 			// batch buffer before it is reused by the next read.
 			record = append([]byte(nil), record...)
-			if err := applyMFTFixup(record); err != nil {
+			if err := ntfs.ApplyFixup(record, 0); err != nil {
 				continue
 			}
 
@@ -412,43 +424,6 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func applyMFTFixup(record []byte) error {
-	if len(record) < 8 {
-		return fmt.Errorf("record too small")
-	}
-
-	usaOffset := int(binary.LittleEndian.Uint16(record[4:6]))
-	usaCount := int(binary.LittleEndian.Uint16(record[6:8]))
-	if usaOffset <= 0 || usaCount < 2 {
-		return fmt.Errorf("invalid update sequence array")
-	}
-	usaEnd := usaOffset + usaCount*2
-	if usaEnd > len(record) {
-		return fmt.Errorf("update sequence array out of bounds")
-	}
-
-	sectorSize := 512
-	if sectors := usaCount - 1; sectors > 0 && len(record)%sectors == 0 {
-		sectorSize = len(record) / sectors
-	}
-
-	updateSeq := record[usaOffset : usaOffset+2]
-	replacements := record[usaOffset+2 : usaEnd]
-	for i := 1; i < usaCount; i++ {
-		sectorEnd := i*sectorSize - 2
-		replOff := (i - 1) * 2
-		if sectorEnd+2 > len(record) || replOff+2 > len(replacements) {
-			return fmt.Errorf("fixup index out of bounds")
-		}
-		if record[sectorEnd] != updateSeq[0] || record[sectorEnd+1] != updateSeq[1] {
-			return fmt.Errorf("update sequence mismatch")
-		}
-		record[sectorEnd] = replacements[replOff]
-		record[sectorEnd+1] = replacements[replOff+1]
-	}
-	return nil
-}
-
 func parseMFTRecord(record []byte, recordNumber uint64) (mftRecordRow, bool, error) {
 	if len(record) < 24 || string(record[:4]) != "FILE" {
 		return mftRecordRow{}, false, nil
@@ -477,16 +452,16 @@ func parseMFTRecord(record []byte, recordNumber uint64) (mftRecordRow, bool, err
 
 		attr := record[attrOff : attrOff+attrLen]
 		nonResident := attr[8] != 0
-		attrName := attributeName(attr)
+		attrName := ntfs.AttributeName(attr)
 
 		switch attrType {
 		case attrTypeStandardInformation:
 			content, ok := residentContent(attr)
 			if ok && len(content) >= 32 {
-				row.SICreated = ntfsFiletimeString(binary.LittleEndian.Uint64(content[0:8]))
-				row.SIModified = ntfsFiletimeString(binary.LittleEndian.Uint64(content[8:16]))
-				row.SIMFTModified = ntfsFiletimeString(binary.LittleEndian.Uint64(content[16:24]))
-				row.SIAccessed = ntfsFiletimeString(binary.LittleEndian.Uint64(content[24:32]))
+				row.SICreated = formatFiletime(binary.LittleEndian.Uint64(content[0:8]), "")
+				row.SIModified = formatFiletime(binary.LittleEndian.Uint64(content[8:16]), "")
+				row.SIMFTModified = formatFiletime(binary.LittleEndian.Uint64(content[16:24]), "")
+				row.SIAccessed = formatFiletime(binary.LittleEndian.Uint64(content[24:32]), "")
 			}
 
 		case attrTypeFileName:
@@ -580,12 +555,12 @@ func parseFileNameAttribute(content []byte) (fileNameAttribute, bool) {
 	return fileNameAttribute{
 		ParentRef:      parentRef,
 		ParentSequence: parentSeq,
-		Name:           utf16LEString(content[66 : 66+nameLen*2]),
+		Name:           ntfs.UTF16String(content[66 : 66+nameLen*2]),
 		Namespace:      content[65],
-		Created:        ntfsFiletimeString(binary.LittleEndian.Uint64(content[8:16])),
-		Modified:       ntfsFiletimeString(binary.LittleEndian.Uint64(content[16:24])),
-		MFTModified:    ntfsFiletimeString(binary.LittleEndian.Uint64(content[24:32])),
-		Accessed:       ntfsFiletimeString(binary.LittleEndian.Uint64(content[32:40])),
+		Created:        formatFiletime(binary.LittleEndian.Uint64(content[8:16]), ""),
+		Modified:       formatFiletime(binary.LittleEndian.Uint64(content[16:24]), ""),
+		MFTModified:    formatFiletime(binary.LittleEndian.Uint64(content[24:32]), ""),
+		Accessed:       formatFiletime(binary.LittleEndian.Uint64(content[32:40]), ""),
 		Allocated:      int64(binary.LittleEndian.Uint64(content[40:48])),
 		RealSize:       int64(binary.LittleEndian.Uint64(content[48:56])),
 		Directory:      flags&0x10000000 != 0,
@@ -644,18 +619,6 @@ func namespaceLabel(ns byte) string {
 	default:
 		return fmt.Sprintf("Unknown(%d)", ns)
 	}
-}
-
-func attributeName(attr []byte) string {
-	if len(attr) < 12 {
-		return ""
-	}
-	nameLen := int(attr[9])
-	nameOff := int(binary.LittleEndian.Uint16(attr[10:12]))
-	if nameLen <= 0 || nameOff <= 0 || nameOff+nameLen*2 > len(attr) {
-		return ""
-	}
-	return utf16LEString(attr[nameOff : nameOff+nameLen*2])
 }
 
 func fileExtension(name string, isDirectory bool) string {
@@ -739,24 +702,4 @@ func resolveMFTPath(records mftPathSource, cache map[mftKey]string, drive string
 	path := strings.TrimRight(parent, `\`) + `\` + name
 	cache[key] = path
 	return path
-}
-
-func utf16LEString(data []byte) string {
-	values := make([]uint16, 0, len(data)/2)
-	for i := 0; i+1 < len(data); i += 2 {
-		value := binary.LittleEndian.Uint16(data[i : i+2])
-		if value == 0 {
-			break
-		}
-		values = append(values, value)
-	}
-	return string(utf16.Decode(values))
-}
-
-func ntfsFiletimeString(value uint64) string {
-	if value == 0 || value < ntfsWindowsEpochNs {
-		return ""
-	}
-	unix100ns := int64(value - ntfsWindowsEpochNs)
-	return time.Unix(0, unix100ns*100).UTC().Format(time.RFC3339)
 }

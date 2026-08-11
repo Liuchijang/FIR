@@ -25,8 +25,12 @@ const (
 )
 
 var chromiumEvidenceFiles = []string{
+	"Affiliation Database",
 	"Bookmarks",
 	"Cookies",
+	// Bounce-tracking mitigation state: which sites redirected through others
+	// and when they last stored data. Chrome 114+.
+	"DIPS",
 	"Extension Cookies",
 	"Favicons",
 	"History",
@@ -34,21 +38,43 @@ var chromiumEvidenceFiles = []string{
 	"Last Tabs",
 	"Login Data",
 	"Login Data For Account",
+	// What was played, for how long, and when it was last touched.
+	"Media History",
+	"Network Action Predictor",
 	"Preferences",
+	// Preferences Chrome signs with a MAC so extensions cannot tamper with them
+	// silently; it holds the installed-extension list among other things.
+	"Secure Preferences",
 	"Shortcuts",
 	"Top Sites",
+	"TransportSecurity",
 	"Visited Links",
 	"Web Data",
 	filepath.Join("Network", "Cookies"),
 }
 
+// chromiumEvidenceDirs are copied file-by-file, non-recursively.
+//
+// Every entry here is a flat LevelDB store — CURRENT/MANIFEST/LOG/*.ldb/*.log
+// side by side — which is why the shallow copy is enough and why they cannot be
+// copied as single files (that fails with ERROR_INVALID_FUNCTION). Measured on a
+// real profile the whole set is under 300 KB.
+//
+// Deliberately absent: IndexedDB, Extension Settings and Cache/Code Cache.
+// The first two nest one directory deeper than this copy reaches, and all three
+// routinely run to hundreds of megabytes per profile — enough to change what a
+// browser collection costs, for artifacts nothing in FIR can parse yet.
 var chromiumEvidenceDirs = []string{
 	"Sessions",
-	// Extension Rules and Extension State are LevelDB databases (directories
-	// containing CURRENT/MANIFEST/*.ldb files), not single files — copying them
-	// as a file fails with ERROR_INVALID_FUNCTION.
 	"Extension Rules",
+	"Extension Scripts",
 	"Extension State",
+	filepath.Join("Local Storage", "leveldb"),
+	"Session Storage",
+	"Platform Notifications",
+	filepath.Join("Service Worker", "Database"),
+	filepath.Join("Sync Data", "LevelDB"),
+	"shared_proto_db",
 }
 
 var firefoxEvidenceFiles = []string{
@@ -487,143 +513,152 @@ func isSkippedWindowsProfile(name string) bool {
 	}
 }
 
+// collectProfile copies one profile's artifacts. The two families differ only in
+// which names they look for and in Chromium's "Local State", which sits one
+// level above the profile: everything else — the output layout, the
+// missing-file-is-not-an-error rule, the raw-volume fallback — is the same, and
+// keeping two copies of it meant a fix to one family's copy loop silently
+// skipping the other.
 func collectProfile(ctx context.Context, outDir string, profile BrowserProfile, rawCtx *acquisition.RawVolumePool) ([]module.FileInfo, []string, error) {
-	switch profile.Family {
-	case browserFamilyFirefox:
-		return collectFirefoxProfile(ctx, outDir, profile, rawCtx)
-	default:
-		return collectChromiumProfile(ctx, outDir, profile, rawCtx)
+	evidenceFiles, evidenceDirs := chromiumEvidenceFiles, chromiumEvidenceDirs
+	if profile.Family == browserFamilyFirefox {
+		evidenceFiles, evidenceDirs = firefoxEvidenceFiles, firefoxEvidenceDirs
 	}
-}
 
-func collectChromiumProfile(ctx context.Context, outDir string, profile BrowserProfile, rawCtx *acquisition.RawVolumePool) ([]module.FileInfo, []string, error) {
-	profileRoot := filepath.Join(
-		outDir,
+	// profileRel is the path every FileInfo is reported under, so a manifest entry
+	// identifies which profile a file came from.
+	//
+	// Without it the manifest lists 682 entries whose "path" is a bare name like
+	// "Favicons" or "Local Storage/leveldb/000004.log", repeated once per profile
+	// with a different hash each time and nothing to say which is which. That is
+	// the chain-of-custody record for a browser collection, so it has to resolve to
+	// one file. The registry collector already qualifies its user hives the same
+	// way ("users/<name>/NTUSER.DAT").
+	profileRel := filepath.Join(
 		outputDirName(profile.User),
 		outputDirName(profile.Browser),
 		outputDirName(profile.Name),
 	)
+	profileRoot := filepath.Join(outDir, profileRel)
 	if err := os.MkdirAll(profileRoot, 0o755); err != nil {
 		return nil, nil, fmt.Errorf("create browser profile output dir for %s: %w", profile.Path, err)
 	}
 
 	var files []module.FileInfo
-	var errors []string
+	var warnings []string
 
-	userDataDir := filepath.Dir(profile.Path)
-	localState := filepath.Join(userDataDir, "Local State")
-	if fi, err := copyBrowserFile(localState, filepath.Join(profileRoot, "Local State"), "Local State", rawCtx); err == nil {
-		files = append(files, fi)
+	if profile.Family != browserFamilyFirefox {
+		// Local State holds the profile-to-account mapping and the DPAPI-wrapped
+		// key the cookie/login databases are encrypted with, and it lives in the
+		// User Data root rather than in the profile.
+		localState := filepath.Join(filepath.Dir(profile.Path), "Local State")
+		if fi, err := copyBrowserFile(localState, filepath.Join(profileRoot, "Local State"), filepath.Join(profileRel, "Local State"), rawCtx); err == nil {
+			files = append(files, fi)
+		}
 	}
 
-	for _, relPath := range chromiumEvidenceFiles {
+	for _, relPath := range evidenceFiles {
 		select {
 		case <-ctx.Done():
-			return files, errors, ctx.Err()
+			return files, warnings, ctx.Err()
 		default:
 		}
 
-		src := filepath.Join(profile.Path, relPath)
-		dst := filepath.Join(profileRoot, relPath)
-		fi, err := copyBrowserFile(src, dst, relPath, rawCtx)
+		fi, err := copyBrowserFile(filepath.Join(profile.Path, relPath), filepath.Join(profileRoot, relPath), filepath.Join(profileRel, relPath), rawCtx)
 		if err != nil {
+			// An absent artifact is the normal case — no profile has every name
+			// in the list — so only a real copy failure is worth reporting.
 			if !os.IsNotExist(err) {
-				errors = append(errors, fmt.Sprintf("%s: %v", relPath, err))
+				warnings = append(warnings, fmt.Sprintf("%s: %v", relPath, err))
 			}
 			continue
 		}
 		files = append(files, fi)
 	}
 
-	for _, relDir := range chromiumEvidenceDirs {
+	for _, relDir := range evidenceDirs {
 		select {
 		case <-ctx.Done():
-			return files, errors, ctx.Err()
+			return files, warnings, ctx.Err()
 		default:
 		}
 
-		srcDir := filepath.Join(profile.Path, relDir)
-		dstDir := filepath.Join(profileRoot, relDir)
-		dirFiles, err := copyBrowserDir(srcDir, dstDir, relDir, rawCtx)
+		dirFiles, err := copyBrowserDir(filepath.Join(profile.Path, relDir), filepath.Join(profileRoot, relDir), filepath.Join(profileRel, relDir), rawCtx)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				errors = append(errors, fmt.Sprintf("%s: %v", relDir, err))
+				warnings = append(warnings, fmt.Sprintf("%s: %v", relDir, err))
 			}
 			continue
 		}
 		files = append(files, dirFiles...)
 	}
 
-	if len(files) == 0 {
-		if len(errors) == 0 {
-			return nil, nil, fmt.Errorf("no browser artifacts copied from %s", profile.Path)
+	if profile.Family != browserFamilyFirefox {
+		manifests, err := copyExtensionManifests(ctx, profile.Path, profileRoot, profileRel, rawCtx)
+		if err != nil && !os.IsNotExist(err) {
+			warnings = append(warnings, fmt.Sprintf("Extensions: %v", err))
 		}
-		return nil, errors, fmt.Errorf("no browser artifacts copied from %s: %s", profile.Path, strings.Join(errors, "; "))
+		files = append(files, manifests...)
 	}
 
-	return files, errors, nil
+	if len(files) == 0 {
+		if len(warnings) == 0 {
+			return nil, nil, fmt.Errorf("no browser artifacts copied from %s", profile.Path)
+		}
+		return nil, warnings, fmt.Errorf("no browser artifacts copied from %s: %s", profile.Path, strings.Join(warnings, "; "))
+	}
+
+	return files, warnings, nil
 }
 
-func collectFirefoxProfile(ctx context.Context, outDir string, profile BrowserProfile, rawCtx *acquisition.RawVolumePool) ([]module.FileInfo, []string, error) {
-	profileRoot := filepath.Join(
-		outDir,
-		outputDirName(profile.User),
-		outputDirName(profile.Browser),
-		outputDirName(profile.Name),
-	)
-	if err := os.MkdirAll(profileRoot, 0o755); err != nil {
-		return nil, nil, fmt.Errorf("create firefox profile output dir for %s: %w", profile.Path, err)
+// copyExtensionManifests collects the metadata of every installed extension
+// without collecting the extensions themselves.
+//
+// Extensions/<id>/<version>/manifest.json is what says who an extension claims
+// to be and what it is permitted to do — the part an investigation needs when a
+// browser extension is the intrusion vector. The rest of the directory is the
+// extension's own code and assets, routinely tens to hundreds of megabytes per
+// profile, so it is passed over: a shallow copy would miss the manifests
+// entirely and a full one would dominate the run.
+//
+// _locales/<locale>/messages.json comes along because a manifest may name itself
+// "__MSG_appName__" and the real name only exists in the message catalogue.
+func copyExtensionManifests(ctx context.Context, profilePath, profileRoot, profileRel string, rawCtx *acquisition.RawVolumePool) ([]module.FileInfo, error) {
+	extensionsRoot := filepath.Join(profilePath, "Extensions")
+	if _, err := os.Stat(extensionsRoot); err != nil {
+		return nil, err
 	}
 
 	var files []module.FileInfo
-	var errors []string
-
-	for _, relPath := range firefoxEvidenceFiles {
-		select {
-		case <-ctx.Done():
-			return files, errors, ctx.Err()
-		default:
+	// Depth 3 covers <id>/<version>/manifest.json and
+	// <id>/<version>/_locales/<locale>/messages.json.
+	err := filepath.WalkDir(extensionsRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		name := entry.Name()
+		if name != "manifest.json" && name != "messages.json" {
+			return nil
 		}
 
-		src := filepath.Join(profile.Path, relPath)
-		dst := filepath.Join(profileRoot, relPath)
-		fi, err := copyBrowserFile(src, dst, relPath, rawCtx)
+		rel, err := filepath.Rel(profilePath, path)
 		if err != nil {
-			if !os.IsNotExist(err) {
-				errors = append(errors, fmt.Sprintf("%s: %v", relPath, err))
-			}
-			continue
+			return nil
+		}
+		fi, err := copyBrowserFile(path, filepath.Join(profileRoot, rel), filepath.Join(profileRel, rel), rawCtx)
+		if err != nil {
+			return nil
 		}
 		files = append(files, fi)
-	}
-
-	for _, relDir := range firefoxEvidenceDirs {
-		select {
-		case <-ctx.Done():
-			return files, errors, ctx.Err()
-		default:
-		}
-
-		srcDir := filepath.Join(profile.Path, relDir)
-		dstDir := filepath.Join(profileRoot, relDir)
-		dirFiles, err := copyBrowserDir(srcDir, dstDir, relDir, rawCtx)
-		if err != nil {
-			if !os.IsNotExist(err) {
-				errors = append(errors, fmt.Sprintf("%s: %v", relDir, err))
-			}
-			continue
-		}
-		files = append(files, dirFiles...)
-	}
-
-	if len(files) == 0 {
-		if len(errors) == 0 {
-			return nil, nil, fmt.Errorf("no browser artifacts copied from %s", profile.Path)
-		}
-		return nil, errors, fmt.Errorf("no browser artifacts copied from %s: %s", profile.Path, strings.Join(errors, "; "))
-	}
-
-	return files, errors, nil
+		return nil
+	})
+	return files, err
 }
 
 func copyBrowserFile(src, dst, relPath string, rawCtx *acquisition.RawVolumePool) (module.FileInfo, error) {
@@ -706,38 +741,22 @@ func (c *browserCollector) EstimatedBytes() int64 {
 		return 0
 	}
 
+	// Both families' names are measured for every profile: PathsSize skips what
+	// is not there, so a Chromium profile simply contributes nothing for the
+	// Firefox names and the estimate needs no per-family branch.
+	names := make([]string, 0, len(chromiumEvidenceFiles)+len(chromiumEvidenceDirs)+len(firefoxEvidenceFiles)+len(firefoxEvidenceDirs))
+	names = append(names, chromiumEvidenceFiles...)
+	names = append(names, chromiumEvidenceDirs...)
+	names = append(names, firefoxEvidenceFiles...)
+	names = append(names, firefoxEvidenceDirs...)
+
 	var total int64
 	for _, profile := range profiles {
-		for _, name := range chromiumEvidenceFiles {
-			if info, err := os.Stat(filepath.Join(profile.Path, name)); err == nil {
-				total += info.Size()
-			}
+		paths := make([]string, 0, len(names))
+		for _, name := range names {
+			paths = append(paths, filepath.Join(profile.Path, name))
 		}
-		for _, name := range chromiumEvidenceDirs {
-			total += dirSize(filepath.Join(profile.Path, name))
-		}
-		for _, name := range firefoxEvidenceFiles {
-			if info, err := os.Stat(filepath.Join(profile.Path, name)); err == nil {
-				total += info.Size()
-			}
-		}
-		for _, name := range firefoxEvidenceDirs {
-			total += dirSize(filepath.Join(profile.Path, name))
-		}
+		total += utils.PathsSize(paths...)
 	}
-	return total
-}
-
-func dirSize(dir string) int64 {
-	var total int64
-	filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return nil
-		}
-		if info, err := entry.Info(); err == nil {
-			total += info.Size()
-		}
-		return nil
-	})
 	return total
 }

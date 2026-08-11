@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/Liuchijang/FIR/internal/module"
 )
@@ -41,6 +41,7 @@ func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 	}
 
 	rows := make([][]string, 0, len(entries))
+	var parseErrs []string
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return analyzerError(outDir, err)
@@ -52,17 +53,25 @@ func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 
 		row, err := parsePrefetchMetadata(filepath.Join(sourceDir, entry.Name()))
 		if err != nil {
-			return analyzerError(outDir, err)
+			// One unreadable .pf used to cost the whole CSV. A Prefetch folder
+			// routinely holds a file the OS is writing to; losing every other
+			// execution record over it is the wrong trade, and the runner
+			// already reports files-plus-error as a warning.
+			parseErrs = append(parseErrs, err.Error())
+			continue
 		}
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i][0] < rows[j][0] })
 
 	if len(rows) == 0 {
+		if len(parseErrs) > 0 {
+			return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no prefetch files parsed in %s: %s", sourceDir, strings.Join(parseErrs, "; "))}
+		}
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no prefetch files found in %s", sourceDir)}
 	}
 
-	return csvResult(outDir, "prefetch_files.csv", []string{
+	result := csvResult(outDir, "prefetch_files.csv", []string{
 		"SourceFile",
 		"ExecutableName",
 		"PrefetchHash",
@@ -74,6 +83,10 @@ func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 		"ModifiedUTC",
 		"AccessedUTC",
 	}, rows)
+	if result.Error == "" && len(parseErrs) > 0 {
+		result.Error = fmt.Sprintf("parsed %d prefetch file(s) with %d failure(s): %s", len(rows), len(parseErrs), strings.Join(parseErrs, "; "))
+	}
+	return result
 }
 
 func parsePrefetchMetadata(path string) ([]string, error) {
@@ -89,7 +102,10 @@ func parsePrefetchMetadata(path string) ([]string, error) {
 	}
 	defer f.Close()
 
-	if _, err := f.Read(header); err != nil {
+	// ReadFull, not Read: a short read leaves the tail of the buffer zeroed, and
+	// those zeros parse as a version 0 file with a zero header size rather than
+	// as the truncated file it is.
+	if _, err := io.ReadFull(f, header); err != nil {
 		return nil, fmt.Errorf("read prefetch header %s: %w", path, err)
 	}
 
@@ -122,15 +138,15 @@ func parsePrefetchMetadata(path string) ([]string, error) {
 }
 
 func fileTimesUTC(stat os.FileInfo) (string, string, string) {
-	modified := stat.ModTime().UTC().Format(time.RFC3339)
+	modified := formatTime(stat.ModTime(), "")
 	created := ""
 	accessed := ""
 
 	data, ok := stat.Sys().(*syscall.Win32FileAttributeData)
 	if ok {
-		created = filetimeToRFC3339(data.CreationTime)
-		accessed = filetimeToRFC3339(data.LastAccessTime)
-		if value := filetimeToRFC3339(data.LastWriteTime); value != "" {
+		created = win32FiletimeString(data.CreationTime)
+		accessed = win32FiletimeString(data.LastAccessTime)
+		if value := win32FiletimeString(data.LastWriteTime); value != "" {
 			modified = value
 		}
 	}
@@ -138,9 +154,6 @@ func fileTimesUTC(stat os.FileInfo) (string, string, string) {
 	return created, accessed, modified
 }
 
-func filetimeToRFC3339(ft syscall.Filetime) string {
-	if ft == (syscall.Filetime{}) {
-		return ""
-	}
-	return time.Unix(0, ft.Nanoseconds()).UTC().Format(time.RFC3339)
+func win32FiletimeString(ft syscall.Filetime) string {
+	return formatFiletimeParts(ft.LowDateTime, ft.HighDateTime, "")
 }
