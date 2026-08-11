@@ -22,10 +22,14 @@ FIR is a Windows first-response triage tool: it collects forensic artifacts, par
 
 - **Two modes**: an interactive Bubble Tea workflow, or `fir collect` for automation. Collectors run alone by default; `--analyze` adds the matching parsers.
 - **Native Windows acquisition**: backup semantics, registry hive save APIs, and raw NTFS reads — `$MFT`, `$UsnJrnl:$J` and `$Secure:$SDS` from every fixed drive, not just `C:`. Requires Administrator, and enables the backup, restore, security and debug privileges at startup.
+- **Parses what it collects**: `$MFT`, the USN journal, `$Secure:$SDS`, EVTX, Amcache, Prefetch, ShimCache, UserAssist, RecentDocs, RunMRU, WMI, the SRUM database, and browser history, downloads, cookies, saved-login metadata, autofill, bookmarks, extensions and profile settings. Every timestamp column in every CSV uses one RFC3339 UTC layout, so the halves of an output directory join on time without reformatting.
 - **Self-tuning concurrency**: no worker knob. FIR surveys the drives a run reads and writes, then picks a worker count per phase — collection backs off on spinning media, analysis scales with free RAM. The numbers and the reasoning land in `manifest.json`.
 - **Caps that reach child processes**: CPU and disk limits go through a Windows Job Object, so `winpmem` and the PowerShell-hosted analyzers are covered rather than quietly exempt. Disk throttling is opt-in.
 - **Partial-failure tolerant**: a module fails only if it collected nothing; partial errors surface as warnings instead of hiding the artifacts that did come through.
+- **Hashed on the way out**: every artifact is SHA-256'd as it is written rather than read back afterwards, including the ZIP itself. `manifest.json` records a digest per file, and browser artifacts are qualified by user, browser and profile so an entry names exactly one file.
 - **Structured output**: `manifest.json`, `summary.txt`, `collector.log`, a storage estimate before the run, and an optional ZIP with a `.sha256` sidecar.
+
+FIR does not decrypt browser secrets. Cookie values and saved passwords are exported as hex beside a column naming the scheme that wrapped them, because Chrome 127+ App-Bound Encryption is tied to the machine that created it and is worth telling apart from the older DPAPI-keyed form before anyone spends time on recovery. The encrypted stores themselves are collected intact.
 
 ## Tech Stack
 
@@ -43,6 +47,9 @@ FIR is a Windows first-response triage tool: it collects forensic artifacts, par
 
 ![x/sys](https://img.shields.io/badge/golang.org%2Fx%2Fsys-Windows_APIs-00ADD8?style=for-the-badge&logo=go&logoColor=white)
 ![SQLite](https://img.shields.io/badge/modernc.org%2Fsqlite-Embedded_SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
+![go-ese](https://img.shields.io/badge/go--ese-ESE%2FJET_Blue-4B8BBE?style=for-the-badge)
+
+`modernc.org/sqlite` reads browser databases and `www.velocidex.com/golang/go-ese` reads the SRUM database's ESE format. Both are pure Go, so a release build stays a single static `fir.exe` with no runtime dependencies.
 
 ## Quick Start
 
@@ -145,7 +152,7 @@ Disable compression:
 
 | Name | Category | Description |
 |---|---|---|
-| `browser` | `browser` | Collects browser forensic artifacts from supported Chromium and Firefox profiles |
+| `browser` | `browser` | Collects browser artifacts from Chromium and Firefox profiles: history, cookies, credential stores, bookmarks, preferences, session files, the flat LevelDB stores (Local Storage, Session Storage, Platform Notifications, Service Worker, Sync Data), and extension manifests without the extension payloads. `IndexedDB` and the HTTP cache are left out — hundreds of megabytes per profile for artifacts nothing here parses yet |
 | `eventlog` | `eventlog` | Collects Windows Event Log files (`.evtx`) |
 | `amcache` | `execution` | Collects `Amcache.hve` and transaction logs |
 | `prefetch` | `execution` | Collects Windows Prefetch files (`.pf`) |
@@ -164,14 +171,18 @@ Disable compression:
 | `autoruns` | `live` | Generates live autoruns-style triage CSV |
 | `process_explorer` | `live` | Generates live process, module, and network triage CSV |
 | `amcache_parser` | `execution` | Parses Amcache artifacts |
-| `browser_history_parser` | `browser` | Parses Chromium browser history artifacts |
+| `browser_history_parser` | `browser` | Parses visits and downloads from Chromium `History` and Firefox `places.sqlite`. Downloads carry the redirect chain and the decoded Safe Browsing verdict |
+| `browser_cookies_parser` | `browser` | Parses cookie metadata — host, path, creation, expiry, last access, `Secure`/`HttpOnly`/`SameSite` — from every cookie store a profile has |
+| `browser_credentials_parser` | `browser` | Parses saved-login metadata and autofill from `Login Data`, `Web Data`, `logins.json` and `formhistory.sqlite`. Separate from the other browser analyzers so a triage can skip the most sensitive artifacts |
+| `browser_profile_parser` | `browser` | Parses bookmarks with folder paths, installed extensions with their permissions and content scripts, selected profile settings, omnibox shortcuts, media history and DIPS bounce records |
 | `eventlog_parser` | `eventlog` | Parses EVTX logs |
-| `mft_parser` | `ntfs` | Parses `$MFT` into CSV |
+| `mft_parser` | `ntfs` | Parses `$MFT` into CSV, streaming one row per record with resolved full paths |
 | `prefetch_parser` | `execution` | Parses Prefetch artifacts |
 | `recentdocs_parser` | `registry` | Parses RecentDocs entries |
 | `runmru_parser` | `registry` | Parses RunMRU entries |
 | `secure_sds_parser` | `ntfs` | Parses Secure SDS data |
 | `shimcache_parser` | `registry` | Parses ShimCache |
+| `srum_parser` | `system` | Parses the SRUM database into one CSV per provider table, resolving application and user IDs through `SruDbIdMapTable`, network adapter types out of the interface LUID, and Wi-Fi profile names from the `SOFTWARE` hive |
 | `userassist_parser` | `registry` | Parses UserAssist |
 | `usnjrnl_parser` | `ntfs` | Parses USN records and enriches with MFT when available |
 | `wmi_parser` | `system` | Parses WMI artifacts |
@@ -182,16 +193,34 @@ Use `browser`, `eventlog`, `execution`, `live`, `memory`, `ntfs`, `registry`, `s
 
 ## Output
 
-A typical run creates a timestamped directory:
+A run creates a timestamped directory. Collectors write under a directory named
+for their artifact; every analyzer writes under `Analyzer/<module>/`:
 
 ```text
 HOSTNAME_YYYYMMDD_HHMMSS/
   collector.log
   manifest.json
   summary.txt
-  collected/
-  analysis/
+  browser/<user>/<browser>/<profile>/
+  eventlog/
+  execution/                   Amcache.hve and its transaction logs
+  execution/prefetch/
+  memory/                      only until the image is moved out, see below
+  ntfs/                        $MFT, $UsnJrnl:$J and $Secure:$SDS, one per drive
+  registry/
+  registry/users/<user>/        NTUSER.DAT and UsrClass.dat
+  system/                      SRUDB.dat
+  system/wmi/
+  Analyzer/mft_parser/
+  Analyzer/usnjrnl_parser/
+  Analyzer/srum_parser/
+  Analyzer/browser_history_parser/
+  ...                          one directory per analyzer that produced output
 ```
+
+The run directory is created fresh every time: if a directory of that name
+already exists, FIR takes the next free name rather than writing into it, because
+the run ends by archiving that path and then deleting it.
 
 When compression is enabled, FIR writes:
 
@@ -234,6 +263,7 @@ FIR/
     console/           Console/window handling
     logging/           Session logger
     module/            Shared collector/analyzer module contracts and registry
+    ntfs/              Record primitives shared by the raw-volume reader and the parsers
     output/            Manifest, archive, summary, and output writer
     platform/          Host/platform helpers
     resource/          Resource config, estimates, and disk checks

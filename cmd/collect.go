@@ -49,7 +49,8 @@ Available artifact names:
   secure_sds_parser, prefetch_parser, amcache_parser,
   browser_history_parser, browser_cookies_parser,
   browser_credentials_parser, browser_profile_parser, srum_parser,
-  shimcache_parser, eventlog_parser, wmi_parser
+  shimcache_parser, userassist_parser, recentdocs_parser,
+  runmru_parser, eventlog_parser, wmi_parser
 
 Category shortcuts:
   all       - All modules
