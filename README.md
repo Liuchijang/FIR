@@ -87,7 +87,7 @@ keeps stack traces readable.
 
 ```powershell
 .\tyto.exe --version
-# tyto version 1.3
+# tyto version 2.0
 ```
 
 There is nothing to install alongside it. Every dependency is pure Go, so the
