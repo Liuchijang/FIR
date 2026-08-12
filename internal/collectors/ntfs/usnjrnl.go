@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"unsafe"
 
-	"github.com/Liuchijang/FIR/internal/logging"
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/logging"
+	"github.com/Liuchijang/Tyto/internal/module"
 	"golang.org/x/sys/windows"
 )
 

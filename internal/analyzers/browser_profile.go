@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	browsercollector "github.com/Liuchijang/FIR/internal/collectors/browser"
-	"github.com/Liuchijang/FIR/internal/module"
+	browsercollector "github.com/Liuchijang/Tyto/internal/collectors/browser"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 func init() { module.RegisterAnalyzer(&browserProfileParser{}) }

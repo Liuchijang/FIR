@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	browsercollector "github.com/Liuchijang/FIR/internal/collectors/browser"
-	"github.com/Liuchijang/FIR/internal/module"
+	browsercollector "github.com/Liuchijang/Tyto/internal/collectors/browser"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 // Downloads live in the same History database as visits, which is why they are
@@ -127,7 +127,7 @@ var chromiumDownloadsTable = browserTable{
 		rawColumn("http_method"),
 		rawColumn("etag"),
 		// Chrome stores the server's Last-Modified header verbatim, so this is a
-		// header string rather than a timestamp FIR can normalise.
+		// header string rather than a timestamp Tyto can normalise.
 		rawColumn("last_modified"),
 		rawColumn("by_ext_id"),
 		rawColumn("by_ext_name"),

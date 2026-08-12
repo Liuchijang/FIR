@@ -1,12 +1,12 @@
 // Package module defines the core module contract and associated types used by
-// collectors and analyzers in FIR.
+// collectors and analyzers in Tyto.
 package module
 
 import (
 	"context"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/artifact"
+	"github.com/Liuchijang/Tyto/internal/artifact"
 )
 
 const (

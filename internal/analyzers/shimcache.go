@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/ntfs"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/ntfs"
 	winreg "golang.org/x/sys/windows/registry"
 )
 
@@ -36,6 +36,12 @@ type shimCacheRow struct {
 }
 
 const (
+	// shimNotAvailable marks a field this ShimCache format does not carry, so a
+	// blank cell keeps meaning "the format has it and this entry did not". It is
+	// deliberately not used for LastModifiedUTC/LastUpdateUTC: those are timestamp
+	// columns, and the invariant in common.go says a timestamp column holds an
+	// instant or nothing — "N/A" is exactly the cell that costs an importer the
+	// whole file.
 	shimNotAvailable = "N/A"
 
 	shimMagicNt52 = 0xbadc0ffe
@@ -309,7 +315,7 @@ func parseWin10ShimEntries(data []byte, statsSize int, format string, source shi
 
 		path := ntfs.UTF16String(entry[2 : 2+pathLen])
 		cursor := 2 + pathLen
-		lastModified := formatFiletime(binary.LittleEndian.Uint64(entry[cursor:cursor+8]), shimNotAvailable)
+		lastModified := formatFiletime(binary.LittleEndian.Uint64(entry[cursor:cursor+8]), "")
 		cursor += 8
 
 		if cursor+4 > len(entry) {
@@ -323,7 +329,6 @@ func parseWin10ShimEntries(data []byte, statsSize int, format string, source shi
 
 		rows = append(rows, shimCacheRow{
 			LastModifiedUTC: lastModified,
-			LastUpdateUTC:   shimNotAvailable,
 			Path:            strings.ReplaceAll(path, `\??\`, ""),
 			FileSize:        shimNotAvailable,
 			ExecFlag:        shimNotAvailable,
@@ -380,12 +385,11 @@ func parseWin8ShimEntries(data []byte, statsSize int, format string, source shim
 		lastModified := formatFiletimeParts(
 			binary.LittleEndian.Uint32(entry[cursor:cursor+4]),
 			binary.LittleEndian.Uint32(entry[cursor+4:cursor+8]),
-			shimNotAvailable,
+			"",
 		)
 
 		rows = append(rows, shimCacheRow{
 			LastModifiedUTC: lastModified,
-			LastUpdateUTC:   shimNotAvailable,
 			Path:            strings.ReplaceAll(path, `\??\`, ""),
 			FileSize:        shimNotAvailable,
 			ExecFlag:        boolString(flags&0x2 == 0x2),
@@ -451,8 +455,7 @@ func parseLegacyNt61Entries(data []byte, is32Bit bool, source shimCacheSource) (
 		score++
 
 		rows = append(rows, shimCacheRow{
-			LastModifiedUTC: formatFiletimeParts(low, high, shimNotAvailable),
-			LastUpdateUTC:   shimNotAvailable,
+			LastModifiedUTC: formatFiletimeParts(low, high, ""),
 			Path:            strings.ReplaceAll(path, `\??\`, ""),
 			FileSize:        shimNotAvailable,
 			ExecFlag:        boolString(flags&0x2 == 0x2),
@@ -532,7 +535,7 @@ func parseLegacyNt52Entries(data []byte, is32Bit bool, source shimCacheSource) (
 		}
 
 		candidates = append(candidates, candidate{
-			lastMod: formatFiletimeParts(low, high, shimNotAvailable),
+			lastMod: formatFiletimeParts(low, high, ""),
 			path:    strings.ReplaceAll(path, `\??\`, ""),
 			sizeLo:  sizeLo,
 			sizeHi:  sizeHi,
@@ -543,7 +546,6 @@ func parseLegacyNt52Entries(data []byte, is32Bit bool, source shimCacheSource) (
 	for i, item := range candidates {
 		row := shimCacheRow{
 			LastModifiedUTC: item.lastMod,
-			LastUpdateUTC:   shimNotAvailable,
 			Path:            item.path,
 			FileSize:        shimNotAvailable,
 			ExecFlag:        shimNotAvailable,
@@ -584,9 +586,10 @@ func ternary(ok bool, yes, no string) string {
 	return no
 }
 
+// normalizeShimCacheRow fills the fields this format does not carry. The two
+// timestamp columns are left out on purpose — they stay blank, per the timestamp
+// invariant in common.go.
 func normalizeShimCacheRow(row shimCacheRow) shimCacheRow {
-	row.LastModifiedUTC = shimValueOrNA(row.LastModifiedUTC)
-	row.LastUpdateUTC = shimValueOrNA(row.LastUpdateUTC)
 	row.Path = shimValueOrNA(row.Path)
 	row.FileSize = shimValueOrNA(row.FileSize)
 	row.ExecFlag = shimValueOrNA(row.ExecFlag)

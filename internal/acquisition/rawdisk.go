@@ -1,4 +1,4 @@
-// Package acquisition provides low-level Windows disk and volume access for FIR.
+// Package acquisition provides low-level Windows disk and volume access for Tyto.
 package acquisition
 
 import (
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/Liuchijang/FIR/internal/ntfs"
+	"github.com/Liuchijang/Tyto/internal/ntfs"
 	"golang.org/x/sys/windows"
 )
 

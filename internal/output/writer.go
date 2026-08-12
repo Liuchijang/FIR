@@ -1,4 +1,4 @@
-// Package output manages the output directory structure and file writing for FIR.
+// Package output manages the output directory structure and file writing for Tyto.
 package output
 
 import (
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/platform"
+	"github.com/Liuchijang/Tyto/internal/platform"
 )
 
 type Manager struct {
@@ -45,7 +45,7 @@ const maxRunDirAttempts = 64
 // succeeds on a directory that is already there. Adopting an existing directory
 // is not harmless here: the run ends by zipping this path and handing it to
 // RemoveRawOutputDir, so anything that was in it beforehand — an earlier run's
-// evidence, or a second FIR started in the same second — gets archived under
+// evidence, or a second Tyto started in the same second — gets archived under
 // this run's name and then recursively deleted. Two runs cannot collide by
 // accident at second granularity, but "cannot" is not a guard.
 func createRunDir(baseDir, dirName string) (string, error) {

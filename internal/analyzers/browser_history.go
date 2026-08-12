@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	browsercollector "github.com/Liuchijang/FIR/internal/collectors/browser"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
+	browsercollector "github.com/Liuchijang/Tyto/internal/collectors/browser"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/utils"
 	_ "modernc.org/sqlite"
 )
 

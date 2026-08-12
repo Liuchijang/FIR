@@ -10,6 +10,9 @@
 # Tests are kept out of the published tree; they stay local to the working copy.
 *_test.go
 
+# Icon preview sheet, written by tools/mkico -sheet while checking a new drawing
+preview.png
+
 # Runtime output
 DESKTOP-*
 _smoke_*/

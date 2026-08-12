@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/acquisition"
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/acquisition"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 func init() { module.RegisterAnalyzer(&secureSDSParser{}) }

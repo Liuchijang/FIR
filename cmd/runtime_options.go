@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/collection"
-	"github.com/Liuchijang/FIR/internal/resource"
+	"github.com/Liuchijang/Tyto/internal/collection"
+	"github.com/Liuchijang/Tyto/internal/resource"
 )
 
 type runtimeConfig struct {

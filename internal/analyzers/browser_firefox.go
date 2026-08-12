@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	browsercollector "github.com/Liuchijang/FIR/internal/collectors/browser"
-	"github.com/Liuchijang/FIR/internal/module"
+	browsercollector "github.com/Liuchijang/Tyto/internal/collectors/browser"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 // Firefox keeps bookmarks in places.sqlite rather than in a JSON file, split
@@ -184,7 +184,7 @@ type firefoxLoginsFile struct {
 // exportFirefoxLogins writes the saved-login metadata from logins.json.
 //
 // The credentials themselves are encrypted with NSS against key4.db and are not
-// recovered here — FIR does not decrypt browser secrets. What the file
+// recovered here — Tyto does not decrypt browser secrets. What the file
 // establishes without decryption is which sites an account was saved for, when,
 // how often it was used, and whether Firefox flagged the password as breached.
 func exportFirefoxLogins(ctx context.Context, outDir string, profile browsercollector.BrowserProfile) (module.FileInfo, error) {

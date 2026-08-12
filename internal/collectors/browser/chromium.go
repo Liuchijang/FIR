@@ -10,11 +10,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Liuchijang/FIR/internal/acquisition"
-	"github.com/Liuchijang/FIR/internal/logging"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/output"
-	"github.com/Liuchijang/FIR/internal/utils"
+	"github.com/Liuchijang/Tyto/internal/acquisition"
+	"github.com/Liuchijang/Tyto/internal/logging"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/output"
+	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
 const BrowserCollectorName = "browser"
@@ -63,7 +63,7 @@ var chromiumEvidenceFiles = []string{
 // Deliberately absent: IndexedDB, Extension Settings and Cache/Code Cache.
 // The first two nest one directory deeper than this copy reaches, and all three
 // routinely run to hundreds of megabytes per profile — enough to change what a
-// browser collection costs, for artifacts nothing in FIR can parse yet.
+// browser collection costs, for artifacts nothing in Tyto can parse yet.
 var chromiumEvidenceDirs = []string{
 	"Sessions",
 	"Extension Rules",

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/module"
 	winreg "golang.org/x/sys/windows/registry"
 )
 
@@ -212,9 +212,10 @@ func parseUserAssistValue(data []byte) (runCount, focusCount, focusTimeMS, lastE
 	if focusTimeMS == "" {
 		focusTimeMS = "0"
 	}
-	if lastExecutedUTC == "" {
-		lastExecutedUTC = "N/A"
-	}
+	// LastExecutedUTC stays blank when the entry has no FILETIME. It used to read
+	// "N/A", which a consumer that binds the column to a date type rejects the
+	// whole file over — see the timestamp invariant in common.go. 41 of the 123
+	// rows on one host carried it.
 	return runCount, focusCount, focusTimeMS, lastExecutedUTC, format
 }
 

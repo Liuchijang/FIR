@@ -1,4 +1,4 @@
-// Package utils provides Windows-specific utilities for FIR.
+// Package utils provides Windows-specific utilities for Tyto.
 package utils
 
 import (

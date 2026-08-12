@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Liuchijang/FIR/cmd"
-	"github.com/Liuchijang/FIR/internal/console"
+	"github.com/Liuchijang/Tyto/cmd"
+	"github.com/Liuchijang/Tyto/internal/console"
 )
 
 func main() {

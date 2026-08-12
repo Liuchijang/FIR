@@ -5,9 +5,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Liuchijang/FIR/internal/collection"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/tui"
+	"github.com/Liuchijang/Tyto/internal/collection"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/tui"
 )
 
 // startCollectionCmd runs collection in the background and streams progress over updates.

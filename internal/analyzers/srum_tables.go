@@ -36,7 +36,7 @@ var srumTableNames = map[string]string{
 // registration under srumExtensionsKey, not from a list shipped in this file.
 //
 // An earlier version transcribed ten further GUID-to-name pairs out of
-// srum-dump's configuration. That tool is GPL-3.0 and FIR is not, and while a
+// srum-dump's configuration. That tool is GPL-3.0 and Tyto is not, and while a
 // Windows component's name is not itself much of a creative work, the selection
 // and arrangement of a provider table plausibly is. Reading the registry gets the
 // same information from Microsoft, covers providers no third-party list knows
@@ -61,11 +61,23 @@ var srumFiletimeColumns = map[string]bool{
 	"StartTime":        true,
 	"EndTime":          true,
 	"ConnectStartTime": true,
+	// Energy Usage's battery-event time. It is stored the same way as the three
+	// above and was being exported as the raw tick count under a UTC header,
+	// which is precisely the value a consumer that types the column rejects.
+	"EventTimestamp": true,
+}
+
+// srumTimestampColumn reports whether a column is exported under a header this
+// package promises holds an instant. Everything the renaming table marks with a
+// UTC suffix qualifies, not just the FILETIME columns, so a value that arrives
+// in an unexpected ESE type is blanked rather than printed as a number.
+func srumTimestampColumn(column string) bool {
+	return srumFiletimeColumns[column] || strings.HasSuffix(srumColumnHeader(column), "UTC")
 }
 
 // srumColumnHeaders renames the ESE column names that do not say what they hold.
 //
-// FIR's other analyzers already name their columns descriptively rather than
+// Tyto's other analyzers already name their columns descriptively rather than
 // after the on-disk structure — mft_parser writes SI_CreatedUTC, not the
 // attribute offset — and the UTC suffix on every timestamp is what makes an
 // output directory joinable. Anything not listed keeps its ESE name, which is

@@ -2,7 +2,7 @@
 
 package resource
 
-import "github.com/Liuchijang/FIR/internal/acquisition"
+import "github.com/Liuchijang/Tyto/internal/acquisition"
 
 // mftPerDriveFallback is used only for fixed drives whose $MFT size could not be
 // measured directly (e.g. access denied to the raw volume), so a multi-drive

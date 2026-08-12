@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/module"
 	winreg "golang.org/x/sys/windows/registry"
 )
 

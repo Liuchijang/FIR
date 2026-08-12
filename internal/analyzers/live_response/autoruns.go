@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
 func init() { module.RegisterAnalyzer(&autorunsAnalyzer{}) }
@@ -27,6 +27,7 @@ func (a *autorunsAnalyzer) Analyze(ctx context.Context, req module.AnalyzeReques
 	script := `
 $ErrorActionPreference = 'SilentlyContinue'
 $outDir = ` + utils.PSQuote(outDir) + `
+` + utils.PSTimestampFunction + `
 
 $servicesCsv = Join-Path $outDir 'services.csv'
 $runKeysCsv = Join-Path $outDir 'run_keys.csv'
@@ -82,8 +83,8 @@ $tasks = foreach ($task in Get-ScheduledTask) {
         TaskName      = $task.TaskName
         TaskPath      = $task.TaskPath
         State         = $info.State
-        LastRunTime   = $info.LastRunTime
-        NextRunTime   = $info.NextRunTime
+        LastRunTimeUTC = ConvertTo-TytoUtc $info.LastRunTime
+        NextRunTimeUTC = ConvertTo-TytoUtc $info.NextRunTime
         LastTaskResult= $info.LastTaskResult
         Author        = $task.Principal.UserId
         RunLevel      = $task.Principal.RunLevel
@@ -116,7 +117,7 @@ $startupRows = foreach ($loc in $startupLocations) {
             Name         = $_.Name
             FullName     = $_.FullName
             Length       = if ($_.PSIsContainer) { '' } else { $_.Length }
-            LastWriteTime= $_.LastWriteTime
+            LastWriteTimeUTC = ConvertTo-TytoUtc $_.LastWriteTime
             IsDirectory  = $_.PSIsContainer
         }
     }

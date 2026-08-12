@@ -11,9 +11,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/logging"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
+	"github.com/Liuchijang/Tyto/internal/logging"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
 func init() { module.RegisterArtifact("memory", &memoryCollector{}) }
@@ -41,7 +41,7 @@ func (c *memoryCollector) Collect(ctx context.Context, req module.CollectRequest
 
 	winpmemPath, err := findWinpmem()
 	if err != nil {
-		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("winpmem not found: %w\nPlace winpmem in the same directory as FIR or add it to PATH", err).Error()}
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("winpmem not found: %w\nPlace winpmem in the same directory as Tyto or add it to PATH", err).Error()}
 	}
 	// Info, not Debug: the imaging tool is part of the acquisition's chain of
 	// custody, and findWinpmem picks it from three different places. Which
@@ -69,7 +69,7 @@ func (c *memoryCollector) Collect(ctx context.Context, req module.CollectRequest
 		return module.CollectResult{OutputPath: outDir, Error: "memory dump is empty (0 bytes)"}
 	}
 
-	// This is the one artifact FIR cannot hash while writing it — winpmem writes
+	// This is the one artifact Tyto cannot hash while writing it — winpmem writes
 	// the image from a child process — so the digest costs a second full pass.
 	hash, err := utils.HashFile(outputPath)
 	hashErr := ""

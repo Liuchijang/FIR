@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 func ResolveModules(artifactStr string) ([]module.Module, error) {
@@ -38,7 +38,7 @@ func ResolveModules(artifactStr string) ([]module.Module, error) {
 
 		mod, err := module.Get(name)
 		if err != nil {
-			return nil, fmt.Errorf("unknown artifact or category: %s\nUse 'fir collect --help' to see available artifacts", name)
+			return nil, fmt.Errorf("unknown artifact or category: %s\nUse 'tyto collect --help' to see available artifacts", name)
 		}
 		if !seen[mod.Name()] {
 			result = append(result, mod)

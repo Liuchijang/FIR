@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/platform"
-	"github.com/Liuchijang/FIR/internal/resource"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
+	"github.com/Liuchijang/Tyto/internal/resource"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wordwrap"
 )

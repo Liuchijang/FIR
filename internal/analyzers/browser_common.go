@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	browsercollector "github.com/Liuchijang/FIR/internal/collectors/browser"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/output"
+	browsercollector "github.com/Liuchijang/Tyto/internal/collectors/browser"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/output"
 )
 
 // browserProfileSource is one profile an analyzer will read, whether it came

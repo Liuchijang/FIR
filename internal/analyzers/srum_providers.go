@@ -15,7 +15,7 @@ import (
 // Reading it makes the provider names Microsoft's own data rather than a list
 // transcribed from another tool, and it means a provider introduced by a future
 // Windows release gets named without this file being touched. The key is
-// readable only to SYSTEM and Administrators, which FIR already requires.
+// readable only to SYSTEM and Administrators, which Tyto already requires.
 const srumExtensionsKey = `Microsoft\Windows NT\CurrentVersion\SRUM\Extensions`
 
 // srumProviderNameValues are the value names checked, in order, for something

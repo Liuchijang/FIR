@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 // RunPowerShell executes script via a non-interactive powershell.exe, returning
@@ -26,6 +26,36 @@ func RunPowerShell(ctx context.Context, script string) error {
 func PSQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
+
+// PSTimestampFunction defines ConvertTo-TytoUtc, the PowerShell counterpart of
+// the analyzers' formatTime.
+//
+// Every timestamp Tyto writes is RFC3339 in UTC, and a column named after a
+// timestamp holds one of those or nothing at all. A PowerShell-hosted analyzer
+// gets neither for free: piping a DateTime into Export-Csv renders it with the
+// session's current culture, so the same column came out "7/12/2026 9:14:02 AM"
+// on one host and would come out "12/07/2026 09:14:02" on another — not
+// joinable against the Go-side analyzers, and rejected outright by an importer
+// that types the column.
+//
+// Scripts prepend this and wrap every date-bearing property in it.
+const PSTimestampFunction = `
+function ConvertTo-TytoUtc {
+    param($Value)
+
+    if ($null -eq $Value) { return '' }
+    $dt = $Value -as [datetime]
+    if ($null -eq $dt) { return '' }
+    # Get-NetTCPConnection reports an unset CreationTime as FILETIME zero, which
+    # surfaces as a real DateTime in 1601 and would otherwise be exported as a
+    # connection opened four centuries ago.
+    if ($dt.Year -lt 1602 -or $dt.Year -gt 9999) { return '' }
+    if ($dt.Kind -eq [System.DateTimeKind]::Unspecified) {
+        $dt = [datetime]::SpecifyKind($dt, [System.DateTimeKind]::Local)
+    }
+    return $dt.ToUniversalTime().ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+}
+`
 
 // CollectGeneratedCSVs returns FileInfo for every .csv file directly inside
 // dir, sorted by path. Used by analyzers that let a PowerShell script write
