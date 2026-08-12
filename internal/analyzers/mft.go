@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/acquisition"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/ntfs"
+	"github.com/Liuchijang/Tyto/internal/acquisition"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/ntfs"
 )
 
 const mftRecordSize = 1024

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 func init() { module.RegisterAnalyzer(&prefetchParser{}) }

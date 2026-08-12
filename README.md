@@ -1,35 +1,37 @@
-# FIR
+# Tyto
 
 <div align="center">
 
-[![GitHub stars](https://img.shields.io/github/stars/Liuchijang/FIR?style=for-the-badge)](https://github.com/Liuchijang/FIR/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/Liuchijang/FIR?style=for-the-badge)](https://github.com/Liuchijang/FIR/network)
-[![GitHub issues](https://img.shields.io/github/issues/Liuchijang/FIR?style=for-the-badge)](https://github.com/Liuchijang/FIR/issues)
-[![GitHub license](https://img.shields.io/github/license/Liuchijang/FIR?style=for-the-badge)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/Liuchijang/Tyto?style=for-the-badge)](https://github.com/Liuchijang/Tyto/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/Liuchijang/Tyto?style=for-the-badge)](https://github.com/Liuchijang/Tyto/network)
+[![GitHub issues](https://img.shields.io/github/issues/Liuchijang/Tyto?style=for-the-badge)](https://github.com/Liuchijang/Tyto/issues)
+[![GitHub license](https://img.shields.io/github/license/Liuchijang/Tyto?style=for-the-badge)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev/)
 
-**Freedom Incident Response: a Windows DFIR artifact collection and triage tool written in Go.**
+**A Windows DFIR artifact collection and triage tool written in Go.**
+
+*Named for* Tyto alba, *the barn owl: quiet on the wire, everything on the record.*
 
 </div>
 
-![FIR interactive collection progress](docs/assets/fir-interactive-progress.png)
+![Tyto interactive collection progress](docs/assets/tyto-interactive-progress.png)
 
 ## Overview
 
-FIR is a Windows first-response triage tool: it collects forensic artifacts, parses them into CSV, and packages the run with integrity metadata. Collectors and analyzers sit behind a shared module contract, and one engine drives both an interactive terminal UI and a flag-driven CLI.
+Tyto is a Windows first-response triage tool: it collects forensic artifacts, parses them into CSV, and packages the run with integrity metadata. Collectors and analyzers sit behind a shared module contract, and one engine drives both an interactive terminal UI and a flag-driven CLI.
 
 ## Features
 
-- **Two modes**: an interactive Bubble Tea workflow, or `fir collect` for automation. Collectors run alone by default; `--analyze` adds the matching parsers.
+- **Two modes**: an interactive Bubble Tea workflow, or `tyto collect` for automation. Collectors run alone by default; `--analyze` adds the matching parsers.
 - **Native Windows acquisition**: backup semantics, registry hive save APIs, and raw NTFS reads — `$MFT`, `$UsnJrnl:$J` and `$Secure:$SDS` from every fixed drive, not just `C:`. Requires Administrator, and enables the backup, restore, security and debug privileges at startup.
 - **Parses what it collects**: `$MFT`, the USN journal, `$Secure:$SDS`, EVTX, Amcache, Prefetch, ShimCache, UserAssist, RecentDocs, RunMRU, WMI, the SRUM database, and browser history, downloads, cookies, saved-login metadata, autofill, bookmarks, extensions and profile settings. Every timestamp column in every CSV uses one RFC3339 UTC layout, so the halves of an output directory join on time without reformatting.
-- **Self-tuning concurrency**: no worker knob. FIR surveys the drives a run reads and writes, then picks a worker count per phase — collection backs off on spinning media, analysis scales with free RAM. The numbers and the reasoning land in `manifest.json`.
+- **Self-tuning concurrency**: no worker knob. Tyto surveys the drives a run reads and writes, then picks a worker count per phase — collection backs off on spinning media, analysis scales with free RAM. The numbers and the reasoning land in `manifest.json`.
 - **Caps that reach child processes**: CPU and disk limits go through a Windows Job Object, so `winpmem` and the PowerShell-hosted analyzers are covered rather than quietly exempt. Disk throttling is opt-in.
 - **Partial-failure tolerant**: a module fails only if it collected nothing; partial errors surface as warnings instead of hiding the artifacts that did come through.
 - **Hashed on the way out**: every artifact is SHA-256'd as it is written rather than read back afterwards, including the ZIP itself. `manifest.json` records a digest per file, and browser artifacts are qualified by user, browser and profile so an entry names exactly one file.
 - **Structured output**: `manifest.json`, `summary.txt`, `collector.log`, a storage estimate before the run, and an optional ZIP with a `.sha256` sidecar.
 
-FIR does not decrypt browser secrets. Cookie values and saved passwords are exported as hex beside a column naming the scheme that wrapped them, because Chrome 127+ App-Bound Encryption is tied to the machine that created it and is worth telling apart from the older DPAPI-keyed form before anyone spends time on recovery. The encrypted stores themselves are collected intact.
+Tyto does not decrypt browser secrets. Cookie values and saved passwords are exported as hex beside a column naming the scheme that wrapped them, because Chrome 127+ App-Bound Encryption is tied to the machine that created it and is worth telling apart from the older DPAPI-keyed form before anyone spends time on recovery. The encrypted stores themselves are collected intact.
 
 ## Tech Stack
 
@@ -49,14 +51,14 @@ FIR does not decrypt browser secrets. Cookie values and saved passwords are expo
 ![SQLite](https://img.shields.io/badge/modernc.org%2Fsqlite-Embedded_SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
 ![go-ese](https://img.shields.io/badge/go--ese-ESE%2FJET_Blue-4B8BBE?style=for-the-badge)
 
-`modernc.org/sqlite` reads browser databases and `www.velocidex.com/golang/go-ese` reads the SRUM database's ESE format. Both are pure Go, so a release build stays a single static `fir.exe` with no runtime dependencies.
+`modernc.org/sqlite` reads browser databases and `www.velocidex.com/golang/go-ese` reads the SRUM database's ESE format. Both are pure Go, so a release build stays a single static `tyto.exe` with no runtime dependencies.
 
 ## Quick Start
 
 ### Prerequisites
 
 - **Operating system**: Windows 10/11 or Windows Server 2016+
-- **Privileges**: Administrator is required — FIR exits immediately with an error if not run elevated
+- **Privileges**: Administrator is required — Tyto exits immediately with an error if not run elevated
 - **Go**: 1.26+ for building from source
 
 ### Installation
@@ -64,72 +66,108 @@ FIR does not decrypt browser secrets. Cookie values and saved passwords are expo
 1. Clone the repository:
 
 ```powershell
-git clone https://github.com/Liuchijang/FIR.git
-cd FIR
+git clone https://github.com/Liuchijang/Tyto.git
+cd Tyto
 ```
 
 2. Build the executable:
 
 ```powershell
-go build -trimpath -buildvcs=false -ldflags "-s -w" -o fir.exe .
+go build -trimpath -buildvcs=false -ldflags "-s -w" -o tyto.exe .
 ```
+
+`-trimpath` keeps the build machine's directory layout out of the binary,
+`-buildvcs=false` keeps the commit hash out of it, and `-ldflags "-s -w"` drops
+the symbol table and DWARF data. Together they take the binary from 13.9 MB to
+**9.4 MB**, a third smaller, and stop it carrying anything about where it was
+built. Drop all three while developing — `go build -o tyto.exe .` is faster and
+keeps stack traces readable.
+
+3. Check it runs:
+
+```powershell
+.\tyto.exe --version
+# tyto version 2.0
+```
+
+There is nothing to install alongside it. Every dependency is pure Go, so the
+result is one static executable — the only optional external file is `winpmem`
+for RAM acquisition (see below).
+
+The application icon needs no build step either: the Go linker picks up any
+`*.syso` next to the main package, and `tyto_windows_amd64.syso` is committed.
+
+To change the icon, redraw `tyto.png` and regenerate both files:
+
+```powershell
+go run ./tools/mkico -in tyto.png -out tyto.ico -sheet preview.png
+go run github.com/akavel/rsrc@latest -ico tyto.ico -arch amd64 -o tyto_windows_amd64.syso
+```
+
+`mkico` crops the drawing to a centred square and area-averages it down to the
+nine sizes Windows chooses between, keeping the source's transparency. `-sheet`
+writes a preview over a light and a dark surface, which is worth looking at: the
+owl is a black silhouette, so on a dark-mode taskbar its body merges into the
+background and the small sizes read as two floating eyes. `-bg RRGGBB` flats it
+onto a colour if that is ever unwanted. `rsrc` runs via `go run pkg@version`, so
+neither tool is a module dependency.
 
 ## Usage
 
 ### Interactive Mode
 
-Run FIR without a subcommand:
+Run Tyto without a subcommand:
 
 ```powershell
-.\fir.exe
+.\tyto.exe
 ```
 
 Interactive mode lets you select modules, review runtime configuration, watch live module status, and view the final collection summary.
 
 ### Flag Mode
 
-`fir collect` runs collector modules only by default — analyzers (`*_parser`, `autoruns`, `process_explorer`, etc.) are skipped even if a category or `all` would otherwise include them.
+`tyto collect` runs collector modules only by default — analyzers (`*_parser`, `autoruns`, `process_explorer`, etc.) are skipped even if a category or `all` would otherwise include them.
 
 Collect specific artifacts:
 
 ```powershell
-.\fir.exe collect --artifact registry,eventlog,prefetch
+.\tyto.exe collect --artifact registry,eventlog,prefetch
 ```
 
 Collect by category:
 
 ```powershell
-.\fir.exe collect --artifact ntfs,execution
+.\tyto.exe collect --artifact ntfs,execution
 ```
 
 Collect everything:
 
 ```powershell
-.\fir.exe collect --artifact all
+.\tyto.exe collect --artifact all
 ```
 
 Collect and then run the matching analyzers:
 
 ```powershell
-.\fir.exe collect --artifact eventlog --analyze
+.\tyto.exe collect --artifact eventlog --analyze
 ```
 
 Use a custom output directory and timeout:
 
 ```powershell
-.\fir.exe collect --artifact registry,eventlog --output C:\triage --timeout 10m
+.\tyto.exe collect --artifact registry,eventlog --output C:\triage --timeout 10m
 ```
 
 Run with resource controls:
 
 ```powershell
-.\fir.exe collect --artifact all --output E:\evidence --cpu-limit 60 --disk-io 80MB
+.\tyto.exe collect --artifact all --output E:\evidence --cpu-limit 60 --disk-io 80MB
 ```
 
 Disable compression:
 
 ```powershell
-.\fir.exe collect --artifact ntfs --no-compress
+.\tyto.exe collect --artifact ntfs --no-compress
 ```
 
 ### Common Flags
@@ -141,8 +179,8 @@ Disable compression:
 | `-a, --artifact` | Comma-separated list of artifacts or categories |
 | `--analyze` | Also run the analyzer modules for the selected artifacts/categories (default: collect only) |
 | `-t, --timeout` | Optional timeout per module; `0` disables timeout |
-| `--cpu-limit` | CPU limit percentage, applied to FIR and every process it spawns via a Windows Job Object |
-| `--disk-io` | Cap disk bandwidth for FIR and every process it spawns, for example `80MB`. No cap by default |
+| `--cpu-limit` | CPU limit percentage, applied to Tyto and every process it spawns via a Windows Job Object |
+| `--disk-io` | Cap disk bandwidth for Tyto and every process it spawns, for example `80MB`. No cap by default |
 | `--compress` | Compress run directory after collection; enabled by default |
 | `--no-compress` | Disable run directory compression |
 
@@ -219,10 +257,10 @@ HOSTNAME_YYYYMMDD_HHMMSS/
 ```
 
 The run directory is created fresh every time: if a directory of that name
-already exists, FIR takes the next free name rather than writing into it, because
+already exists, Tyto takes the next free name rather than writing into it, because
 the run ends by archiving that path and then deleting it.
 
-When compression is enabled, FIR writes:
+When compression is enabled, Tyto writes:
 
 ```text
 HOSTNAME_YYYYMMDD_HHMMSS.zip
@@ -241,9 +279,9 @@ A RAM dump is high-entropy and barely compresses, while zipping it would need a 
 
 ## RAM Acquisition
 
-FIR does not bundle `winpmem`. To enable RAM acquisition, place `winpmem_mini_x64.exe` in one of these locations:
+Tyto does not bundle `winpmem`. To enable RAM acquisition, place `winpmem_mini_x64.exe` in one of these locations:
 
-- Same directory as `fir.exe`
+- Same directory as `tyto.exe`
 - Current working directory
 - System `PATH`
 
@@ -252,7 +290,7 @@ If `winpmem` is not found, the RAM module fails gracefully and records the error
 ## Project Structure
 
 ```text
-FIR/
+Tyto/
   cmd/                 Cobra commands and runtime option parsing
   internal/
     acquisition/       Low-level Windows and raw disk acquisition helpers
@@ -282,7 +320,7 @@ main -> cmd -> module registry -> collection runner -> collectors/analyzers -> o
 
 ## Security and Legal Notice
 
-FIR is intended for authorized forensic investigation and incident response only. Run it only on systems where you have explicit permission to collect artifacts.
+Tyto is intended for authorized forensic investigation and incident response only. Run it only on systems where you have explicit permission to collect artifacts.
 
 ## Contributing
 
@@ -298,14 +336,14 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## Support
 
-- Issues: [GitHub Issues](https://github.com/Liuchijang/FIR/issues)
-- Repository: [Liuchijang/FIR](https://github.com/Liuchijang/FIR)
+- Issues: [GitHub Issues](https://github.com/Liuchijang/Tyto/issues)
+- Repository: [Liuchijang/Tyto](https://github.com/Liuchijang/Tyto)
 
 ---
 
 <div align="center">
 
-**Star this repository if FIR is useful for your incident response workflow.**
+**Star this repository if Tyto is useful for your incident response workflow.**
 
 Made by [Liuchijang](https://github.com/Liuchijang)
 

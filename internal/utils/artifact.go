@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 func FileInfoFromPath(path string) (module.FileInfo, error) {

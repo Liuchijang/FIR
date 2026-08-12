@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/utils"
 	"github.com/Velocidex/ordereddict"
 	ese "www.velocidex.com/golang/go-ese/parser"
 )
@@ -318,7 +318,7 @@ func srumConnectStopTime(row *ordereddict.Dict) string {
 // srumDurationValue renders a seconds count as a duration.
 //
 // A present zero renders as "0s" rather than blank: an empty cell means the value
-// was absent everywhere else in FIR's output, and a counter that really is zero
+// was absent everywhere else in Tyto's output, and a counter that really is zero
 // is a different statement from one that was never recorded.
 func srumDurationValue(row *ordereddict.Dict, column string) string {
 	seconds, ok := srumInt32(row, column)
@@ -384,13 +384,12 @@ func srumFormatValue(column string, value any) string {
 	if value == nil {
 		return ""
 	}
-	if srumFiletimeColumns[column] {
-		if raw, ok := value.(uint64); ok {
-			return formatFiletime(raw, "")
-		}
-		if raw, ok := value.(int64); ok && raw > 0 {
-			return formatFiletime(uint64(raw), "")
-		}
+	// A timestamp column never falls through to the numeric cases below. It used
+	// to whenever the ESE type was not the one expected, and the cell then held
+	// the raw tick count under a UTC header — unusable to anything that types the
+	// column, and indistinguishable from a byte count to anything that does not.
+	if srumTimestampColumn(column) {
+		return srumFormatTimestamp(value)
 	}
 
 	switch typed := value.(type) {
@@ -438,6 +437,29 @@ func srumFormatValue(column string, value any) string {
 		return strconv.FormatFloat(typed, 'f', -1, 64)
 	default:
 		return fmt.Sprintf("%v", typed)
+	}
+}
+
+// srumFormatTimestamp renders a cell bound for a UTC column. The reader hands
+// back a decoded time.Time for an ESE DateTime column and the underlying integer
+// for the FILETIME ones, so both have to be accepted; anything else is a column
+// whose storage this code has misread, and an empty cell says so honestly.
+func srumFormatTimestamp(value any) string {
+	switch typed := value.(type) {
+	case time.Time:
+		return formatTime(typed, "")
+	case uint64:
+		if typed == eseNullFill64 {
+			return ""
+		}
+		return formatFiletime(typed, "")
+	case int64:
+		if typed <= 0 || uint64(typed) == eseNullFill64 {
+			return ""
+		}
+		return formatFiletime(uint64(typed), "")
+	default:
+		return ""
 	}
 }
 

@@ -1,4 +1,4 @@
-// Package collection orchestrates FIR artifact collection independently of CLI/TUI.
+// Package collection orchestrates Tyto artifact collection independently of CLI/TUI.
 package collection
 
 import (
@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/logging"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/output"
-	"github.com/Liuchijang/FIR/internal/platform"
-	"github.com/Liuchijang/FIR/internal/resource"
+	"github.com/Liuchijang/Tyto/internal/logging"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/output"
+	"github.com/Liuchijang/Tyto/internal/platform"
+	"github.com/Liuchijang/Tyto/internal/resource"
 )
 
 const DefaultTimeout = 0

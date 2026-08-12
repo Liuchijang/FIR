@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/acquisition"
-	"github.com/Liuchijang/FIR/internal/logging"
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/acquisition"
+	"github.com/Liuchijang/Tyto/internal/logging"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 // driveCollector extracts one artifact from one volume.

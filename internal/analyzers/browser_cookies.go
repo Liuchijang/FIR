@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 func init() { module.RegisterAnalyzer(&browserCookiesParser{}) }
@@ -42,7 +42,7 @@ var cookieSourceScheme = map[int64]string{
 
 // chromiumCookiesTable covers every Chrome cookie schema in circulation.
 //
-// FIR does not decrypt cookie values. Since Chrome 80 they are wrapped in
+// Tyto does not decrypt cookie values. Since Chrome 80 they are wrapped in
 // AES-256-GCM under a key that lives in Local State, and the metadata is what
 // answers the usual questions anyway: which sites the browser held state for,
 // when each cookie was created, and when it was last sent.

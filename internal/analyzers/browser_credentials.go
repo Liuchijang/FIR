@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 func init() { module.RegisterAnalyzer(&browserCredentialsParser{}) }
@@ -25,7 +25,7 @@ func (c *browserCredentialsParser) Description() string {
 
 // chromiumLoginsTable reads the Login Data database.
 //
-// FIR does not recover passwords. password_value is exported as hex with a column
+// Tyto does not recover passwords. password_value is exported as hex with a column
 // naming the scheme that wrapped it, and the collector keeps Login Data itself
 // intact, so nothing here prevents recovery by other means later.
 //

@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/collection"
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/collection"
+	"github.com/Liuchijang/Tyto/internal/module"
 	"github.com/spf13/cobra"
 )
 
@@ -30,11 +30,11 @@ var collectCmd = &cobra.Command{
 	Long: `Collect specific forensic artifacts using command-line flags.
 
 Examples:
-  fir collect --artifact registry,eventlog,prefetch
-  fir collect --artifact ram,mft,registry --output C:\triage --timeout 10m
-  fir collect --artifact all --cpu-limit 60 --disk-io 80MB
-  fir collect --artifact all --compress
-  fir collect --artifact eventlog --analyze
+  tyto collect --artifact registry,eventlog,prefetch
+  tyto collect --artifact ram,mft,registry --output C:\triage --timeout 10m
+  tyto collect --artifact all --cpu-limit 60 --disk-io 80MB
+  tyto collect --artifact all --compress
+  tyto collect --artifact eventlog --analyze
 
 By default, --artifact only runs collector modules (the ones that acquire raw
 artifacts) — analyzer modules (*_parser, autoruns, process_explorer, etc.) are
@@ -72,7 +72,7 @@ func init() {
 	collectCmd.Flags().BoolVar(&analyzeFlag, "analyze", false, "Also run the analyzer modules for the selected artifacts/categories (default: collect only)")
 	collectCmd.Flags().DurationVarP(&timeoutFlag, "timeout", "t", collection.DefaultTimeout, "Optional timeout per module (0 disables timeout)")
 	collectCmd.Flags().IntVar(&cpuLimitFlag, "cpu-limit", 0, "CPU limit percentage")
-	collectCmd.Flags().StringVar(&diskIOFlag, "disk-io", "", "Cap disk bandwidth for FIR and its child processes, e.g. 80MB (default: no cap)")
+	collectCmd.Flags().StringVar(&diskIOFlag, "disk-io", "", "Cap disk bandwidth for Tyto and its child processes, e.g. 80MB (default: no cap)")
 	collectCmd.Flags().BoolVar(&compressFlag, "compress", true, "Compress run directory after collection")
 	collectCmd.Flags().BoolVar(&noCompressFlag, "no-compress", false, "Disable run directory compression")
 	collectCmd.MarkFlagRequired("artifact")

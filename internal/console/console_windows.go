@@ -275,7 +275,7 @@ func shouldPauseBeforeExit() bool {
 		return false
 	}
 
-	// If FIR is the only process attached to this console, it was likely launched
+	// If Tyto is the only process attached to this console, it was likely launched
 	// by Explorer / Right Click and should wait for user acknowledgement.
 	return r1 == 1
 }

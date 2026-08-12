@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Liuchijang/FIR/internal/logging"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
+	"github.com/Liuchijang/Tyto/internal/logging"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
 func init() { module.RegisterArtifact("eventlog", &eventLogCollector{}) }

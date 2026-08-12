@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/logging"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/output"
-	"github.com/Liuchijang/FIR/internal/platform"
+	"github.com/Liuchijang/Tyto/internal/logging"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/output"
+	"github.com/Liuchijang/Tyto/internal/platform"
 )
 
 func runModules(ctx context.Context, modules []module.Module, mgr *output.Manager, opts Options) []module.Result {

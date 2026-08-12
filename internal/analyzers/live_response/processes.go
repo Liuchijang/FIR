@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
 func init() { module.RegisterAnalyzer(&processExplorerAnalyzer{}) }
@@ -27,6 +27,7 @@ func (a *processExplorerAnalyzer) Analyze(ctx context.Context, req module.Analyz
 	script := `
 $ErrorActionPreference = 'SilentlyContinue'
 $outDir = ` + utils.PSQuote(outDir) + `
+` + utils.PSTimestampFunction + `
 
 $processCsv = Join-Path $outDir 'processes.csv'
 $moduleCsv = Join-Path $outDir 'process_modules.csv'
@@ -48,7 +49,7 @@ $procRows = foreach ($p in $procs) {
         Name            = $p.Name
         ExecutablePath  = $p.ExecutablePath
         CommandLine     = $p.CommandLine
-        CreationDate    = $p.CreationDate
+        CreationDateUTC = ConvertTo-TytoUtc $p.CreationDate
         SessionId       = $p.SessionId
         ThreadCount     = $p.ThreadCount
         HandleCount     = $p.HandleCount
@@ -87,7 +88,10 @@ function New-ConnRow {
         [string]$RemoteAddress,
         [string]$RemotePort,
         [string]$State,
-        [string]$CreationTime
+        # Already rendered by ConvertTo-TytoUtc at the call site: a DateTime bound
+        # to a [string] parameter would be stringified with the current culture
+        # before this function ever saw it.
+        [string]$CreationTimeUTC
     )
 
     $proc = $procMap[[int]$ProcessId]
@@ -102,7 +106,7 @@ function New-ConnRow {
         RemoteAddress  = $RemoteAddress
         RemotePort     = $RemotePort
         State          = $State
-        CreationTime   = $CreationTime
+        CreationTimeUTC = $CreationTimeUTC
     }
 }
 
@@ -135,7 +139,7 @@ function Get-ConnectionRowsFromNetCmdlets {
     $tcpCmd = Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue
     if ($tcpCmd) {
         foreach ($c in Get-NetTCPConnection -ErrorAction SilentlyContinue) {
-            $rows += New-ConnRow 'TCP' $c.OwningProcess $c.LocalAddress $c.LocalPort $c.RemoteAddress $c.RemotePort $c.State $c.CreationTime
+            $rows += New-ConnRow 'TCP' $c.OwningProcess $c.LocalAddress $c.LocalPort $c.RemoteAddress $c.RemotePort $c.State (ConvertTo-TytoUtc $c.CreationTime)
         }
     }
 

@@ -12,9 +12,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/output"
-	"github.com/Liuchijang/FIR/internal/resource"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/output"
+	"github.com/Liuchijang/Tyto/internal/resource"
 )
 
 type collectorStatus string
@@ -290,7 +290,7 @@ func (m CollectionProgressModel) View() string {
 func (m CollectionProgressModel) chromeHeaderFooter(width int) (string, string) {
 	footer := chromeFooter(width, m.footerHint(), m.keyMap(), m.help)
 	_, height := chromeSize(m.width, m.height)
-	header := chromeHeader(width, height-lipgloss.Height(footer), "Interactive collection runner", [][2]string{
+	header := chromeHeader(width, height-lipgloss.Height(footer), [][2]string{
 		{"Host", MachineHostname()},
 		{"Platform", MachinePlatform()},
 		{"Phase", m.collectionPhaseTitle()},

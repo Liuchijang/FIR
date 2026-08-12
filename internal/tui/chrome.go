@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/console"
-	"github.com/Liuchijang/FIR/internal/output"
-	"github.com/Liuchijang/FIR/internal/platform"
+	"github.com/Liuchijang/Tyto/internal/console"
+	"github.com/Liuchijang/Tyto/internal/output"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/charmbracelet/bubbles/help"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -45,12 +45,34 @@ var (
 			BorderTop(true).
 			BorderForeground(lipgloss.Color("246")).
 			Padding(0, 1)
-	bannerLogoLines = []string{
-		"|-----||   O    |----\\\\",
-		"|    --| |----| |   x  <|'",
-		"|__|--'  |____| |__|\\\\__/",
+	// A perched owl, for Tyto — the barn owl genus. ASCII only, because legacy
+	// conhost draws anything else as '?' (see console.SupportsUnicodeGlyphs).
+	bannerOwlLines = []string{
+		`  ,_,`,
+		` (o,o)`,
+		` /)_)`,
 	}
 )
+
+// bannerStars is the night sky to the right of the owl, at fixed offsets.
+//
+// Fixed rather than randomised because chromeHeader re-renders on every keypress:
+// a starfield that moved between frames would read as the screen glitching, not as
+// decoration. Ordered by column within each row — BannerMarkLines fills the gaps
+// left to right and would misplace a star listed out of order.
+//
+// Tone is per star rather than per glyph. Keying it off '.' versus '*' would only
+// recolour the shape that is already there, and the two colours would fall into
+// the same regular pattern the fixed offsets are trying to avoid.
+var bannerStars = []struct {
+	row, col int
+	glyph    rune
+	tone     lipgloss.Style
+}{
+	{0, 14, '.', bannerStarPink}, {0, 21, '*', bannerStarWhite}, {0, 28, '.', bannerStarWhite},
+	{1, 10, '*', bannerStarPink}, {1, 18, '.', bannerStarWhite}, {1, 26, '.', bannerStarPink},
+	{2, 15, '.', bannerStarWhite}, {2, 23, '*', bannerStarPink}, {2, 29, '.', bannerStarWhite},
+}
 
 func verticalKeysHelp() string {
 	if console.SupportsUnicodeGlyphs() {
@@ -77,8 +99,35 @@ func FooterBarStyle() lipgloss.Style {
 	return footerBarStyle
 }
 
-func BannerLogoLines() []string {
-	return append([]string(nil), bannerLogoLines...)
+// BannerMarkLines renders the owl and its night sky, styled and sized to fit
+// width.
+//
+// A star past width is dropped rather than clipped, so the mark degrades by
+// losing its outermost stars instead of being cut mid-glyph and given an
+// ellipsis — the left banner column shrinks from 31 to 24 on a narrow terminal.
+//
+// The two tones are composed here rather than by the caller: trimToWidth slices
+// runes, so it would cut an ANSI escape in half. Nothing downstream needs to trim
+// these, because every line is built to fit.
+func BannerMarkLines(width int) []string {
+	lines := make([]string, len(bannerOwlLines))
+	for i, owl := range bannerOwlLines {
+		var sky strings.Builder
+		// column tracks where the next write lands, so each star is styled on its
+		// own and the gaps between them stay unstyled.
+		column := len(owl)
+		for _, star := range bannerStars {
+			// Keep at least one column between the owl and its nearest star.
+			if star.row != i || star.col >= width || star.col <= len(owl) {
+				continue
+			}
+			sky.WriteString(strings.Repeat(" ", star.col-column))
+			sky.WriteString(star.tone.Render(string(star.glyph)))
+			column = star.col + 1
+		}
+		lines[i] = bannerLogoStyle.Render(owl) + sky.String()
+	}
+	return lines
 }
 
 func BannerColumnWidths(innerWidth int) (int, int) {
@@ -155,7 +204,10 @@ func PollTerminalSizeCmd() tea.Cmd {
 const (
 	chromeMarginX = 2
 	chromeMarginY = 1
-	chromeHeaderH = 6
+	// Five rows: owl (3) + version + tagline on the left, and "Machine Info" plus
+	// at most four info rows on the right. Both columns land on five exactly, so
+	// a sixth would be blank in every screen and cost the body a row.
+	chromeHeaderH = 5
 	// chromeMinBodyRows is the panel height the banner must leave behind. Below it
 	// the banner is collapsed to one line: a fixed 8-row banner on a short terminal
 	// starved the body until no selectable rows were drawn at all.
@@ -169,11 +221,11 @@ func chromeSize(termWidth, termHeight int) (int, int) {
 	return RootViewportSize(termWidth, termHeight, chromeMarginX, chromeMarginY)
 }
 
-// chromeHeader draws the banner panel: logo and subtitle on the left, labelled
+// chromeHeader draws the banner panel: the mark on the left, labelled
 // machine-info rows on the right. budget is the height available for the header and
 // the body together; when the banner would not leave chromeMinBodyRows behind it
 // collapses to a single line so the body keeps its rows.
-func chromeHeader(width, budget int, subtitle string, info [][2]string) string {
+func chromeHeader(width, budget int, info [][2]string) string {
 	if budget < chromeHeaderH+panelBoxStyle.GetVerticalFrameSize()+chromeMinBodyRows {
 		return chromeCompactHeader(width, info)
 	}
@@ -181,14 +233,13 @@ func chromeHeader(width, budget int, subtitle string, info [][2]string) string {
 	innerWidth := max(10, width-panelBoxStyle.GetHorizontalFrameSize())
 	leftWidth, rightWidth := BannerColumnWidths(innerWidth)
 
-	logo := BannerLogoLines()
+	mark := BannerMarkLines(leftWidth)
 	leftLines := []string{
-		bannerLogoStyle.Render(trimToWidth(logo[0], leftWidth)),
-		bannerLogoStyle.Render(trimToWidth(logo[1], leftWidth)),
-		bannerLogoStyle.Render(trimToWidth(logo[2], leftWidth)),
-		bannerTitleStyle.Render(trimToWidth("FIR v"+output.Version, leftWidth)),
-		lipgloss.NewStyle().Bold(true).Render(trimToWidth("Freedom Incident Response", leftWidth)),
-		bannerMutedStyle.Render(trimToWidth(subtitle, leftWidth)),
+		mark[0],
+		mark[1],
+		mark[2],
+		bannerTitleStyle.Render(trimToWidth("Tyto v"+output.Version, leftWidth)),
+		lipgloss.NewStyle().Bold(true).Render(trimToWidth("Windows DFIR triage", leftWidth)),
 	}
 
 	rightLines := make([]string, 0, len(info)+1)
@@ -213,7 +264,7 @@ func chromeHeader(width, budget int, subtitle string, info [][2]string) string {
 func chromeCompactHeader(width int, info [][2]string) string {
 	innerWidth := max(10, width-panelBoxStyle.GetHorizontalFrameSize())
 
-	parts := []string{bannerTitleStyle.Render("FIR v" + output.Version)}
+	parts := []string{bannerTitleStyle.Render("Tyto v" + output.Version)}
 	if len(info) > 0 {
 		parts = append(parts, menuItemStyle.Render(info[0][1]))
 	}

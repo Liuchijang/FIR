@@ -9,7 +9,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/Liuchijang/FIR/internal/acquisition"
+	"github.com/Liuchijang/Tyto/internal/acquisition"
 	"golang.org/x/sys/windows"
 )
 

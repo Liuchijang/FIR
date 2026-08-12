@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Liuchijang/FIR/internal/module"
+	"github.com/Liuchijang/Tyto/internal/module"
 )
 
 func requiredModuleDir(outputDir, name string) (string, error) {
@@ -182,14 +182,45 @@ const analyzerTimeLayout = time.RFC3339Nano
 // windowsEpoch100ns is 1601-01-01 expressed in FILETIME ticks since the Unix epoch.
 const windowsEpoch100ns = 116444736000000000
 
+// A column named after a timestamp holds an RFC3339 instant or nothing at all.
+// Nothing else may reach one — not the artifact's raw integer, not "N/A", not a
+// value this code failed to recognise.
+//
+// The reason is that the consumers of these CSVs bind such a column to a real
+// date type and reject the *whole file* on the first cell that will not convert.
+// Timeline Explorer refused all 20 columns and every row of
+// amcache_drive_binaries.csv over one DriverTimeStamp that had been passed
+// through as the epoch integer "1468635696". A blank cell costs one value; an
+// unconvertible one costs the artifact.
+//
+// So every helper below takes the caller's marker for "no value" and returns it
+// for anything it cannot render as an instant, and the analyzers that hold a
+// timestamp in a struct rather than formatting it inline pass "" for their time
+// columns even when the rest of the row uses a different placeholder.
+
+// analyzerTimeMinYear/analyzerTimeMaxYear bound what counts as an instant.
+//
+// Below 1601 is either a FILETIME that was never set or one whose decode
+// overflowed — Windows has no artifact that predates its own epoch. Above 9999
+// has no RFC3339 representation at all: Go prints a five- or six-digit year
+// happily, and that string fails the same date parse the raw integer did.
+const (
+	analyzerTimeMinYear = 1601
+	analyzerTimeMaxYear = 9999
+)
+
 // formatTime renders an analyzer timestamp. empty is the marker the calling
 // analyzer uses for a missing value — most write "", shimcache writes "N/A"
-// across every one of its columns and stays internally consistent by passing it.
+// across its non-timestamp columns and stays internally consistent by passing it.
 func formatTime(value time.Time, empty string) string {
 	if value.IsZero() {
 		return empty
 	}
-	return value.UTC().Format(analyzerTimeLayout)
+	utc := value.UTC()
+	if year := utc.Year(); year < analyzerTimeMinYear || year > analyzerTimeMaxYear {
+		return empty
+	}
+	return utc.Format(analyzerTimeLayout)
 }
 
 // formatFiletime renders a Windows FILETIME. Anything below the epoch is an
@@ -215,6 +246,16 @@ func formatUnixMicro(value int64, empty string) string {
 		return empty
 	}
 	return formatTime(time.UnixMicro(value), empty)
+}
+
+// formatEpochSeconds renders a Unix-epoch seconds timestamp. That is the unit a
+// PE header's TimeDateStamp uses, which is what Amcache copies verbatim into
+// InventoryDriverBinary's DriverTimeStamp as a REG_DWORD.
+func formatEpochSeconds(value int64, empty string) string {
+	if value <= 0 {
+		return empty
+	}
+	return formatTime(time.Unix(value, 0), empty)
 }
 
 func analyzerError(outDir string, err error) module.AnalyzeResult {

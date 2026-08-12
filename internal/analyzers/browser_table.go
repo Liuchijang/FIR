@@ -208,7 +208,7 @@ func browserInt(value any) int64 {
 
 // browserEncryptionState names the wrapper around a stored secret.
 //
-// FIR does not decrypt browser secrets, so the column holding one is hex and
+// Tyto does not decrypt browser secrets, so the column holding one is hex and
 // nothing more. This says which scheme produced it, which is the part that
 // decides what an analyst can do next:
 //

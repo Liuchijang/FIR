@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Liuchijang/FIR/internal/ntfs"
+	"github.com/Liuchijang/Tyto/internal/ntfs"
 	"github.com/Velocidex/ordereddict"
 	ese "www.velocidex.com/golang/go-ese/parser"
 )

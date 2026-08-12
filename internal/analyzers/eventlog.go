@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	eventlogpkg "github.com/Liuchijang/FIR/internal/collectors/eventlog"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/utils"
+	eventlogpkg "github.com/Liuchijang/Tyto/internal/collectors/eventlog"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
 func init() { module.RegisterAnalyzer(&eventLogParser{}) }
@@ -51,10 +51,18 @@ func (c *eventLogParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 	// 3-file, 86,694-event corpus this went from 19.1s to 1.7s, byte-for-byte
 	// identical output. EventLogReader yields the same EventRecord objects
 	// Get-WinEvent wraps, and the writer reproduces Export-Csv's format exactly:
-	// UTF-8 with BOM, CRLF, every field quoted, embedded quotes doubled, and
-	// values rendered with the session's current culture. The header is written with
-	// the first row on purpose: an empty pipeline left Export-Csv with a BOM-only
-	// file and a successful result, which a zero-event run must still produce.
+	// UTF-8 with BOM, CRLF, every field quoted and embedded quotes doubled. The
+	// header is written with the first row on purpose: an empty pipeline left
+	// Export-Csv with a BOM-only file and a successful result, which a zero-event
+	// run must still produce.
+	//
+	// Values are rendered with the invariant culture rather than the session's.
+	// Export-Csv used the current one, which made TimeCreated whatever the
+	// operator's regional settings happened to say — "8/12/2026 1:52:11 AM" on one
+	// host, "12/08/2026 01:52:11" on another, and neither joinable against the
+	// RFC3339 every other analyzer writes. The round-trip "o" format is that same
+	// RFC3339, and it is taken in UTC because a local-time column silently
+	// misorders events across a DST boundary.
 	//
 	// Do not reintroduce $event.LevelDisplayName here: it resolves the severity
 	// string from the provider's message-table resources per event, which is far
@@ -92,7 +100,18 @@ public static class FirEvtx
 
     static string Num(long? value)
     {
-        return value.HasValue ? value.Value.ToString(CultureInfo.CurrentCulture) : null;
+        return value.HasValue ? value.Value.ToString(CultureInfo.InvariantCulture) : null;
+    }
+
+    // Utc renders an event's timestamp as RFC3339 in UTC, the one layout every
+    // Tyto analyzer writes. "o" keeps the 100ns precision an EVTX record carries,
+    // which is what keeps events inside the same second in the order they
+    // happened.
+    static string Utc(DateTime? value)
+    {
+        return value.HasValue
+            ? value.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture)
+            : null;
     }
 
     public static long Export(string sourceDir, string outCsv, string[] files)
@@ -133,20 +152,20 @@ public static class FirEvtx
                                 int level = rec.Level.HasValue ? rec.Level.Value : 0;
                                 string levelName = level < LevelNames.Length
                                     ? LevelNames[level]
-                                    : "Level" + level.ToString(CultureInfo.CurrentCulture);
+                                    : "Level" + level.ToString(CultureInfo.InvariantCulture);
 
                                 if (rows == 0)
                                 {
-                                    w.WriteLine("\"SourceFile\",\"LogName\",\"ProviderName\",\"Id\",\"Level\",\"TimeCreated\",\"RecordId\",\"ProcessId\",\"ThreadId\",\"MachineName\",\"UserId\",\"Message\"");
+                                    w.WriteLine("\"SourceFile\",\"LogName\",\"ProviderName\",\"Id\",\"Level\",\"TimeCreatedUTC\",\"RecordId\",\"ProcessId\",\"ThreadId\",\"MachineName\",\"UserId\",\"Message\"");
                                 }
 
                                 sb.Length = 0;
                                 Field(sb, fileName, false);
                                 Field(sb, rec.LogName, false);
                                 Field(sb, rec.ProviderName, false);
-                                Field(sb, rec.Id.ToString(CultureInfo.CurrentCulture), false);
+                                Field(sb, rec.Id.ToString(CultureInfo.InvariantCulture), false);
                                 Field(sb, levelName, false);
-                                Field(sb, rec.TimeCreated.HasValue ? rec.TimeCreated.Value.ToString(CultureInfo.CurrentCulture) : null, false);
+                                Field(sb, Utc(rec.TimeCreated), false);
                                 Field(sb, Num(rec.RecordId), false);
                                 Field(sb, Num(rec.ProcessId), false);
                                 Field(sb, Num(rec.ThreadId), false);

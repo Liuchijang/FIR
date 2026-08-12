@@ -1,4 +1,4 @@
-module github.com/Liuchijang/FIR
+module github.com/Liuchijang/Tyto
 
 go 1.26.2
 

@@ -1,4 +1,4 @@
-// Package tui implements FIR's interactive Bubble Tea interface.
+// Package tui implements Tyto's interactive Bubble Tea interface.
 package tui
 
 import (
@@ -13,11 +13,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Liuchijang/FIR/internal/collectors/browser"
-	eventlogpkg "github.com/Liuchijang/FIR/internal/collectors/eventlog"
-	"github.com/Liuchijang/FIR/internal/console"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/resource"
+	"github.com/Liuchijang/Tyto/internal/collectors/browser"
+	eventlogpkg "github.com/Liuchijang/Tyto/internal/collectors/eventlog"
+	"github.com/Liuchijang/Tyto/internal/console"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/resource"
 )
 
 type phase int
@@ -714,7 +714,7 @@ func (m menuModel) View() string {
 
 	width, height := chromeSize(m.width, m.height)
 	footer := chromeFooter(width, m.status, m.keyMap(), m.help)
-	header := chromeHeader(width, height-lipgloss.Height(footer), "Interactive module launcher", [][2]string{
+	header := chromeHeader(width, height-lipgloss.Height(footer), [][2]string{
 		{"Host", MachineHostname()},
 		{"Platform", MachinePlatform()},
 		{"Phase", m.screenTitle()},

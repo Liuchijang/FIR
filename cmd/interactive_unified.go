@@ -5,10 +5,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Liuchijang/FIR/internal/console"
-	"github.com/Liuchijang/FIR/internal/module"
-	"github.com/Liuchijang/FIR/internal/resource"
-	"github.com/Liuchijang/FIR/internal/tui"
+	"github.com/Liuchijang/Tyto/internal/console"
+	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/resource"
+	"github.com/Liuchijang/Tyto/internal/tui"
 )
 
 type interactiveStage int
