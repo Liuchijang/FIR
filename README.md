@@ -214,7 +214,7 @@ included. Use `collect` for them, not `analyze`.
 | `browser_profile_parser` | `browser` | Parses bookmarks with folder paths, installed extensions with their permissions and content scripts, selected profile settings, omnibox shortcuts, media history and DIPS bounce records |
 | `eventlog_parser` | `eventlog` | Parses EVTX logs |
 | `mft_parser` | `ntfs` | Parses `$MFT` into CSV, streaming one row per record with resolved full paths |
-| `prefetch_parser` | `execution` | Parses Prefetch artifacts |
+| `prefetch_parser` | `execution` | Parses Prefetch records, decompressing the Windows 10/11 container first. Reports up to **eight execution timestamps** per program with the run count, the volumes it touched with their serials and creation times, and every file and directory the traced runs loaded. Versions 17 through 31 (XP to Windows 11). Four CSVs: per-record summary, a run-time timeline, volumes, and path references |
 | `recentdocs_parser` | `registry` | Parses RecentDocs entries |
 | `runmru_parser` | `registry` | Parses RunMRU entries |
 | `secure_sds_parser` | `ntfs` | Parses Secure SDS data |
@@ -259,7 +259,7 @@ Two properties worth knowing before comparing Tyto's output against another tool
 | `mft_parser` | `SI_CreatedUTC`, `SI_ModifiedUTC`, `SI_MFTModifiedUTC`, `SI_AccessedUTC`, and the four `FN_*UTC` equivalents | FILETIME — 100ns ticks since 1601-01-01 UTC |
 | `usnjrnl_parser` | `TimestampUTC`, plus the `$MFT` times joined in when `mft`/`mft_parser` is in the run | FILETIME |
 | `secure_sds_parser` | none — `$Secure:$SDS` carries no timestamps | — |
-| `prefetch_parser` | `CreatedUTC`, `ModifiedUTC`, `AccessedUTC` | The **`.pf` file's own filesystem timestamps**, not the run times recorded inside it |
+| `prefetch_parser` | `LastRunUTC`, `PreviousRun1..7UTC`, `RunUTC`, `VolumeCreatedUTC` | FILETIME, read from **inside the record**. That is the point: the execution times are in the file's bytes, so a collected copy carries them intact. The `.pf` file's own filesystem timestamps are deliberately no longer reported — copying does not preserve them, so for a collected artifact they described the moment Tyto copied it |
 | `eventlog_parser` | `TimeCreatedUTC` | EVTX record `SystemTime` (FILETIME), rendered through .NET's round-trip `"o"` format under the invariant culture so the column never depends on the operator's regional settings |
 | `amcache_parser` | `KeyLastWriteTimestamp`, `FileKeyLastWriteTimestamp` | Hive key last-write FILETIME |
 | | `DriverTimeStamp` | A `REG_DWORD` holding the driver's PE `TimeDateStamp` — Unix epoch **seconds**, not a FILETIME |
