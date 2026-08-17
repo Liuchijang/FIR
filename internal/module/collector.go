@@ -38,6 +38,19 @@ type FileInfo struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
+	// ZeroFilled marks an artifact that copied with the right size and no content.
+	//
+	// It is a real outcome, not a theoretical one: six of 256 .pf files in a measured
+	// run came home at their correct sizes with every byte zero — five binaries an EDR
+	// protects and one svchost — and the manifest recorded a valid SHA-256 for each
+	// with error_message (none). The copy reported success because the reads returned
+	// success; the bytes were simply zeros. Nothing downstream could tell that from a
+	// program that had never run.
+	//
+	// Recorded per file rather than raised as a copy error because the file existing
+	// at that size is itself a finding, so the artifact is kept and the manifest says
+	// what it is worth.
+	ZeroFilled bool `json:"zero_filled,omitempty"`
 }
 
 type Result struct {

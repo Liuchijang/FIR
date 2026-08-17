@@ -77,7 +77,12 @@ func copyToDestination(srcFile *os.File, dst string) (module.FileInfo, error) {
 	}()
 
 	hasher := sha256.New()
-	writer := io.MultiWriter(dstFile, hasher)
+	// zeroScanner rides along with the hash so a zero-filled artifact is detected on
+	// the bytes that reach disk, in the one place every collector's copy passes
+	// through. Checking after the fact in each collector is a step a new one can
+	// forget, and the whole point is that this cannot be forgotten.
+	scanner := &zeroScanner{}
+	writer := io.MultiWriter(dstFile, hasher, scanner)
 	buf := make([]byte, copyBufferSize)
 	written, copyErr := io.CopyBuffer(writer, srcFile, buf)
 	if copyErr != nil {
@@ -90,5 +95,31 @@ func copyToDestination(srcFile *os.File, dst string) (module.FileInfo, error) {
 		return module.FileInfo{}, err
 	}
 
-	return module.FileInfo{Path: filepath.Base(dst), SHA256: hex.EncodeToString(hasher.Sum(nil)), Size: written}, nil
+	return module.FileInfo{
+		Path:       filepath.Base(dst),
+		SHA256:     hex.EncodeToString(hasher.Sum(nil)),
+		Size:       written,
+		ZeroFilled: written > 0 && !scanner.sawData,
+	}, nil
+}
+
+// zeroScanner reports whether any non-zero byte passed through it.
+//
+// An io.Writer rather than a second pass over the file: the bytes are already being
+// walked for the hash, so this costs one comparison per byte and no extra read. A
+// legitimately all-zero forensic artifact does not exist — an empty EVTX still carries
+// a header, an unused registry log still carries its signature — so all-zero always
+// means the read returned nothing, whatever the reads reported.
+type zeroScanner struct{ sawData bool }
+
+func (z *zeroScanner) Write(p []byte) (int, error) {
+	if !z.sawData {
+		for _, b := range p {
+			if b != 0 {
+				z.sawData = true
+				break
+			}
+		}
+	}
+	return len(p), nil
 }

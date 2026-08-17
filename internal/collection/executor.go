@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -262,10 +263,50 @@ func runRequestModule(ctx context.Context, mod module.Module, outputDir string, 
 	return moduleOutcome{}, false
 }
 
+// maxZeroFilledNamed bounds how many names the warning lists. A module that came home
+// entirely empty would otherwise put hundreds of file names into summary.txt; the
+// count is the part that matters and a few names say which kind of file it was.
+const maxZeroFilledNamed = 5
+
+// describeZeroFilled renders the artifacts that copied with no content.
+func describeZeroFilled(files []module.FileInfo) string {
+	var names []string
+	total := 0
+	for _, file := range files {
+		if !file.ZeroFilled {
+			continue
+		}
+		total++
+		if len(names) < maxZeroFilledNamed {
+			names = append(names, file.Path)
+		}
+	}
+	if total == 0 {
+		return ""
+	}
+	listed := strings.Join(names, ", ")
+	if total > len(names) {
+		listed += fmt.Sprintf(", and %d more", total-len(names))
+	}
+	return fmt.Sprintf("%d artifact(s) copied at their full size but contain no data, so the reads returned nothing: %s", total, listed)
+}
+
 func applyModuleOutcome(ctx context.Context, mod module.Module, result *module.Result, outcome moduleOutcome, log *logging.Logger, startedAt time.Time) {
 	result.FilesCollected = outcome.files
 	result.OutputPath = outcome.outputPath
 	result.Skipped = outcome.skipped
+	// Folded in here rather than in each collector, so a module cannot ship without
+	// it. An artifact that copied at the right size with no content is a collection
+	// failure that every layer below reported as success: the reads succeeded, the
+	// hash is valid, the file count is right. This is the only place all of that
+	// meets a human-readable warning.
+	if note := describeZeroFilled(outcome.files); note != "" {
+		if outcome.errMessage == "" {
+			outcome.errMessage = note
+		} else {
+			outcome.errMessage += "; " + note
+		}
+	}
 	// Skipped is checked before the message, because a skipped module's message is
 	// a reason and not a failure — "the analyzed run holds no $MFT" would
 	// otherwise be logged as Failed and then be corrected to SKIPPED by

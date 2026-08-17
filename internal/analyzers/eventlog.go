@@ -43,6 +43,15 @@ func (c *eventLogParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no selected or available EVTX files found in %s", sourceDir)}
 	}
 
+	// Staged under the analyzer's own output directory rather than %TEMP%, for the
+	// same reason stageLiveAmcacheHive is: %TEMP% is on the volume being investigated,
+	// and a run killed mid-parse would leave copies of the subject's event logs there.
+	// Here they sit inside the run and are removed before it finishes.
+	stageDir := filepath.Join(outDir, "_staging")
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
+		return analyzerError(outDir, fmt.Errorf("create eventlog staging dir: %w", err))
+	}
+
 	quotedFiles := make([]string, 0, len(selectedFiles))
 	for _, file := range selectedFiles {
 		quotedFiles = append(quotedFiles, utils.PSQuote(file))
@@ -74,6 +83,7 @@ func (c *eventLogParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 $sourceDir = ` + utils.PSQuote(sourceDir) + `
+$stageDir = ` + utils.PSQuote(stageDir) + `
 $outCsv = Join-Path ` + utils.PSQuote(outDir) + ` 'eventlog_records.csv'
 $selectedFiles = [string[]]@(` + strings.Join(quotedFiles, ",\n") + `)
 if (Test-Path $outCsv) { Remove-Item -LiteralPath $outCsv -Force }
@@ -117,7 +127,24 @@ public static class FirEvtx
             : null;
     }
 
-    public static long Export(string sourceDir, string outCsv, string[] files)
+    // Export parses each log from a throwaway copy in stageDir, never in place.
+    //
+    // A .evtx copied out of a running system is marked dirty, and opening a dirty log
+    // through EvtQuery makes the Event Log service recover it and write the repaired
+    // header back. Measured: a collect --analyze run rewrote 113 of the 382 EVTX files
+    // it had just collected — the large active ones — 37 seconds after the collector
+    // finished, so every later integrity check reported those artifacts as not
+    // matching the hash recorded at collection. The event data was intact and the
+    // sizes were unchanged, but the run had invalidated its own evidence record and
+    // the alert read as tampering.
+    //
+    // Staging also keeps the live path honest: without it, analyzing a machine
+    // directly writes to that machine's own event logs.
+    //
+    // A log that cannot be staged is skipped and named on stdout rather than parsed in
+    // place. Losing one log's events is recoverable by re-running; silently altering
+    // evidence is not.
+    public static long Export(string sourceDir, string outCsv, string[] files, string stageDir)
     {
         long rows = 0;
         using (var w = new StreamWriter(outCsv, false, new UTF8Encoding(true)))
@@ -127,8 +154,16 @@ public static class FirEvtx
             var sb = new StringBuilder(512);
             foreach (var fileName in files)
             {
-                var path = Path.Combine(sourceDir, fileName);
-                if (!File.Exists(path)) continue;
+                var source = Path.Combine(sourceDir, fileName);
+                if (!File.Exists(source)) continue;
+
+                var path = Path.Combine(stageDir, fileName);
+                try { File.Copy(source, path, true); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("TYTO-STAGE-FAILED\t" + fileName + "\t" + ex.Message.Replace('\t', ' '));
+                    continue;
+                }
 
                 EventLogReader reader;
                 try
@@ -137,7 +172,7 @@ public static class FirEvtx
                     query.ReverseDirection = false;
                     reader = new EventLogReader(query);
                 }
-                catch { continue; }
+                catch { TryDelete(path); continue; }
 
                 using (reader)
                 {
@@ -182,31 +217,81 @@ public static class FirEvtx
                         }
                     }
                 }
+                // The staged copy is deleted as soon as its log is parsed, so peak
+                // extra disk is one log rather than the whole winevt\Logs directory.
+                TryDelete(path);
             }
         }
         return rows;
     }
+
+    static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch { }
+    }
 }
 '@
 
-[FirEvtx]::Export($sourceDir, $outCsv, $selectedFiles) | Out-Null
+[FirEvtx]::Export($sourceDir, $outCsv, $selectedFiles, $stageDir) | Out-Null
 
 if (-not (Test-Path $outCsv)) {
     throw 'no selected EVTX records could be parsed'
 }
 `
 
-	if err := utils.RunPowerShell(ctx, script); err != nil {
+	output, runErr := utils.RunPowerShellOutput(ctx, script)
+	// Removed whether the run succeeded or not: a staged copy left behind would be
+	// swept into the archive as if it were collected evidence.
+	var warnings []string
+	if removeErr := os.RemoveAll(stageDir); removeErr != nil {
+		warnings = append(warnings, fmt.Sprintf("staging directory %s was left behind: %v", stageDir, removeErr))
+	}
+	if skipped := describeStagingFailures(output); skipped != "" {
+		warnings = append(warnings, skipped)
+	}
+
+	if runErr != nil {
 		files, fileErr := utils.CollectGeneratedCSVs(outDir)
 		if fileErr == nil && len(files) > 0 {
-			return module.AnalyzeResult{Files: files, OutputPath: outDir, Error: fmt.Errorf("parse event logs: %w", err).Error()}
+			return module.AnalyzeResult{Files: files, OutputPath: outDir, Error: fmt.Errorf("parse event logs: %w", runErr).Error()}
 		}
-		return analyzerError(outDir, fmt.Errorf("parse event logs: %w", err))
+		return analyzerError(outDir, fmt.Errorf("parse event logs: %w", runErr))
 	}
 
 	files, err := utils.CollectGeneratedCSVs(outDir)
 	if err != nil {
 		return analyzerError(outDir, err)
 	}
-	return module.AnalyzeResult{Files: files, OutputPath: outDir}
+	return module.AnalyzeResult{
+		Files:      files,
+		OutputPath: outDir,
+		// A log that could not be staged was not parsed, and the CSV cannot show its
+		// own absence.
+		Error: strings.Join(warnings, "; "),
+	}
+}
+
+// stageFailureMarker is what the embedded C# prints for a log it could not copy.
+const stageFailureMarker = "TYTO-STAGE-FAILED\t"
+
+// describeStagingFailures turns those lines into one warning for the run summary.
+func describeStagingFailures(output string) string {
+	var skipped []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if !strings.HasPrefix(line, stageFailureMarker) {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(line, stageFailureMarker), "\t", 2)
+		if len(parts) == 2 {
+			skipped = append(skipped, fmt.Sprintf("%s (%s)", parts[0], parts[1]))
+			continue
+		}
+		skipped = append(skipped, parts[0])
+	}
+	if len(skipped) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d event log(s) could not be copied for parsing and were not read: %s",
+		len(skipped), strings.Join(skipped, "; "))
 }
