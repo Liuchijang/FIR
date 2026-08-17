@@ -15,12 +15,23 @@ import (
 // RunPowerShell executes script via a non-interactive powershell.exe, returning
 // combined stdout/stderr on failure so callers can surface the real cause.
 func RunPowerShell(ctx context.Context, script string) error {
+	_, err := RunPowerShellOutput(ctx, script)
+	return err
+}
+
+// RunPowerShellOutput is RunPowerShell for the callers that need to hear back from
+// the script rather than only whether it failed.
+//
+// eventlog_parser needs it: the script decides per file whether it could stage a copy
+// to parse, and a log it had to skip has to reach the run summary. Discarding the
+// output on success would make that decision invisible.
+func RunPowerShellOutput(ctx context.Context, script string) (string, error) {
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("powershell failed: %w\nOutput: %s", err, string(output))
+		return string(output), fmt.Errorf("powershell failed: %w\nOutput: %s", err, string(output))
 	}
-	return nil
+	return string(output), nil
 }
 
 func PSQuote(value string) string {

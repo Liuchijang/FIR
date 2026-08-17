@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -14,6 +15,19 @@ import (
 
 	"github.com/Liuchijang/Tyto/internal/module"
 )
+
+// offlineCapable marks an analyzer that reads a collected artifact and can
+// therefore run against a previously collected run instead of the live host.
+//
+// Embedded at the type declaration rather than written out as a method per
+// analyzer, so the claim is one greppable line where a reader already is. The one
+// analyzer that does not embed it — wmi_parser — is a live query with no artifact
+// to read, and module.SupportsOffline excludes it from an offline run. The other
+// live queries, autoruns and process_explorer, are collectors and never reach this
+// question at all.
+type offlineCapable struct{}
+
+func (offlineCapable) SupportsOffline() bool { return true }
 
 func requiredModuleDir(outputDir, name string) (string, error) {
 	c, err := module.Get(name)
@@ -260,6 +274,62 @@ func formatEpochSeconds(value int64, empty string) string {
 
 func analyzerError(outDir string, err error) module.AnalyzeResult {
 	return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+}
+
+// resolveArtifactSource decides where an analyzer reads a collector's artifact
+// from. Every analyzer follows this one rule; none of them decides for itself.
+//
+// Three cases, in the order they are tested:
+//
+//   - Offline (SourcePolicyCollectedOnly): the analyzed run or nothing. The live
+//     host is a different machine — the investigator's — so there is no fallback
+//     to have.
+//   - The collector is part of this run: its output or nothing. Here the live
+//     host *is* the same machine, which is exactly why the silent fallback was
+//     dangerous rather than harmless: a collected SYSTEM that failed to load
+//     sent shimcache_parser to the live registry and it reported success, so the
+//     CSV described the machine's state minutes after acquisition while the
+//     manifest said it came from the hashed artifact. Nothing in the output said
+//     which.
+//   - The collector is not part of this run: the live host, without consulting
+//     the run directory at all. Running an analyzer on its own is a live triage
+//     request, and that is what it should answer.
+//
+// A caller that gets errNoCollectedSource reports skippedNoSource: in the
+// offline case the operator never collected the artifact, and in the live case
+// its collector already failed and reported that failure itself.
+func resolveArtifactSource(req module.AnalyzeRequest, collector string) (dir string, live bool, err error) {
+	if req.AllowLive() && !req.IsSelected(collector) {
+		return "", true, nil
+	}
+	dir, ok := existingModuleDir(req.SourceRoot(), collector)
+	if !ok {
+		return "", false, errNoCollectedSource
+	}
+	return dir, false, nil
+}
+
+// errNoCollectedSource is what a source-resolution helper returns when the
+// analyzed run holds nothing for it and the policy forbids reading the live
+// host. Callers turn it into skippedNoSource with their own artifact label, so
+// the distinction between "never collected" and "collected but unparseable"
+// survives into the summary.
+var errNoCollectedSource = errors.New("artifact not present in the analyzed run")
+
+// skippedNoSource reports that the analyzed run does not hold the artifact.
+//
+// Skipped rather than an error: under SourcePolicyCollectedOnly a missing
+// artifact is a fact about the input — the operator collected prefetch but not
+// the registry — not a failure of the parser. Reporting it as an error would
+// fill the summary with red rows for artifacts nobody collected, and the
+// distinction is what tells an analyst "not gathered" from "gathered but
+// unreadable".
+func skippedNoSource(outDir, artifact string) module.AnalyzeResult {
+	return module.AnalyzeResult{
+		OutputPath: outDir,
+		Skipped:    true,
+		Error:      fmt.Sprintf("%s not present in the analyzed run", artifact),
+	}
 }
 
 // csvResult writes one CSV into outDir and returns the finished result for it.

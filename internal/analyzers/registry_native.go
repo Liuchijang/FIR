@@ -1,11 +1,8 @@
 package analyzers
 
 import (
-	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -13,61 +10,30 @@ import (
 	winreg "golang.org/x/sys/windows/registry"
 )
 
+// procRegQueryInfoKeyW is called directly because x/sys/windows/registry exposes
+// no accessor for a key's last write time. It is the only Windows registry entry
+// point left here: a collected hive is read from its file by
+// internal/registryfile, so RegLoadAppKeyW is gone along with everything that
+// existed to work around it.
 var (
 	modAdvapi32          = windows.NewLazySystemDLL("advapi32.dll")
-	procRegLoadAppKeyW   = modAdvapi32.NewProc("RegLoadAppKeyW")
 	procRegQueryInfoKeyW = modAdvapi32.NewProc("RegQueryInfoKeyW")
 )
 
-func loadRegistryAppKey(path string) (winreg.Key, error) {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return 0, err
-	}
-	pathPtr, err := windows.UTF16PtrFromString(absPath)
-	if err != nil {
-		return 0, fmt.Errorf("utf16 hive path %s: %w", absPath, err)
-	}
-
-	var key winreg.Key
-	r1, _, _ := procRegLoadAppKeyW.Call(
-		uintptr(unsafe.Pointer(pathPtr)),
-		uintptr(unsafe.Pointer(&key)),
-		uintptr(winreg.READ),
-		0,
-		0,
-	)
-	if r1 != 0 {
-		return 0, fmt.Errorf("RegLoadAppKeyW %s: %w", absPath, syscall.Errno(r1))
-	}
-	return key, nil
-}
-
-func openRegistryKeyOptional(root winreg.Key, path string) (winreg.Key, bool, error) {
-	key, err := winreg.OpenKey(root, path, winreg.READ)
-	if err != nil {
-		if err == winreg.ErrNotExist {
-			return 0, false, nil
-		}
-		return 0, false, err
-	}
-	return key, true, nil
-}
-
-func readRegistryStringValue(key winreg.Key, name string) (string, bool) {
-	if value, _, err := key.GetStringValue(name); err == nil {
+func readRegistryStringValue(key registryKey, name string) (string, bool) {
+	if value, ok := key.StringValue(name); ok {
 		return strings.TrimSpace(value), true
 	}
-	if value, _, err := key.GetStringsValue(name); err == nil {
+	if value, ok := key.StringsValue(name); ok {
 		return strings.Join(value, ";"), true
 	}
-	if value, _, err := key.GetIntegerValue(name); err == nil {
+	if value, ok := key.IntegerValue(name); ok {
 		return strconv.FormatUint(value, 10), true
 	}
 	return "", false
 }
 
-func readRegistryFirstString(key winreg.Key, names ...string) string {
+func readRegistryFirstString(key registryKey, names ...string) string {
 	for _, name := range names {
 		if value, ok := readRegistryStringValue(key, name); ok {
 			return value
@@ -76,8 +42,8 @@ func readRegistryFirstString(key winreg.Key, names ...string) string {
 	return ""
 }
 
-func readRegistryIntegerValue(key winreg.Key, name string) (uint64, bool) {
-	if value, _, err := key.GetIntegerValue(name); err == nil {
+func readRegistryIntegerValue(key registryKey, name string) (uint64, bool) {
+	if value, ok := key.IntegerValue(name); ok {
 		return value, true
 	}
 	if value, ok := readRegistryStringValue(key, name); ok && value != "" {
@@ -88,7 +54,7 @@ func readRegistryIntegerValue(key winreg.Key, name string) (uint64, bool) {
 	return 0, false
 }
 
-func readRegistryFirstUint64(key winreg.Key, names ...string) (uint64, bool) {
+func readRegistryFirstUint64(key registryKey, names ...string) (uint64, bool) {
 	for _, name := range names {
 		if value, ok := readRegistryIntegerValue(key, name); ok {
 			return value, true
@@ -97,14 +63,15 @@ func readRegistryFirstUint64(key winreg.Key, names ...string) (uint64, bool) {
 	return 0, false
 }
 
-func readRegistryBinaryValue(key winreg.Key, name string) ([]byte, bool) {
-	value, _, err := key.GetBinaryValue(name)
-	if err != nil || len(value) == 0 {
-		return nil, false
-	}
-	return value, true
+func readRegistryBinaryValue(key registryKey, name string) ([]byte, bool) {
+	return key.BinaryValue(name)
 }
 
+// registryKeyLastWriteString reads a mounted key's last write time.
+//
+// x/sys/windows/registry exposes no last-write accessor, hence the direct
+// RegQueryInfoKeyW call. A hive read from file carries the timestamp in the key
+// node itself and does not come through here.
 func registryKeyLastWriteString(key winreg.Key) string {
 	var lastWrite windows.Filetime
 	r1, _, _ := procRegQueryInfoKeyW.Call(
@@ -125,18 +92,6 @@ func registryKeyLastWriteString(key winreg.Key) string {
 		return ""
 	}
 	return formatFiletimeParts(lastWrite.LowDateTime, lastWrite.HighDateTime, "")
-}
-
-func registryValueNames(key winreg.Key) map[string]bool {
-	names, err := key.ReadValueNames(-1)
-	if err != nil {
-		return map[string]bool{}
-	}
-	out := make(map[string]bool, len(names))
-	for _, name := range names {
-		out[name] = true
-	}
-	return out
 }
 
 // registryDateLayouts are the shapes a date-bearing registry value arrives in.

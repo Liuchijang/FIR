@@ -1,3 +1,16 @@
+// Package live acquires the state that only exists while the machine is running.
+//
+// These are collectors, not analyzers, and the reason is ordering rather than
+// tidiness. The runner puts a hard barrier between the two batches — every
+// collector finishes before any analyzer starts — so as analyzers these ran
+// *after* a full $MFT sweep of every drive and, when selected, a memory image.
+// That is minutes on a real host, and process, connection and autostart state is
+// the most volatile thing a triage collects: order of volatility says it goes
+// first, not last.
+//
+// The rest follows from that. There is no artifact behind either module, so they
+// never take part in an offline run — as collectors that falls out of the CLI's
+// own mode filter instead of needing an offline-capability declaration to refuse.
 package live
 
 import (
@@ -8,20 +21,19 @@ import (
 	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
-func init() { module.RegisterAnalyzer(&autorunsAnalyzer{}) }
+func init() { module.RegisterArtifact("live", &autorunsCollector{}) }
 
-type autorunsAnalyzer struct{}
+type autorunsCollector struct{}
 
-func (a *autorunsAnalyzer) Name() string     { return "autoruns" }
-func (a *autorunsAnalyzer) Category() string { return "live" }
-func (a *autorunsAnalyzer) Description() string {
-	return "Live autoruns triage"
+func (a *autorunsCollector) Name() string { return "autoruns" }
+func (a *autorunsCollector) Description() string {
+	return "Collect autostart configuration: services, run keys, scheduled tasks, startup folders"
 }
 
-func (a *autorunsAnalyzer) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+func (a *autorunsCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	outDir, err := req.EnsureOutputDir(a.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create autoruns analyzer output dir: %w", err).Error()}
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create autoruns output dir: %w", err).Error()}
 	}
 
 	script := `
@@ -126,12 +138,12 @@ $startupRows | Sort-Object Scope, Name | Export-Csv -Path $startupCsv -NoTypeInf
 `
 
 	if err := utils.RunPowerShell(ctx, script); err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("analyze live autoruns data: %w", err).Error()}
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("collect live autoruns data: %w", err).Error()}
 	}
 
 	files, err := utils.CollectGeneratedCSVs(outDir)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return module.CollectResult{OutputPath: outDir, Error: err.Error()}
 	}
-	return module.AnalyzeResult{Files: files, OutputPath: outDir}
+	return module.CollectResult{Files: files, OutputPath: outDir}
 }

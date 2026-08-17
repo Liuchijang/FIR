@@ -3,6 +3,7 @@ package analyzers
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -11,12 +12,11 @@ import (
 
 	"github.com/Liuchijang/Tyto/internal/module"
 	"github.com/Liuchijang/Tyto/internal/ntfs"
-	winreg "golang.org/x/sys/windows/registry"
 )
 
 func init() { module.RegisterAnalyzer(&recentDocsParser{}) }
 
-type recentDocsParser struct{}
+type recentDocsParser struct{ offlineCapable }
 
 type recentDocsRow struct {
 	Username              string
@@ -41,15 +41,12 @@ func (c *recentDocsParser) Analyze(ctx context.Context, req module.AnalyzeReques
 		return analyzerError(outDir, fmt.Errorf("create recentdocs output dir: %w", err))
 	}
 
-	sources, err := collectedUserHiveSources(req.OutputDir, "NTUSER.DAT")
+	sources, err := resolveNTUserHiveSources(req)
 	if err != nil {
-		return analyzerError(outDir, err)
-	}
-	if len(sources) == 0 {
-		sources, err = liveUserNTUserSources()
-		if err != nil {
-			return analyzerError(outDir, err)
+		if errors.Is(err, errNoCollectedSource) {
+			return skippedNoSource(outDir, "collected NTUSER.DAT hives")
 		}
+		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {
 		return module.AnalyzeResult{OutputPath: outDir, Error: "no NTUSER.DAT sources found in collected registry output or live registry"}
@@ -61,12 +58,12 @@ func (c *recentDocsParser) Analyze(ctx context.Context, req module.AnalyzeReques
 			return analyzerError(outDir, err)
 		}
 
-		root, err := openUserHiveSource(source)
+		hive, err := openUserHiveSource(source)
 		if err != nil {
 			continue
 		}
-		sourceRows, err := parseRecentDocsFromRoot(root, source)
-		root.Close()
+		sourceRows, err := parseRecentDocsFromRoot(hive, source)
+		hive.Close()
 		if err != nil {
 			continue
 		}
@@ -115,8 +112,8 @@ func (c *recentDocsParser) Analyze(ctx context.Context, req module.AnalyzeReques
 	}, csvRows)
 }
 
-func parseRecentDocsFromRoot(root winreg.Key, source userHiveSource) ([]recentDocsRow, error) {
-	key, ok, err := openRegistryKeyOptional(root, `Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs`)
+func parseRecentDocsFromRoot(root registryKey, source userHiveSource) ([]recentDocsRow, error) {
+	key, ok, err := root.OpenSubkey(`Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs`)
 	if err != nil {
 		return nil, err
 	}
@@ -132,9 +129,9 @@ func parseRecentDocsFromRoot(root winreg.Key, source userHiveSource) ([]recentDo
 	return rows, nil
 }
 
-func walkRecentDocsKey(key winreg.Key, keyPath string, source userHiveSource, rows *[]recentDocsRow) error {
+func walkRecentDocsKey(key registryKey, keyPath string, source userHiveSource, rows *[]recentDocsRow) error {
 	mruPositions := parseMRUListEx(key)
-	valueNames, err := key.ReadValueNames(-1)
+	valueNames, err := key.ValueNames()
 	if err == nil {
 		for _, valueName := range valueNames {
 			if strings.EqualFold(valueName, "MRUListEx") || strings.EqualFold(valueName, "MRUList") {
@@ -154,18 +151,18 @@ func walkRecentDocsKey(key winreg.Key, keyPath string, source userHiveSource, ro
 				ValueName:             valueName,
 				MRUPosition:           mruPositionString(mruPositions, valueName),
 				EntryName:             entryName,
-				KeyLastWriteTimestamp: registryKeyLastWriteString(key),
+				KeyLastWriteTimestamp: key.LastWriteString(),
 			})
 		}
 	}
 
-	subKeys, err := key.ReadSubKeyNames(-1)
+	subKeys, err := key.SubkeyNames()
 	if err != nil {
 		return nil
 	}
 	for _, name := range subKeys {
-		subKey, err := winreg.OpenKey(key, name, winreg.READ)
-		if err != nil {
+		subKey, ok, err := key.OpenSubkey(name)
+		if err != nil || !ok {
 			continue
 		}
 		nextPath := keyPath + `\` + name
@@ -178,7 +175,7 @@ func walkRecentDocsKey(key winreg.Key, keyPath string, source userHiveSource, ro
 	return nil
 }
 
-func parseMRUListEx(key winreg.Key) map[string]int {
+func parseMRUListEx(key registryKey) map[string]int {
 	data, ok := readRegistryBinaryValue(key, "MRUListEx")
 	if !ok || len(data) < 4 {
 		return map[string]int{}
@@ -204,7 +201,7 @@ func mruPositionString(positions map[string]int, valueName string) string {
 	return ""
 }
 
-func readRecentDocsEntry(key winreg.Key, valueName string) string {
+func readRecentDocsEntry(key registryKey, valueName string) string {
 	if data, ok := readRegistryBinaryValue(key, valueName); ok {
 		return decodeRecentDocsBinary(data)
 	}

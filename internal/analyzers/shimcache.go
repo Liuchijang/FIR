@@ -3,6 +3,7 @@ package analyzers
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,12 +11,13 @@ import (
 
 	"github.com/Liuchijang/Tyto/internal/module"
 	"github.com/Liuchijang/Tyto/internal/ntfs"
+	"github.com/Liuchijang/Tyto/internal/registryfile"
 	winreg "golang.org/x/sys/windows/registry"
 )
 
 func init() { module.RegisterAnalyzer(&shimCacheParser{}) }
 
-type shimCacheParser struct{}
+type shimCacheParser struct{ offlineCapable }
 
 type shimCacheSource struct {
 	ControlSet  string
@@ -68,8 +70,11 @@ func (c *shimCacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 		return analyzerError(outDir, fmt.Errorf("create shimcache parser output dir: %w", err))
 	}
 
-	sources, err := loadShimCacheSources(req.OutputDir)
+	sources, err := loadShimCacheSources(req)
 	if err != nil {
+		if errors.Is(err, errNoCollectedSource) {
+			return skippedNoSource(outDir, "collected SYSTEM hive")
+		}
 		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {
@@ -144,30 +149,36 @@ func (c *shimCacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 	}, csvRows)
 }
 
-func loadShimCacheSources(outputDir string) ([]shimCacheSource, error) {
-	var collectedErr error
-	if dir, ok := existingModuleDir(outputDir, "registry"); ok {
-		collected := filepath.Join(dir, "SYSTEM")
-		if _, err := os.Stat(collected); err == nil {
-			sources, err := loadShimCacheSourcesFromHive(collected)
-			if err == nil {
-				return sources, nil
-			}
-			collectedErr = err
-		}
+// loadShimCacheSources reads ShimCache from the run's collected SYSTEM hive, or
+// from the live one when the registry collector is not part of the run.
+//
+// There is deliberately no fallback from the first to the second. This used to
+// try the collected hive and quietly read the live registry when it would not
+// load — and that is not hypothetical: a collected SYSTEM that RegLoadAppKeyW
+// rejects made this analyzer report success over live data, in a run whose
+// manifest said the artifact was the hashed hive. The failure is now the answer.
+func loadShimCacheSources(req module.AnalyzeRequest) ([]shimCacheSource, error) {
+	dir, live, err := resolveArtifactSource(req, "registry")
+	if err != nil {
+		return nil, err
 	}
-	sources, liveErr := loadLiveShimCacheSources()
-	if liveErr != nil {
-		if collectedErr != nil {
-			return nil, fmt.Errorf("load collected SYSTEM hive: %v; load live SYSTEM hive: %w", collectedErr, liveErr)
-		}
-		return nil, liveErr
+	if live {
+		return loadLiveShimCacheSources()
+	}
+
+	collected := filepath.Join(dir, "SYSTEM")
+	if _, err := os.Stat(collected); err != nil {
+		return nil, errNoCollectedSource
+	}
+	sources, err := loadShimCacheSourcesFromHive(collected)
+	if err != nil {
+		return nil, fmt.Errorf("load collected SYSTEM hive: %w", err)
 	}
 	return sources, nil
 }
 
 func loadLiveShimCacheSources() ([]shimCacheSource, error) {
-	systemKey, ok, err := openRegistryKeyOptional(winreg.LOCAL_MACHINE, `SYSTEM`)
+	systemKey, ok, err := openLiveKey(winreg.LOCAL_MACHINE, `SYSTEM`)
 	if err != nil {
 		return nil, fmt.Errorf("open live SYSTEM hive: %w", err)
 	}
@@ -175,20 +186,74 @@ func loadLiveShimCacheSources() ([]shimCacheSource, error) {
 		return nil, nil
 	}
 	defer systemKey.Close()
-	return loadShimCacheSourcesFromRoot(systemKey, `HKEY_LOCAL_MACHINE\SYSTEM`)
+	return loadShimCacheSourcesFromRoot(liveShimRoot{systemKey}, `HKEY_LOCAL_MACHINE\SYSTEM`)
 }
 
+// loadShimCacheSourcesFromHive reads a collected SYSTEM by parsing the hive file
+// rather than asking Windows to mount it.
+//
+// Mounting cannot work here. RegLoadAppKeyW rejects a collected SYSTEM with
+// ERROR_BADDB — measured on a hive that verified 18/18 against its collection
+// hashes and carried both transaction logs — and RegLoadKey, which would take it,
+// needs SeRestorePrivilege and would put the subject's hive into the analyst's
+// live registry. Reading the file is what the established ShimCache tooling does
+// and it needs no privilege at all.
 func loadShimCacheSourcesFromHive(hivePath string) ([]shimCacheSource, error) {
-	root, err := loadRegistryAppKey(hivePath)
+	hive, err := registryfile.Open(hivePath)
 	if err != nil {
-		return nil, fmt.Errorf("load SYSTEM hive app key: %w", err)
+		return nil, fmt.Errorf("read SYSTEM hive: %w", err)
 	}
-	defer root.Close()
-	return loadShimCacheSourcesFromRoot(root, `SYSTEM`)
+	return loadShimCacheSourcesFromRoot(hiveShimRoot{hive}, `SYSTEM`)
 }
 
-func loadShimCacheSourcesFromRoot(root winreg.Key, registryPrefix string) ([]shimCacheSource, error) {
-	controlSets, err := root.ReadSubKeyNames(-1)
+// shimCacheRoot is what the control-set walk below needs from a registry root, so
+// the one walk serves both a mounted live hive and a collected hive file. The
+// alternative was two copies of the ControlSet/AppCompatCache traversal, which is
+// the part that decides what a run's ShimCache CSV actually contains.
+type shimCacheRoot interface {
+	subkeyNames() ([]string, error)
+	binaryValue(keyPath, valueName string) ([]byte, bool)
+}
+
+// liveShimRoot reads through a mounted key: the live HKLM\SYSTEM.
+type liveShimRoot struct{ key registryKey }
+
+func (r liveShimRoot) subkeyNames() ([]string, error) { return r.key.SubkeyNames() }
+
+func (r liveShimRoot) binaryValue(keyPath, valueName string) ([]byte, bool) {
+	key, ok, err := r.key.OpenSubkey(keyPath)
+	if err != nil || !ok {
+		return nil, false
+	}
+	defer key.Close()
+	return readRegistryBinaryValue(key, valueName)
+}
+
+// hiveShimRoot reads a hive file directly.
+type hiveShimRoot struct{ hive *registryfile.Hive }
+
+func (r hiveShimRoot) subkeyNames() ([]string, error) {
+	root, err := r.hive.Root()
+	if err != nil {
+		return nil, err
+	}
+	return root.SubkeyNames()
+}
+
+func (r hiveShimRoot) binaryValue(keyPath, valueName string) ([]byte, bool) {
+	key, err := r.hive.OpenKey(keyPath)
+	if err != nil {
+		return nil, false
+	}
+	value, err := key.BinaryValue(valueName)
+	if err != nil {
+		return nil, false
+	}
+	return value, true
+}
+
+func loadShimCacheSourcesFromRoot(root shimCacheRoot, registryPrefix string) ([]shimCacheSource, error) {
+	controlSets, err := root.subkeyNames()
 	if err != nil {
 		return nil, fmt.Errorf("enumerate control sets: %w", err)
 	}
@@ -208,16 +273,7 @@ func loadShimCacheSourcesFromRoot(root winreg.Key, registryPrefix string) ([]shi
 		}
 		for _, target := range targets {
 			keyPath := controlSet + `\` + target.pathSuffix
-			key, ok, err := openRegistryKeyOptional(root, keyPath)
-			if err != nil {
-				return nil, fmt.Errorf("open ShimCache key %s: %w", keyPath, err)
-			}
-			if !ok {
-				continue
-			}
-
-			value, ok := readRegistryBinaryValue(key, "AppCompatCache")
-			key.Close()
+			value, ok := root.binaryValue(keyPath, "AppCompatCache")
 			if !ok {
 				continue
 			}

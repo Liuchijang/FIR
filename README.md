@@ -22,7 +22,9 @@ Tyto is a Windows first-response triage tool: it collects forensic artifacts, pa
 
 ## Features
 
-- **Two modes**: an interactive Bubble Tea workflow, or `tyto collect` for automation. Collectors run alone by default; `--analyze` adds the matching parsers.
+- **Three ways to run**: an interactive Bubble Tea workflow, `tyto collect` for automation, and `tyto analyze` for a run collected earlier. Collectors run alone by default; `--analyze` adds the parsers for the selected categories.
+- **Collect on the host, analyze off it**: `tyto analyze --input <run|zip>` parses a run collected earlier, on the investigator's machine. Live sources are disabled for the whole run — an analyzer whose artifact is missing reports `SKIPPED` rather than describing the analyst's own computer — and the artifacts are re-hashed against the collecting run's manifest before anything parses them.
+- **One rule for where an analyzer reads from**: collect *and* analyze in one run and every analyzer reads that run's collected artifacts; `analyze` with no `--input` reads the live host; `analyze --input` reads only the input. There is no fallback between them, so a CSV never quietly describes a source other than the one the manifest names.
 - **Native Windows acquisition**: backup semantics, registry hive save APIs, and raw NTFS reads — `$MFT`, `$UsnJrnl:$J` and `$Secure:$SDS` from every fixed drive, not just `C:`. Requires Administrator, and enables the backup, restore, security and debug privileges at startup.
 - **Parses what it collects**: `$MFT`, the USN journal, `$Secure:$SDS`, EVTX, Amcache, Prefetch, ShimCache, UserAssist, RecentDocs, RunMRU, WMI, the SRUM database, and browser history, downloads, cookies, saved-login metadata, autofill, bookmarks, extensions and profile settings. Every timestamp column in every CSV uses one RFC3339 UTC layout, so the halves of an output directory join on time without reformatting.
 - **Self-tuning concurrency**: no worker knob. Tyto surveys the drives a run reads and writes, then picks a worker count per phase — collection backs off on spinning media, analysis scales with free RAM. The numbers and the reasoning land in `manifest.json`.
@@ -58,7 +60,7 @@ Tyto does not decrypt browser secrets. Cookie values and saved passwords are exp
 ### Prerequisites
 
 - **Operating system**: Windows 10/11 or Windows Server 2016+
-- **Privileges**: Administrator is required — Tyto exits immediately with an error if not run elevated
+- **Privileges**: Administrator for anything that acquires artifacts — interactive mode and `tyto collect` exit immediately with an error if not run elevated. `tyto analyze` is the exception and runs as a normal user, because it reads files the operator already holds
 - **Go**: 1.26+ for building from source
 
 ### Installation
@@ -76,45 +78,24 @@ cd Tyto
 go build -trimpath -buildvcs=false -ldflags "-s -w" -o tyto.exe .
 ```
 
-`-trimpath` keeps the build machine's directory layout out of the binary,
-`-buildvcs=false` keeps the commit hash out of it, and `-ldflags "-s -w"` drops
-the symbol table and DWARF data. Together they take the binary from 13.9 MB to
-**9.4 MB**, a third smaller, and stop it carrying anything about where it was
-built. Drop all three while developing — `go build -o tyto.exe .` is faster and
-keeps stack traces readable.
-
-3. Check it runs:
-
-```powershell
-.\tyto.exe --version
-# tyto version 2.0
-```
-
-There is nothing to install alongside it. Every dependency is pure Go, so the
-result is one static executable — the only optional external file is `winpmem`
-for RAM acquisition (see below).
-
-The application icon needs no build step either: the Go linker picks up any
-`*.syso` next to the main package, and `tyto_windows_amd64.syso` is committed.
-
-To change the icon, redraw `tyto.png` and regenerate both files:
-
-```powershell
-go run ./tools/mkico -in tyto.png -out tyto.ico -sheet preview.png
-go run github.com/akavel/rsrc@latest -ico tyto.ico -arch amd64 -o tyto_windows_amd64.syso
-```
-
-`mkico` crops the drawing to a centred square and area-averages it down to the
-nine sizes Windows chooses between, keeping the source's transparency. `-sheet`
-writes a preview over a light and a dark surface, which is worth looking at: the
-owl is a black silhouette, so on a dark-mode taskbar its body merges into the
-background and the small sizes read as two floating eyes. `-bg RRGGBB` flats it
-onto a colour if that is ever unwanted. `rsrc` runs via `go run pkg@version`, so
-neither tool is a module dependency.
-
 ## Usage
 
-### Interactive Mode
+There are three ways to run Tyto, and they differ in **where an analyzer reads
+its sample from**. That is the part worth getting right: it decides which machine
+the CSVs describe.
+
+| How it is run | Analyzers read from | Administrator |
+|---|---|---|
+| `collect --artifact <category> --analyze` | the artifacts this run just collected | required |
+| `analyze` with no `--input` | the live machine | required |
+| `analyze --input <run\|zip>` | only the input, never the live machine | not required |
+
+There is no fallback between them. An analyzer that should read a collected
+artifact and cannot reports `SKIPPED` or `FAILED` rather than quietly answering
+from somewhere else, so a CSV never describes a source other than the one
+`manifest.json` names.
+
+### Interactive
 
 Run Tyto without a subcommand:
 
@@ -124,65 +105,74 @@ Run Tyto without a subcommand:
 
 Interactive mode lets you select modules, review runtime configuration, watch live module status, and view the final collection summary.
 
-### Flag Mode
+### tyto collect
 
-`tyto collect` runs collector modules only by default — analyzers (`*_parser`, `autoruns`, `process_explorer`, etc.) are skipped even if a category or `all` would otherwise include them.
-
-Collect specific artifacts:
-
-```powershell
-.\tyto.exe collect --artifact registry,eventlog,prefetch
-```
-
-Collect by category:
+Acquires artifacts from the machine it runs on. Collector modules only by default
+— analyzers (`*_parser`) are skipped even if a category or `all` would otherwise
+include them, and `--analyze` opts into them. `autoruns` and `process_explorer`
+are collectors, so they run without it.
 
 ```powershell
-.\tyto.exe collect --artifact ntfs,execution
-```
-
-Collect everything:
-
-```powershell
-.\tyto.exe collect --artifact all
-```
-
-Collect and then run the matching analyzers:
-
-```powershell
-.\tyto.exe collect --artifact eventlog --analyze
-```
-
-Use a custom output directory and timeout:
-
-```powershell
-.\tyto.exe collect --artifact registry,eventlog --output C:\triage --timeout 10m
-```
-
-Run with resource controls:
-
-```powershell
+.\tyto.exe collect --artifact registry,eventlog,prefetch     # by module name
+.\tyto.exe collect --artifact ntfs,execution                 # by category
+.\tyto.exe collect --artifact all                            # everything
+.\tyto.exe collect --artifact ntfs --analyze                 # collect, then parse what was collected
+.\tyto.exe collect --artifact registry --output C:\triage --timeout 10m
 .\tyto.exe collect --artifact all --output E:\evidence --cpu-limit 60 --disk-io 80MB
-```
-
-Disable compression:
-
-```powershell
 .\tyto.exe collect --artifact ntfs --no-compress
 ```
 
-### Common Flags
+**`--analyze` follows categories, not module names.** `--artifact ntfs --analyze`
+adds `mft_parser`, `usnjrnl_parser` and `secure_sds_parser` because `ntfs` is a
+category; `--artifact mft --analyze` adds nothing at all, because `mft` names one
+module and that module is a collector. The flag is silently a no-op there. Use a
+category name, or list the parsers explicitly:
+
+```powershell
+.\tyto.exe collect --artifact mft,mft_parser --analyze
+```
 
 | Flag | Description |
 |---|---|
-| `-o, --output` | Base output directory for collected artifacts |
-| `-v, --verbose` | Enable verbose/debug output |
-| `-a, --artifact` | Comma-separated list of artifacts or categories |
-| `--analyze` | Also run the analyzer modules for the selected artifacts/categories (default: collect only) |
-| `-t, --timeout` | Optional timeout per module; `0` disables timeout |
-| `--cpu-limit` | CPU limit percentage, applied to Tyto and every process it spawns via a Windows Job Object |
-| `--disk-io` | Cap disk bandwidth for Tyto and every process it spawns, for example `80MB`. No cap by default |
-| `--compress` | Compress run directory after collection; enabled by default |
-| `--no-compress` | Disable run directory compression |
+| `-a, --artifact` | Comma-separated modules or categories, or `list` to print every module with its description. Required |
+| `--analyze` | Also run the analyzers for the selected categories. Off by default |
+| `-o, --output` | Base directory the run directory is created in. Defaults to `.` |
+| `-t, --timeout` | Timeout per module; `0` (the default) disables it |
+| `--cpu-limit` | CPU cap for Tyto and every process it spawns, via a Windows Job Object. Defaults to 60, clamped to 10–80 |
+| `--disk-io` | Disk bandwidth cap for Tyto and every process it spawns, e.g. `80MB`. No cap by default |
+| `--compress` / `--no-compress` | Zip the run directory when finished. **On** by default |
+| `-v, --verbose` | Verbose/debug output |
+
+### tyto analyze
+
+Runs analyzer modules. `--input` decides which machine they describe, and that is
+the only difference between the two ways to call it.
+
+```powershell
+# Offline: parse a run collected earlier, on the investigator's machine.
+.\tyto.exe analyze --input D:\evidence\HOST_20260812_134006.zip        # a compressed run, what collect leaves by default
+.\tyto.exe analyze --input D:\evidence\HOST_20260812_134006 -o D:\cases\1234
+.\tyto.exe analyze --input HOST_20260812_134006.zip --artifact ntfs,eventlog
+
+# Live: no --input, so the analyzers read this machine. Requires Administrator.
+.\tyto.exe analyze --artifact shimcache_parser,prefetch_parser
+.\tyto.exe analyze --artifact wmi_parser                               # carve the live OBJECTS.DATA, plus a CIM query
+```
+
+| Flag | Description |
+|---|---|
+| `-i, --input` | The run directory or `.zip` to analyze. Omit it to analyze the live machine instead |
+| `-a, --artifact` | Comma-separated analyzers or categories, or `list` to print every module with its description. Defaults to `all` |
+| `--keep-extracted` | Keep the directory an input archive was extracted into, instead of removing it when the run ends |
+| `-o, --output` | Base directory the analysis run directory is created in. Defaults to `.` |
+| `-t, --timeout` | Timeout per analyzer; `0` (the default) disables it |
+| `--cpu-limit` | CPU cap for Tyto and every process it spawns, via a Windows Job Object. Defaults to 60, clamped to 10–80 |
+| `--disk-io` | Disk bandwidth cap for Tyto and every process it spawns, e.g. `80MB`. No cap by default |
+| `--compress` | Zip the analysis output when finished. **Off** by default, unlike collection — the output is CSV an analyst opens straight away |
+| `-v, --verbose` | Verbose/debug output |
+
+There is no `--no-compress` here; compression is already off unless `--compress`
+asks for it.
 
 ## Available Modules
 
@@ -198,16 +188,25 @@ Disable compression:
 | `mft` | `ntfs` | Collects the `$MFT` via raw disk access, from every fixed drive |
 | `secure_sds` | `ntfs` | Collects the `$Secure:$SDS` stream, from every fixed drive |
 | `usnjrnl` | `ntfs` | Collects the `$UsnJrnl:$J` USN Change Journal, from every fixed drive |
+| `autoruns` | `live` | Captures autostart configuration from the running system: services, run keys per machine and per user SID, scheduled tasks with their actions and triggers, and every startup folder. **Live state, not an artifact** |
+| `process_explorer` | `live` | Captures running processes with command lines and owners, every loaded module, and TCP/UDP connections joined to the owning process. Falls back to `netstat -ano` where the `Get-Net*` cmdlets are unavailable. **Live state, not an artifact** |
 | `registry` | `registry` | Collects primary registry hives and transaction logs (excludes `SECURITY`, which requires `SYSTEM`, not just Administrator) |
 | `srum` | `system` | Collects the SRUM database (`SRUDB.dat`) |
 | `wmi` | `system` | Collects WMI repository files |
 
 ### Analyzers
 
+Most analyzers read an artifact, so they work against a collected run or the live
+machine, so every one of them is available to `analyze --input`.
+
+`autoruns` and `process_explorer` are **collectors**, listed above. They acquire
+state that exists only while the machine is running, and the runner finishes every
+collector before it starts any analyzer — so as analyzers they captured the most
+volatile data in a run only after every artifact had been copied, a memory image
+included. Use `collect` for them, not `analyze`.
+
 | Name | Category | Description |
 |---|---|---|
-| `autoruns` | `live` | Generates live autoruns-style triage CSV |
-| `process_explorer` | `live` | Generates live process, module, and network triage CSV |
 | `amcache_parser` | `execution` | Parses Amcache artifacts |
 | `browser_history_parser` | `browser` | Parses visits and downloads from Chromium `History` and Firefox `places.sqlite`. Downloads carry the redirect chain and the decoded Safe Browsing verdict |
 | `browser_cookies_parser` | `browser` | Parses cookie metadata — host, path, creation, expiry, last access, `Secure`/`HttpOnly`/`SameSite` — from every cookie store a profile has |
@@ -215,67 +214,66 @@ Disable compression:
 | `browser_profile_parser` | `browser` | Parses bookmarks with folder paths, installed extensions with their permissions and content scripts, selected profile settings, omnibox shortcuts, media history and DIPS bounce records |
 | `eventlog_parser` | `eventlog` | Parses EVTX logs |
 | `mft_parser` | `ntfs` | Parses `$MFT` into CSV, streaming one row per record with resolved full paths |
-| `prefetch_parser` | `execution` | Parses Prefetch artifacts |
+| `prefetch_parser` | `execution` | Parses Prefetch records, decompressing the Windows 10/11 container first. Reports up to **eight execution timestamps** per program with the run count, the volumes it touched with their serials and creation times, and every file and directory the traced runs loaded. Versions 17 through 31 (XP to Windows 11). Four CSVs: per-record summary, a run-time timeline, volumes, and path references |
 | `recentdocs_parser` | `registry` | Parses RecentDocs entries |
 | `runmru_parser` | `registry` | Parses RunMRU entries |
 | `secure_sds_parser` | `ntfs` | Parses Secure SDS data |
 | `shimcache_parser` | `registry` | Parses ShimCache |
 | `srum_parser` | `system` | Parses the SRUM database into one CSV per provider table, resolving application and user IDs through `SruDbIdMapTable`, network adapter types out of the interface LUID, and Wi-Fi profile names from the `SOFTWARE` hive |
 | `userassist_parser` | `registry` | Parses UserAssist |
-| `usnjrnl_parser` | `ntfs` | Parses USN records and enriches with MFT when available |
-| `wmi_parser` | `system` | Parses WMI artifacts |
+| `usnjrnl_parser` | `ntfs` | Parses USN records, joining in each record's `$MFT` name, path and timestamps when `mft` or `mft_parser` is part of the run |
+| `wmi_parser` | `system` | Reports WMI event-subscription persistence from two sources. It carves `__FilterToConsumerBinding`, `__EventFilter` and the consumer records out of `OBJECTS.DATA` — the run's collected copy, or the live host's file — which is what makes it work offline and what lets it recover subscriptions already deleted from the repository. When analyzing the live machine it additionally queries `root\subscription` for the authoritative current view plus the namespace tree. The two sets of CSVs keep separate names because they are separate evidence |
 
 ### Category Shortcuts
 
-Use `browser`, `eventlog`, `execution`, `live`, `memory`, `ntfs`, `registry`, `system`, or `all`.
+Use `browser`, `eventlog`, `execution`, `live`, `memory`, `ntfs`, `registry`,
+`system`, or `all`. A category name selects every module in it, collectors and
+analyzers alike. `live` is the one exception in practice: it now holds only
+collectors, so `collect --artifact live` runs both of them and
+`analyze --artifact live` has nothing to run.
 
-## Output
+Both lists above are also available from the binary, generated from the module
+registry rather than transcribed — `tyto collect --help` prints each category with
+the modules in it, and `--artifact list` prints every module with its description.
 
-A run creates a timestamped directory. Collectors write under a directory named
-for their artifact; every analyzer writes under `Analyzer/<module>/`:
+## Timestamps
 
-```text
-HOSTNAME_YYYYMMDD_HHMMSS/
-  collector.log
-  manifest.json
-  summary.txt
-  browser/<user>/<browser>/<profile>/
-  eventlog/
-  execution/                   Amcache.hve and its transaction logs
-  execution/prefetch/
-  memory/                      only until the image is moved out, see below
-  ntfs/                        $MFT, $UsnJrnl:$J and $Secure:$SDS, one per drive
-  registry/
-  registry/users/<user>/        NTUSER.DAT and UsrClass.dat
-  system/                      SRUDB.dat
-  system/wmi/
-  Analyzer/mft_parser/
-  Analyzer/usnjrnl_parser/
-  Analyzer/srum_parser/
-  Analyzer/browser_history_parser/
-  ...                          one directory per analyzer that produced output
-```
+**Every timestamp column in every CSV is RFC3339 in UTC, and the value is the
+artifact's own.** Nothing is re-based on the way out: a FILETIME, a WebKit
+microsecond count and a PE `TimeDateStamp` are already UTC where they are stored,
+so the instant in the CSV is the instant in the artifact. Most column names carry
+a `UTC` suffix to say so.
 
-The run directory is created fresh every time: if a directory of that name
-already exists, Tyto takes the next free name rather than writing into it, because
-the run ends by archiving that path and then deleting it.
+Two properties worth knowing before comparing Tyto's output against another tool:
 
-When compression is enabled, Tyto writes:
+- **A timestamp column holds an instant or it is empty** — never the raw integer,
+  never `N/A`. Importers bind such a column to a date type and reject the *whole
+  file* over one cell that will not convert, so a value Tyto cannot resolve costs
+  one blank cell rather than the artifact.
+- **Sub-second precision survives.** The layout is RFC3339 *Nano*: a FILETIME
+  carries 100ns and a USN journal records many events inside one second. A whole
+  second renders with no fraction, so both forms parse as plain RFC3339.
 
-```text
-HOSTNAME_YYYYMMDD_HHMMSS.zip
-HOSTNAME_YYYYMMDD_HHMMSS.zip.sha256
-```
+| Module | Timestamp columns | What the artifact stores |
+|---|---|---|
+| `mft_parser` | `SI_CreatedUTC`, `SI_ModifiedUTC`, `SI_MFTModifiedUTC`, `SI_AccessedUTC`, and the four `FN_*UTC` equivalents | FILETIME — 100ns ticks since 1601-01-01 UTC |
+| `usnjrnl_parser` | `TimestampUTC`, plus the `$MFT` times joined in when `mft`/`mft_parser` is in the run | FILETIME |
+| `secure_sds_parser` | none — `$Secure:$SDS` carries no timestamps | — |
+| `prefetch_parser` | `LastRunUTC`, `PreviousRun1..7UTC`, `RunUTC`, `VolumeCreatedUTC` | FILETIME, read from **inside the record**. That is the point: the execution times are in the file's bytes, so a collected copy carries them intact. The `.pf` file's own filesystem timestamps are deliberately no longer reported — copying does not preserve them, so for a collected artifact they described the moment Tyto copied it |
+| `eventlog_parser` | `TimeCreatedUTC` | EVTX record `SystemTime` (FILETIME), rendered through .NET's round-trip `"o"` format under the invariant culture so the column never depends on the operator's regional settings |
+| `amcache_parser` | `KeyLastWriteTimestamp`, `FileKeyLastWriteTimestamp` | Hive key last-write FILETIME |
+| | `DriverTimeStamp` | A `REG_DWORD` holding the driver's PE `TimeDateStamp` — Unix epoch **seconds**, not a FILETIME |
+| | `DriverVerDate`, `Date`, `DriverLastWriteTime`, `LinkDate` | Text values inside the hive — see the caveat below |
+| `shimcache_parser` | `LastModifiedUTC`, `LastUpdateUTC` | FILETIME inside the cache entry |
+| `userassist_parser` | `LastExecutedUTC`, `KeyLastWriteTimestamp` | FILETIME in the value blob and on the hive key. `FocusTimeMS` beside them is a **duration** in milliseconds, not an instant |
+| `recentdocs_parser`, `runmru_parser` | `KeyLastWriteTimestamp` | Hive key last-write FILETIME |
+| `srum_parser` | per provider table — `ConnectStartTime`, `*TimeStamp`, … | FILETIME for most columns and an ESE `DateTime` for others; both are accepted. `ConnectedTime` is a **duration** in seconds and is added to the row's start time rather than printed |
+| `browser_*_parser`, Chromium | `VisitTimeUTC`, `LastVisitUTC`, `CreationUTC`, `ExpiresUTC`, `DateAddedUTC`, … | Microseconds since **1601-01-01** (the WebKit epoch) |
+| `browser_*_parser`, Firefox | the same columns | Microseconds since **1970-01-01** — except `logins.json`, which uses **milliseconds** |
+| `browser_profile_parser` | the Media History columns | Unix epoch **seconds** |
+| `autoruns`, `process_explorer` (collectors) | `LastRunTimeUTC`, `NextRunTimeUTC`, `LastWriteTimeUTC`, `CreationDateUTC`, `CreationTimeUTC` | A .NET `DateTime` in **local** time, converted by `ConvertTo-TytoUtc`. Along with `eventlog_parser` these are the only paths that convert rather than re-render, because .NET hands the script local time |
+| `wmi_parser` | none | The object store keeps no creation time for a subscription and the CIM query selects no date-bearing property, so no column is named after one |
 
-A collected memory image is delivered **next to** the archive rather than inside it:
-
-```text
-HOSTNAME_YYYYMMDD_HHMMSS_memory.raw
-```
-
-A RAM dump is high-entropy and barely compresses, while zipping it would need a second full-size copy on disk at the same time — on a 32GB host, the difference between needing ~38GB free and ~69GB. The interactive run config says so before the run starts, and `manifest.json` lists the file under `uncompressed_files`.
-
-`manifest.json` is the source of truth for run configuration, storage estimates, module results, hashes, and output metadata.
 
 ## RAM Acquisition
 
@@ -286,37 +284,6 @@ Tyto does not bundle `winpmem`. To enable RAM acquisition, place `winpmem_mini_x
 - System `PATH`
 
 If `winpmem` is not found, the RAM module fails gracefully and records the error in the run summary.
-
-## Project Structure
-
-```text
-Tyto/
-  cmd/                 Cobra commands and runtime option parsing
-  internal/
-    acquisition/       Low-level Windows and raw disk acquisition helpers
-    analyzers/         Parsed and enriched output modules
-    artifact/          Artifact layout helpers
-    collection/        Module resolution, runner, and executor
-    collectors/        Artifact acquisition modules grouped by category
-    console/           Console/window handling
-    logging/           Session logger
-    module/            Shared collector/analyzer module contracts and registry
-    ntfs/              Record primitives shared by the raw-volume reader and the parsers
-    output/            Manifest, archive, summary, and output writer
-    platform/          Host/platform helpers
-    resource/          Resource config, estimates, and disk checks
-    tui/               Bubble Tea interactive UI
-    utils/             Windows privilege, hashing, and file helpers
-  main.go              Application entry point
-  go.mod               Go module definition
-  go.sum               Go dependency checksums
-```
-
-Runtime flow:
-
-```text
-main -> cmd -> module registry -> collection runner -> collectors/analyzers -> output/logging
-```
 
 ## Security and Legal Notice
 

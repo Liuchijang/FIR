@@ -10,7 +10,7 @@ import (
 
 func init() { module.RegisterAnalyzer(&browserCredentialsParser{}) }
 
-type browserCredentialsParser struct{}
+type browserCredentialsParser struct{ offlineCapable }
 
 func (c *browserCredentialsParser) Name() string     { return "browser_credentials_parser" }
 func (c *browserCredentialsParser) Category() string { return "browser" }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/Liuchijang/Tyto/internal/module"
 	winreg "golang.org/x/sys/windows/registry"
 )
 
@@ -26,31 +27,42 @@ type srumWLANProfiles map[int32]string
 //
 // Failure is not an error: the SSID is enrichment, and a run without the
 // registry collector still produces complete SRUM tables with the raw
-// L2ProfileId in them.
-func loadSRUMWLANProfiles(outputDir string) srumWLANProfiles {
-	if dir, ok := existingModuleDir(outputDir, "registry"); ok {
-		hive := filepath.Join(dir, "SOFTWARE")
-		if _, err := os.Stat(hive); err == nil {
-			if root, err := loadRegistryAppKey(hive); err == nil {
-				profiles := readWLANProfiles(root, wlanInterfacesKey)
-				root.Close()
-				if len(profiles) > 0 {
-					return profiles
-				}
-			}
-		}
+// L2ProfileId in them. That is also why an offline run simply returns nothing
+// here rather than reporting a missing artifact.
+func loadSRUMWLANProfiles(req module.AnalyzeRequest) srumWLANProfiles {
+	dir, live, err := resolveArtifactSource(req, "registry")
+	if err != nil {
+		return nil
 	}
-	return readWLANProfiles(winreg.LOCAL_MACHINE, `SOFTWARE\`+wlanInterfacesKey)
+	if live {
+		root, ok, err := openLiveKey(winreg.LOCAL_MACHINE, `SOFTWARE\`+wlanInterfacesKey)
+		if err != nil || !ok {
+			return nil
+		}
+		defer root.Close()
+		return readWLANProfiles(root, "")
+	}
+
+	hive := filepath.Join(dir, "SOFTWARE")
+	if _, err := os.Stat(hive); err != nil {
+		return nil
+	}
+	root, err := openCollectedHive(hive)
+	if err != nil {
+		return nil
+	}
+	defer root.Close()
+	return readWLANProfiles(root, wlanInterfacesKey)
 }
 
-func readWLANProfiles(root winreg.Key, interfacesPath string) srumWLANProfiles {
-	interfaces, ok, err := openRegistryKeyOptional(root, interfacesPath)
+func readWLANProfiles(root registryKey, interfacesPath string) srumWLANProfiles {
+	interfaces, ok, err := root.OpenSubkey(interfacesPath)
 	if err != nil || !ok {
 		return nil
 	}
 	defer interfaces.Close()
 
-	adapters, err := interfaces.ReadSubKeyNames(-1)
+	adapters, err := interfaces.SubkeyNames()
 	if err != nil {
 		return nil
 	}
@@ -62,19 +74,19 @@ func readWLANProfiles(root winreg.Key, interfacesPath string) srumWLANProfiles {
 	return profiles
 }
 
-func collectWLANAdapterProfiles(interfaces winreg.Key, adapter string, profiles srumWLANProfiles) {
-	profilesKey, ok, err := openRegistryKeyOptional(interfaces, adapter+`\Profiles`)
+func collectWLANAdapterProfiles(interfaces registryKey, adapter string, profiles srumWLANProfiles) {
+	profilesKey, ok, err := interfaces.OpenSubkey(adapter + `\Profiles`)
 	if err != nil || !ok {
 		return
 	}
 	defer profilesKey.Close()
 
-	names, err := profilesKey.ReadSubKeyNames(-1)
+	names, err := profilesKey.SubkeyNames()
 	if err != nil {
 		return
 	}
 	for _, name := range names {
-		profileKey, ok, err := openRegistryKeyOptional(profilesKey, name)
+		profileKey, ok, err := profilesKey.OpenSubkey(name)
 		if err != nil || !ok {
 			continue
 		}
@@ -91,8 +103,8 @@ func collectWLANAdapterProfiles(interfaces winreg.Key, adapter string, profiles 
 // readWLANProfileName prefers MetaData\Description, which is the SSID as the
 // user sees it. Channel Hints is the fallback because older profiles have no
 // Description: its payload is a 4-byte length followed by the SSID bytes.
-func readWLANProfileName(profileKey winreg.Key) string {
-	metadata, ok, err := openRegistryKeyOptional(profileKey, "MetaData")
+func readWLANProfileName(profileKey registryKey) string {
+	metadata, ok, err := profileKey.OpenSubkey("MetaData")
 	if err != nil || !ok {
 		return ""
 	}

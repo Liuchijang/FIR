@@ -3,6 +3,7 @@ package analyzers
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,7 +27,7 @@ const (
 
 func init() { module.RegisterAnalyzer(&mftParser{}) }
 
-type mftParser struct{}
+type mftParser struct{ offlineCapable }
 
 type mftRecordRow struct {
 	Drive             string
@@ -83,8 +84,11 @@ func (c *mftParser) Analyze(ctx context.Context, req module.AnalyzeRequest) modu
 		return analyzerError(outDir, fmt.Errorf("create MFT parser output dir: %w", err))
 	}
 
-	rows, parseErrs, err := loadMFTRows(ctx, req.OutputDir)
+	rows, parseErrs, err := loadMFTRows(ctx, req)
 	if err != nil {
+		if errors.Is(err, errNoCollectedSource) {
+			return skippedNoSource(outDir, "collected $MFT")
+		}
 		return analyzerError(outDir, err)
 	}
 	if len(rows) == 0 {
@@ -194,20 +198,20 @@ func mftCSVRow(row mftRecordRow) []string {
 	}
 }
 
-// loadMFTRows parses every $MFT this run has available: one per collected
-// drive, the legacy single-drive filename for output written by older versions,
-// and finally the live volumes when nothing was collected.
+// loadMFTRows parses the $MFT this run is working from — one per collected
+// drive, or the live volumes when the collector is not part of the run. Which of
+// the two is resolveArtifactSource's decision, not this function's.
 //
 // Both mft_parser and usnjrnl_parser need exactly this — the USN parser for the
 // name/path/timestamp enrichment it joins onto each journal record — and each
-// used to carry its own copy of the fallback chain. The two copies are what
-// decides which artifact a run's output was actually derived from, so they have
-// to agree.
+// used to carry its own copy of the chain. The two copies are what decides which
+// artifact a run's output was actually derived from, so they have to agree.
 //
 // The returned errors are per-drive parse failures, not a reason to stop: a
 // second volume's $MFT is still worth parsing when the first one is corrupt.
-// Only a live-parse failure with nothing collected comes back as an error.
-func loadMFTRows(ctx context.Context, outputDir string) ([]mftRecordRow, []string, error) {
+// Only a live-parse failure comes back as an error, plus errNoCollectedSource
+// when the run should hold a $MFT and does not.
+func loadMFTRows(ctx context.Context, req module.AnalyzeRequest) ([]mftRecordRow, []string, error) {
 	var rows []mftRecordRow
 	var parseErrs []string
 
@@ -223,23 +227,29 @@ func loadMFTRows(ctx context.Context, outputDir string) ([]mftRecordRow, []strin
 		rows = append(rows, driveRows...)
 	}
 
-	if dir, ok := existingModuleDir(outputDir, "mft"); ok {
-		for _, drive := range collectedMFTDrives(dir) {
-			appendDrive(filepath.Join(dir, "$MFT_"+drive), drive)
-		}
-		if len(rows) == 0 {
-			if legacyPath := filepath.Join(dir, "$MFT"); fileExists(legacyPath) {
-				appendDrive(legacyPath, "C")
-			}
-		}
+	dir, live, err := resolveArtifactSource(req, "mft")
+	if err != nil {
+		return nil, nil, err
 	}
-	if len(rows) == 0 {
+	if live {
 		liveRows, err := parseLiveMFT(ctx)
 		if err != nil {
 			return nil, parseErrs, err
 		}
-		rows = liveRows
+		return liveRows, parseErrs, nil
 	}
+
+	for _, drive := range collectedMFTDrives(dir) {
+		appendDrive(filepath.Join(dir, "$MFT_"+drive), drive)
+	}
+	// The legacy single-drive filename, for output written by older versions.
+	if len(rows) == 0 {
+		if legacyPath := filepath.Join(dir, "$MFT"); fileExists(legacyPath) {
+			appendDrive(legacyPath, "C")
+		}
+	}
+	// No live retry when the collected artifact would not parse: this run is
+	// built on that artifact, and parseErrs is what says why it produced nothing.
 	return rows, parseErrs, nil
 }
 

@@ -3,6 +3,7 @@ package analyzers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -117,6 +118,9 @@ type browserExportTable struct {
 func browserAnalyzeSQLite(ctx context.Context, req module.AnalyzeRequest, outDir string, exports []browserExport) module.AnalyzeResult {
 	sources, err := resolveBrowserProfileSources(req)
 	if err != nil {
+		if errors.Is(err, errNoCollectedSource) {
+			return skippedNoSource(outDir, "collected browser profiles")
+		}
 		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {

@@ -36,6 +36,7 @@ type SummaryReport struct {
 	OutputDir           string
 	StartedAt           time.Time
 	FinishedAt          time.Time
+	Timezone            *platform.TimezoneInfo
 	TotalDuration       time.Duration
 	TimeoutPerCollector time.Duration
 	Workers             string
@@ -48,6 +49,7 @@ type SummaryReport struct {
 
 func NewSummaryReport(outputDir string, startedAt time.Time, totalDuration time.Duration, timeout time.Duration, workers string, results []module.Result) SummaryReport {
 	host := platform.DetectHost()
+	timezone := platform.DetectTimezone()
 
 	successCount := 0
 	failureCount := 0
@@ -71,6 +73,7 @@ func NewSummaryReport(outputDir string, startedAt time.Time, totalDuration time.
 		OutputDir:           outputDir,
 		StartedAt:           startedAt,
 		FinishedAt:          startedAt.Add(totalDuration),
+		Timezone:            &timezone,
 		TotalDuration:       totalDuration,
 		TimeoutPerCollector: timeout,
 		Workers:             workers,
@@ -89,6 +92,7 @@ func (r SummaryReport) Render() string {
 		{"Platform", fmt.Sprintf("%s/%s", r.OS, r.Architecture)},
 		{"Started", r.StartedAt.Format(time.RFC3339)},
 		{"Finished", r.FinishedAt.Format(time.RFC3339)},
+		{"Host timezone", r.Timezone.String()},
 		{"Output", r.OutputDir},
 		{"Collectors", fmt.Sprintf("%d", r.CollectorsTotal)},
 		{"Succeeded", fmt.Sprintf("%d", r.SuccessCount)},
@@ -231,6 +235,7 @@ func renderTerminalInfoTable(report SummaryReport, width int) string {
 		{"Platform", fmt.Sprintf("%s/%s", report.OS, report.Architecture)},
 		{"Started", report.StartedAt.Format(time.RFC3339)},
 		{"Finished", report.FinishedAt.Format(time.RFC3339)},
+		{"Host timezone", report.Timezone.String()},
 		{"Output", report.OutputDir},
 		{"Collectors", fmt.Sprintf("%d", report.CollectorsTotal)},
 		{"Succeeded", fmt.Sprintf("%d", report.SuccessCount)},

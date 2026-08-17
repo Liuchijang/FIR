@@ -2,6 +2,8 @@ package resource
 
 import (
 	"fmt"
+	"io/fs"
+	"path/filepath"
 	"strings"
 
 	"github.com/Liuchijang/Tyto/internal/module"
@@ -63,6 +65,109 @@ func EstimateStorage(outputBaseDir string, modules []module.Module, compress boo
 	estimate.Healthy = true
 	estimate.Reason = "enough free space for selected modules"
 	return estimate
+}
+
+// EstimateAnalysisStorage sizes a run that parses an already-collected tree
+// instead of acquiring anything.
+//
+// EstimateStorage cannot be reused: it sizes the volume-scaled analyzers through
+// their source collector, and those collectors measure the live machine
+// (liveMFTSize opens a raw volume handle, liveUsnJournalSize reads the journal's
+// configured size). On the investigator's workstation that measures the wrong
+// disk entirely — usually a much smaller one than the subject's, which is the
+// dangerous direction for a gate whose job is to refuse a run that would fill
+// the drive.
+//
+// Here the artifact is already on disk, so its real size is available and the
+// estimate is better than the live path's: each analyzer is sized from the bytes
+// its source collector actually wrote, times the ratio in analyzerOutputRatios.
+//
+// Unpacking an input archive is deliberately not counted. It happens before this
+// runs, so the free figure below already reflects it and adding it again would
+// demand twice the space; the check that has to happen before those bytes exist
+// lives in collection.extractSourceArchive.
+func EstimateAnalysisStorage(outputBaseDir, sourceDir string, modules []module.Module, compress bool) StorageEstimate {
+	if outputBaseDir == "" {
+		outputBaseDir = "."
+	}
+
+	sizes := make(map[string]int64, len(modules))
+	var raw, archive int64
+	for _, mod := range modules {
+		size := analysisModuleBytes(mod, sourceDir, sizes)
+		raw += size
+		if compress {
+			archive += size * defaultArchiveRatioPct / 100
+		}
+	}
+	if raw <= 0 {
+		raw = defaultAnalyzerSize
+	}
+
+	required := raw + archive + safetyMargin(raw+archive)
+	free, err := FreeSpaceBytes(outputBaseDir)
+	estimate := StorageEstimate{
+		OutputBaseDir:         outputBaseDir,
+		FreeBytes:             free,
+		EstimatedRawBytes:     raw,
+		EstimatedArchiveBytes: archive,
+		RequiredBytes:         required,
+		Compress:              compress,
+	}
+	if err != nil {
+		estimate.Healthy = false
+		estimate.Reason = err.Error()
+		return estimate
+	}
+	if free < required {
+		estimate.Healthy = false
+		estimate.Reason = fmt.Sprintf("not enough free space: need %s, free %s", FormatBytes(required), FormatBytes(free))
+		return estimate
+	}
+	estimate.Healthy = true
+	estimate.Reason = "enough free space for the selected analyzers"
+	return estimate
+}
+
+// analysisModuleBytes sizes one analyzer from the collected artifact it will
+// read. sizes memoises the on-disk measurement so two analyzers over the same
+// collector directory do not walk it twice.
+func analysisModuleBytes(mod module.Module, sourceDir string, sizes map[string]int64) int64 {
+	name := strings.ToLower(mod.Name())
+	source, ok := analyzerOutputRatios[name]
+	if !ok {
+		return defaultAnalyzerSize
+	}
+	collector, err := module.Get(source.collector)
+	if err != nil {
+		return defaultAnalyzerSize
+	}
+
+	collected, ok := sizes[source.collector]
+	if !ok {
+		collected = dirSize(module.ModuleDir(sourceDir, collector))
+		sizes[source.collector] = collected
+	}
+	// The floor is the same as the live path's: an artifact that turned out to be
+	// tiny — or a source directory that is not there at all, in which case the
+	// analyzer will skip — still gets credited the CSV scaffolding.
+	return max(collected*source.ratioPct/100, defaultAnalyzerSize)
+}
+
+// dirSize sums the file sizes under root, ignoring anything it cannot stat: an
+// unreadable file contributes nothing to what the analyzer can parse out of it.
+func dirSize(root string) int64 {
+	var total int64
+	filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if info, statErr := entry.Info(); statErr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 // estimateBytes sums each module's raw estimate and, if compress is set, its

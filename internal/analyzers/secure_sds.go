@@ -15,7 +15,7 @@ import (
 
 func init() { module.RegisterAnalyzer(&secureSDSParser{}) }
 
-type secureSDSParser struct{}
+type secureSDSParser struct{ offlineCapable }
 
 func (c *secureSDSParser) Name() string     { return "secure_sds_parser" }
 func (c *secureSDSParser) Category() string { return "ntfs" }
@@ -29,7 +29,10 @@ func (c *secureSDSParser) Analyze(ctx context.Context, req module.AnalyzeRequest
 		return analyzerError(outDir, fmt.Errorf("create secure_sds parser output dir: %w", err))
 	}
 
-	sources, sourceErrs := readSecureSDSSources(req.OutputDir)
+	sources, sourceErrs, err := readSecureSDSSources(req)
+	if err != nil {
+		return skippedNoSource(outDir, "collected $Secure:$SDS")
+	}
 
 	var rows [][]string
 	var parseErrs []string
@@ -76,51 +79,51 @@ type secureSDSSource struct {
 	data  []byte
 }
 
-// readSecureSDSSources loads $Secure:$SDS for every drive it can, preferring
-// already-collected $Secure_SDS_<drive> files, falling back to the legacy
-// single-drive filename, and finally to a live read across every fixed drive.
-func readSecureSDSSources(outputDir string) ([]secureSDSSource, []string) {
-	var sources []secureSDSSource
-	var errs []string
-
-	if dir, ok := existingModuleDir(outputDir, "secure_sds"); ok {
-		for _, drive := range collectedSecureSDSDrives(dir) {
-			path := filepath.Join(dir, "$Secure_SDS_"+drive)
-			data, err := os.ReadFile(path)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", drive, err))
-				continue
-			}
-			sources = append(sources, secureSDSSource{drive: drive, data: data})
-		}
-		if len(sources) == 0 {
-			if legacyPath := filepath.Join(dir, "$Secure_SDS"); fileExists(legacyPath) {
-				data, err := os.ReadFile(legacyPath)
-				if err != nil {
-					errs = append(errs, fmt.Sprintf("C: %v", err))
-				} else {
-					sources = append(sources, secureSDSSource{drive: "C", data: data})
-				}
-			}
-		}
+// readSecureSDSSources loads $Secure:$SDS for every drive it can: the collected
+// $Secure_SDS_<drive> files, the legacy single-drive filename beside them, or a
+// live read across every fixed drive — whichever resolveArtifactSource picked.
+func readSecureSDSSources(req module.AnalyzeRequest) (sources []secureSDSSource, errs []string, err error) {
+	dir, live, err := resolveArtifactSource(req, "secure_sds")
+	if err != nil {
+		return nil, nil, err
 	}
 
-	if len(sources) == 0 {
-		drives, err := acquisition.ListFixedDrives()
-		if err != nil || len(drives) == 0 {
+	if live {
+		drives, listErr := acquisition.ListFixedDrives()
+		if listErr != nil || len(drives) == 0 {
 			drives = []string{"C"}
 		}
 		for _, drive := range drives {
-			data, err := readLiveSecureSDS(drive)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", drive, err))
+			data, readErr := readLiveSecureSDS(drive)
+			if readErr != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", drive, readErr))
 				continue
 			}
 			sources = append(sources, secureSDSSource{drive: drive, data: data})
 		}
+		return sources, errs, nil
 	}
 
-	return sources, errs
+	for _, drive := range collectedSecureSDSDrives(dir) {
+		path := filepath.Join(dir, "$Secure_SDS_"+drive)
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", drive, readErr))
+			continue
+		}
+		sources = append(sources, secureSDSSource{drive: drive, data: data})
+	}
+	if len(sources) == 0 {
+		if legacyPath := filepath.Join(dir, "$Secure_SDS"); fileExists(legacyPath) {
+			data, readErr := os.ReadFile(legacyPath)
+			if readErr != nil {
+				errs = append(errs, fmt.Sprintf("C: %v", readErr))
+			} else {
+				sources = append(sources, secureSDSSource{drive: "C", data: data})
+			}
+		}
+	}
+	return sources, errs, nil
 }
 
 func collectedSecureSDSDrives(dir string) []string {

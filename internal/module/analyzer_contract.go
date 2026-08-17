@@ -8,7 +8,11 @@ import (
 )
 
 type AnalyzeRequest struct {
-	OutputDir       string
+	OutputDir string
+	// SourceDir is the run to read collected artifacts from when it is not the
+	// run being written. Empty means "read from OutputDir", which is every live
+	// run; offline analysis sets it. Read it through SourceRoot().
+	SourceDir       string
 	AnalyzerDir     string
 	Hostname        string
 	StartedAt       time.Time

@@ -44,7 +44,7 @@ type readUsnJournalData struct {
 	UsnJournalID      uint64
 }
 
-type usnJrnlParser struct{}
+type usnJrnlParser struct{ offlineCapable }
 
 func (c *usnJrnlParser) Name() string     { return "usnjrnl_parser" }
 func (c *usnJrnlParser) Category() string { return "ntfs" }
@@ -56,6 +56,17 @@ func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 	outDir, err := req.EnsureOutputDir(c.Name())
 	if err != nil {
 		return analyzerError(outDir, fmt.Errorf("create USN parser output dir: %w", err))
+	}
+
+	dir, live, err := resolveArtifactSource(req, "usnjrnl")
+	if err != nil {
+		return skippedNoSource(outDir, "collected $UsnJrnl:$J")
+	}
+	var sources []usnJournalSource
+	if live {
+		sources = liveUSNJournalSources(ctx)
+	} else {
+		sources = collectedUSNJournalSources(dir)
 	}
 
 	recordMap, pathCache, enriched, err := loadMFTForUSN(ctx, req)
@@ -86,7 +97,7 @@ func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 
 	var errs []string
 	loaded, rows := 0, 0
-	for _, src := range collectedUSNJournalSources(req.OutputDir) {
+	for _, src := range sources {
 		if err := ctx.Err(); err != nil {
 			stream.Abort()
 			return analyzerError(outDir, err)
@@ -99,24 +110,6 @@ func (c *usnJrnlParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 			errs = append(errs, fmt.Sprintf("%s: %v", src.drive, err))
 		}
 	}
-	// The live journals are read only when no collected one could be opened,
-	// which is the same rule the eagerly-loading version applied.
-	if loaded == 0 {
-		for _, src := range liveUSNJournalSources(ctx) {
-			if err := ctx.Err(); err != nil {
-				stream.Abort()
-				return analyzerError(outDir, err)
-			}
-			if err := writer.run(src, &loaded, &rows); err != nil {
-				if streamFailed(err) {
-					stream.Abort()
-					return analyzerError(outDir, err)
-				}
-				errs = append(errs, fmt.Sprintf("%s: %v", src.drive, err))
-			}
-		}
-	}
-
 	if rows == 0 {
 		stream.Abort()
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Sprintf("no USN records parsed: %s", strings.Join(errs, "; "))}
@@ -136,14 +129,10 @@ type usnJournalSource struct {
 	load  func() ([]byte, error)
 }
 
-// collectedUSNJournalSources lists this run's collected journals, preferring the
-// per-drive filenames and falling back to the legacy single-drive one.
-func collectedUSNJournalSources(outputDir string) []usnJournalSource {
-	dir, ok := existingModuleDir(outputDir, "usnjrnl")
-	if !ok {
-		return nil
-	}
-
+// collectedUSNJournalSources lists the journals in a collected usnjrnl
+// directory, preferring the per-drive filenames and falling back to the legacy
+// single-drive one.
+func collectedUSNJournalSources(dir string) []usnJournalSource {
 	var sources []usnJournalSource
 	for _, drive := range collectedUSNJournalDrives(dir) {
 		path := filepath.Join(dir, "$UsnJrnl_J_"+drive)
@@ -318,14 +307,20 @@ func readLiveUSNJournal(ctx context.Context, drive string) ([]byte, error) {
 }
 
 func loadMFTForUSN(ctx context.Context, req module.AnalyzeRequest) (mftRowIndex, map[mftKey]string, bool, error) {
-	outputDir := req.OutputDir
 	shouldEnrich := req.IsSelected("mft") || req.IsSelected("mft_parser")
 	if !shouldEnrich {
 		return nil, nil, false, nil
 	}
 
-	rows, parseErrs, err := loadMFTRows(ctx, outputDir)
+	rows, parseErrs, err := loadMFTRows(ctx, req)
 	if err != nil {
+		// A run that collected the journal but not the $MFT still has journal
+		// records worth writing, so a missing $MFT drops enrichment instead of
+		// failing the analyzer. Only offline runs reach this: on a live host the
+		// volumes are always readable.
+		if errors.Is(err, errNoCollectedSource) {
+			return nil, nil, false, nil
+		}
 		return nil, nil, false, fmt.Errorf("parse live $MFT for USN enrichment: %w", err)
 	}
 	if len(rows) == 0 {

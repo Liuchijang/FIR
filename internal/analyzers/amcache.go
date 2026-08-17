@@ -17,7 +17,7 @@ import (
 
 func init() { module.RegisterAnalyzer(&amcacheParser{}) }
 
-type amcacheParser struct{}
+type amcacheParser struct{ offlineCapable }
 
 type amcacheDataset struct {
 	Filename string
@@ -145,6 +145,10 @@ var amcacheShortcutColumns = []amcacheColumn{
 	amcacheLastWrite("KeyLastWriteTimestamp"),
 }
 
+// amcacheHiveName is the file the collector writes and the name the live hive
+// has on disk.
+const amcacheHiveName = "Amcache.hve"
+
 func (c *amcacheParser) Name() string     { return "amcache_parser" }
 func (c *amcacheParser) Category() string { return "execution" }
 func (c *amcacheParser) Description() string {
@@ -158,15 +162,28 @@ func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 	}
 
 	var errs []string
-	var collectedPath string
 
-	if collected, ok := collectedAmcacheHive(req.OutputDir); ok {
-		collectedPath = collected
-		if results, err := parseAmcacheResultsFromHiveFile(collected); err == nil && len(results.Datasets) > 0 {
-			return writeAmcacheAnalyzeResult(outDir, results)
-		} else if err != nil {
-			errs = append(errs, "parse collected hive: "+err.Error())
+	// The run's own hive is the only source once the amcache collector is part of
+	// it. The live cascade below reads the running machine three different ways,
+	// and reaching it after a collected hive failed to parse is how this analyzer
+	// used to report success over data the manifest never described.
+	sourceDir, live, err := resolveArtifactSource(req, "amcache")
+	if err != nil {
+		return skippedNoSource(outDir, "collected Amcache.hve")
+	}
+	if !live {
+		collected := filepath.Join(sourceDir, amcacheHiveName)
+		if _, statErr := os.Stat(collected); statErr != nil {
+			return skippedNoSource(outDir, "collected "+amcacheHiveName)
 		}
+		results, parseErr := parseAmcacheResultsFromHiveFile(collected)
+		if parseErr != nil {
+			return amcacheUnavailable(outDir, []string{"parse collected hive: " + parseErr.Error()})
+		}
+		if len(results.Datasets) == 0 {
+			return amcacheUnavailable(outDir, nil)
+		}
+		return writeAmcacheAnalyzeResult(outDir, results)
 	}
 
 	if results, err := parseLiveAmcacheResults(); err == nil && len(results.Datasets) > 0 {
@@ -175,16 +192,12 @@ func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 		errs = append(errs, "parse live registry: "+err.Error())
 	}
 
-	autoCollectedHive, cleanupAutoCollect, err := collectAmcacheSourceForParser(ctx, req, outDir)
+	autoCollectedHive, cleanupAutoCollect, err := collectAmcacheSourceForParser(ctx, outDir)
 	if err == nil {
 		if cleanupAutoCollect != nil {
 			defer cleanupAutoCollect()
 		}
-		// collectAmcacheSourceForParser returns the same path already tried
-		// above whenever the amcache collector already ran (its "auto-collect"
-		// step is a no-op in that case) — retrying it can't produce a
-		// different result, so skip straight to the fresh staged-hive attempt.
-		if autoCollectedHive != "" && autoCollectedHive != collectedPath {
+		if autoCollectedHive != "" {
 			if results, err := parseAmcacheResultsFromHiveFile(autoCollectedHive); err == nil && len(results.Datasets) > 0 {
 				return writeAmcacheAnalyzeResult(outDir, results)
 			} else if err != nil {
@@ -207,6 +220,10 @@ func (c *amcacheParser) Analyze(ctx context.Context, req module.AnalyzeRequest) 
 		errs = append(errs, "live staging failed: "+err.Error())
 	}
 
+	return amcacheUnavailable(outDir, errs)
+}
+
+func amcacheUnavailable(outDir string, errs []string) module.AnalyzeResult {
 	if len(errs) == 0 {
 		return module.AnalyzeResult{OutputPath: outDir, Error: "Amcache hive is not available"}
 	}
@@ -243,7 +260,7 @@ func writeAmcacheResults(outDir string, results amcacheResults) ([]module.FileIn
 }
 
 func parseLiveAmcacheResults() (amcacheResults, error) {
-	root, ok, err := openRegistryKeyOptional(winreg.LOCAL_MACHINE, `AMCACHE`)
+	root, ok, err := openLiveKey(winreg.LOCAL_MACHINE, `AMCACHE`)
 	if err != nil {
 		return amcacheResults{}, fmt.Errorf("open live AMCACHE key: %w", err)
 	}
@@ -256,7 +273,7 @@ func parseLiveAmcacheResults() (amcacheResults, error) {
 }
 
 func parseAmcacheResultsFromHiveFile(hivePath string) (amcacheResults, error) {
-	root, err := loadRegistryAppKey(hivePath)
+	root, err := openCollectedHive(hivePath)
 	if err != nil {
 		return amcacheResults{}, err
 	}
@@ -264,7 +281,7 @@ func parseAmcacheResultsFromHiveFile(hivePath string) (amcacheResults, error) {
 	return parseAmcacheResultsFromRoot(root)
 }
 
-func parseAmcacheResultsFromRoot(root winreg.Key) (amcacheResults, error) {
+func parseAmcacheResultsFromRoot(root registryKey) (amcacheResults, error) {
 	if results, matched, err := parseNewAmcacheResults(root); err != nil {
 		return amcacheResults{}, err
 	} else if matched {
@@ -292,8 +309,8 @@ var amcacheInventories = []struct {
 	{[]string{`Root\InventoryApplicationShortcut`, `Root\InventoryShortcut`}, "amcache_shortcuts.csv", amcacheShortcutColumns},
 }
 
-func parseNewAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
-	programsKey, programsOK, err := openRegistryKeyOptional(root, `Root\InventoryApplication`)
+func parseNewAmcacheResults(root registryKey) (amcacheResults, bool, error) {
+	programsKey, programsOK, err := root.OpenSubkey(`Root\InventoryApplication`)
 	if err != nil {
 		return amcacheResults{}, false, fmt.Errorf("open InventoryApplication: %w", err)
 	}
@@ -301,7 +318,7 @@ func parseNewAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 		defer programsKey.Close()
 	}
 
-	filesKey, filesOK, err := openRegistryKeyOptional(root, `Root\InventoryApplicationFile`)
+	filesKey, filesOK, err := root.OpenSubkey(`Root\InventoryApplicationFile`)
 	if err != nil {
 		return amcacheResults{}, false, fmt.Errorf("open InventoryApplicationFile: %w", err)
 	}
@@ -309,7 +326,7 @@ func parseNewAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 		defer filesKey.Close()
 	}
 
-	inventoryKeys := make([]winreg.Key, len(amcacheInventories))
+	inventoryKeys := make([]registryKey, len(amcacheInventories))
 	present := make([]bool, len(amcacheInventories))
 	matched := programsOK || filesOK
 	for i, inv := range amcacheInventories {
@@ -331,7 +348,7 @@ func parseNewAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 
 	programIDs := map[string]struct{}{}
 	if programsOK {
-		names, err := programsKey.ReadSubKeyNames(-1)
+		names, err := programsKey.SubkeyNames()
 		if err != nil {
 			return amcacheResults{}, true, fmt.Errorf("enumerate InventoryApplication: %w", err)
 		}
@@ -372,16 +389,16 @@ func parseNewAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 	return results, true, nil
 }
 
-func parseInventoryApplicationFileRows(filesKey winreg.Key, programIDs map[string]struct{}) ([][]string, error) {
-	names, err := filesKey.ReadSubKeyNames(-1)
+func parseInventoryApplicationFileRows(filesKey registryKey, programIDs map[string]struct{}) ([][]string, error) {
+	names, err := filesKey.SubkeyNames()
 	if err != nil {
 		return nil, fmt.Errorf("enumerate InventoryApplicationFile: %w", err)
 	}
 
 	rows := make([][]string, 0, len(names))
 	for _, name := range names {
-		key, err := winreg.OpenKey(filesKey, name, winreg.READ)
-		if err != nil {
+		key, ok, err := filesKey.OpenSubkey(name)
+		if err != nil || !ok {
 			continue
 		}
 
@@ -404,7 +421,7 @@ func parseInventoryApplicationFileRows(filesKey winreg.Key, programIDs map[strin
 		rows = append(rows, []string{
 			"Unassociated",
 			programID,
-			registryKeyLastWriteString(key),
+			key.LastWriteString(),
 			normalizeAmcacheSHA1(readRegistryFirstString(key, "FileId", "SHA1")),
 			readRegistryFirstBoolStringDefault(key, "False", "IsOsComponent"),
 			fullPath,
@@ -431,7 +448,7 @@ func parseInventoryApplicationFileRows(filesKey winreg.Key, programIDs map[strin
 }
 
 // amcacheField pulls one CSV column out of an inventory subkey.
-type amcacheField func(key winreg.Key, keyName string) string
+type amcacheField func(key registryKey, keyName string) string
 
 // amcacheColumn keeps a column's header next to the value that fills it. The two
 // used to be a package-level header slice and a positional row literal three
@@ -452,32 +469,32 @@ func amcacheValueNames(header string, names []string) []string {
 }
 
 func amcacheKeyName(header string) amcacheColumn {
-	return amcacheColumn{header, func(_ winreg.Key, keyName string) string { return keyName }}
+	return amcacheColumn{header, func(_ registryKey, keyName string) string { return keyName }}
 }
 
 func amcacheLastWrite(header string) amcacheColumn {
-	return amcacheColumn{header, func(key winreg.Key, _ string) string {
-		return registryKeyLastWriteString(key)
+	return amcacheColumn{header, func(key registryKey, _ string) string {
+		return key.LastWriteString()
 	}}
 }
 
 func amcacheString(header string, names ...string) amcacheColumn {
 	names = amcacheValueNames(header, names)
-	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+	return amcacheColumn{header, func(key registryKey, _ string) string {
 		return readRegistryFirstString(key, names...)
 	}}
 }
 
 func amcacheJoined(header string, names ...string) amcacheColumn {
 	names = amcacheValueNames(header, names)
-	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+	return amcacheColumn{header, func(key registryKey, _ string) string {
 		return readRegistryFirstJoinedString(key, names...)
 	}}
 }
 
 func amcacheDecimal(header string, names ...string) amcacheColumn {
 	names = amcacheValueNames(header, names)
-	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+	return amcacheColumn{header, func(key registryKey, _ string) string {
 		return readRegistryFirstDecimalString(key, names...)
 	}}
 }
@@ -486,21 +503,21 @@ func amcacheDecimal(header string, names ...string) amcacheColumn {
 // flag being off, which is what Amcache means by omitting it.
 func amcacheBool(header string, names ...string) amcacheColumn {
 	names = amcacheValueNames(header, names)
-	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+	return amcacheColumn{header, func(key registryKey, _ string) string {
 		return readRegistryFirstBoolStringDefault(key, "False", names...)
 	}}
 }
 
 func amcacheDate(header string, names ...string) amcacheColumn {
 	names = amcacheValueNames(header, names)
-	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+	return amcacheColumn{header, func(key registryKey, _ string) string {
 		return normalizeRegistryDateString(readRegistryFirstString(key, names...))
 	}}
 }
 
 func amcacheSHA1(header string, names ...string) amcacheColumn {
 	names = amcacheValueNames(header, names)
-	return amcacheColumn{header, func(key winreg.Key, _ string) string {
+	return amcacheColumn{header, func(key registryKey, _ string) string {
 		return normalizeAmcacheSHA1(readRegistryFirstString(key, names...))
 	}}
 }
@@ -517,16 +534,16 @@ func amcacheHeaders(columns []amcacheColumn) []string {
 // export has this shape; only the columns differ. A subkey that will not open is
 // skipped rather than failing the inventory, because one unreadable device entry
 // should not cost the other few thousand.
-func amcacheSubkeyRows(root winreg.Key, label string, columns []amcacheColumn) ([][]string, error) {
-	names, err := root.ReadSubKeyNames(-1)
+func amcacheSubkeyRows(root registryKey, label string, columns []amcacheColumn) ([][]string, error) {
+	names, err := root.SubkeyNames()
 	if err != nil {
 		return nil, fmt.Errorf("enumerate %s: %w", label, err)
 	}
 
 	rows := make([][]string, 0, len(names))
 	for _, name := range names {
-		key, err := winreg.OpenKey(root, name, winreg.READ)
-		if err != nil {
+		key, ok, err := root.OpenSubkey(name)
+		if err != nil || !ok {
 			continue
 		}
 		row := make([]string, len(columns))
@@ -539,8 +556,8 @@ func amcacheSubkeyRows(root winreg.Key, label string, columns []amcacheColumn) (
 	return rows, nil
 }
 
-func parseOldAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
-	programsKey, programsOK, err := openRegistryKeyOptional(root, `Root\Programs`)
+func parseOldAmcacheResults(root registryKey) (amcacheResults, bool, error) {
+	programsKey, programsOK, err := root.OpenSubkey(`Root\Programs`)
 	if err != nil {
 		return amcacheResults{}, false, fmt.Errorf("open Programs: %w", err)
 	}
@@ -548,7 +565,7 @@ func parseOldAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 		defer programsKey.Close()
 	}
 
-	filesKey, filesOK, err := openRegistryKeyOptional(root, `Root\File`)
+	filesKey, filesOK, err := root.OpenSubkey(`Root\File`)
 	if err != nil {
 		return amcacheResults{}, false, fmt.Errorf("open File: %w", err)
 	}
@@ -561,7 +578,7 @@ func parseOldAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 
 	programIDs := map[string]struct{}{}
 	if programsOK {
-		names, err := programsKey.ReadSubKeyNames(-1)
+		names, err := programsKey.SubkeyNames()
 		if err != nil {
 			return amcacheResults{}, false, fmt.Errorf("enumerate Programs: %w", err)
 		}
@@ -572,8 +589,8 @@ func parseOldAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 
 	rows := make([][]string, 0, 512)
 	if filesOK {
-		if err := walkAmcacheFileKeys(filesKey, `Root\File`, func(_ string, entryKey string, key winreg.Key) error {
-			values := registryValueNames(key)
+		if err := walkAmcacheFileKeys(filesKey, `Root\File`, func(_ string, entryKey string, key registryKey) error {
+			values := registryValueNameSet(key)
 			if !values["15"] && !values["101"] {
 				return nil
 			}
@@ -588,7 +605,7 @@ func parseOldAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 			rows = append(rows, []string{
 				"Unassociated",
 				programID,
-				registryKeyLastWriteString(key),
+				key.LastWriteString(),
 				normalizeAmcacheSHA1(readRegistryFirstString(key, "101")),
 				"False",
 				fullPath,
@@ -625,14 +642,14 @@ func parseOldAmcacheResults(root winreg.Key) (amcacheResults, bool, error) {
 	}, true, nil
 }
 
-func walkAmcacheFileKeys(key winreg.Key, currentPath string, visit func(keyPath, entryKey string, key winreg.Key) error) error {
-	names, err := key.ReadSubKeyNames(-1)
+func walkAmcacheFileKeys(key registryKey, currentPath string, visit func(keyPath, entryKey string, key registryKey) error) error {
+	names, err := key.SubkeyNames()
 	if err != nil {
 		return fmt.Errorf("enumerate %s: %w", currentPath, err)
 	}
 	for _, name := range names {
-		subKey, err := winreg.OpenKey(key, name, winreg.READ)
-		if err != nil {
+		subKey, ok, err := key.OpenSubkey(name)
+		if err != nil || !ok {
 			continue
 		}
 		nextPath := currentPath + `\` + name
@@ -649,27 +666,27 @@ func walkAmcacheFileKeys(key winreg.Key, currentPath string, visit func(keyPath,
 	return nil
 }
 
-func openAmcacheOptionalKey(root winreg.Key, paths ...string) (winreg.Key, bool, error) {
+func openAmcacheOptionalKey(root registryKey, paths ...string) (registryKey, bool, error) {
 	for _, path := range paths {
-		key, ok, err := openRegistryKeyOptional(root, path)
+		key, ok, err := root.OpenSubkey(path)
 		if err != nil {
-			return 0, false, err
+			return nil, false, err
 		}
 		if ok {
 			return key, true, nil
 		}
 	}
-	return 0, false, nil
+	return nil, false, nil
 }
 
-func readRegistryFirstDecimalString(key winreg.Key, names ...string) string {
+func readRegistryFirstDecimalString(key registryKey, names ...string) string {
 	if value, ok := readRegistryFirstUint64(key, names...); ok {
 		return strconv.FormatUint(value, 10)
 	}
 	return readRegistryFirstString(key, names...)
 }
 
-func readRegistryFirstBoolString(key winreg.Key, names ...string) string {
+func readRegistryFirstBoolString(key registryKey, names ...string) string {
 	for _, name := range names {
 		if value, ok := readRegistryIntegerValue(key, name); ok {
 			return boolString(value != 0)
@@ -688,7 +705,7 @@ func readRegistryFirstBoolString(key winreg.Key, names ...string) string {
 	return ""
 }
 
-func readRegistryFirstBoolStringDefault(key winreg.Key, defaultValue string, names ...string) string {
+func readRegistryFirstBoolStringDefault(key registryKey, defaultValue string, names ...string) string {
 	value := readRegistryFirstBoolString(key, names...)
 	if strings.TrimSpace(value) == "" {
 		return defaultValue
@@ -696,9 +713,9 @@ func readRegistryFirstBoolStringDefault(key winreg.Key, defaultValue string, nam
 	return value
 }
 
-func readRegistryFirstJoinedString(key winreg.Key, names ...string) string {
+func readRegistryFirstJoinedString(key registryKey, names ...string) string {
 	for _, name := range names {
-		if value, _, err := key.GetStringsValue(name); err == nil {
+		if value, ok := key.StringsValue(name); ok {
 			return strings.Join(value, ",")
 		}
 		if value, ok := readRegistryStringValue(key, name); ok {
@@ -731,7 +748,7 @@ func normalizeAmcacheSHA1(value string) string {
 // transaction logs onto the volume being investigated, and a run that is killed
 // mid-parse would leave them there.
 func stageLiveAmcacheHive(workDir string) (string, func(), error) {
-	src := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve")
+	src := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", amcacheHiveName)
 	if _, err := os.Stat(src); err != nil {
 		return "", nil, err
 	}
@@ -742,7 +759,7 @@ func stageLiveAmcacheHive(workDir string) (string, func(), error) {
 	}
 
 	cleanup := func() { _ = os.RemoveAll(tempDir) }
-	dst := filepath.Join(tempDir, "Amcache.hve")
+	dst := filepath.Join(tempDir, amcacheHiveName)
 
 	// A raw file copy carries over whatever "dirty" (pending transaction) state
 	// the live hive currently has, so RegLoadAppKeyW needs the matching
@@ -805,9 +822,9 @@ func stageLiveAmcacheHive(workDir string) (string, func(), error) {
 	return "", nil, fmt.Errorf("%s", strings.Join(errs, "; "))
 }
 
-func collectedAmcacheHive(outputDir string) (string, bool) {
-	if dir, ok := existingModuleDir(outputDir, "amcache"); ok {
-		collected := filepath.Join(dir, "Amcache.hve")
+func collectedAmcacheHive(sourceRoot string) (string, bool) {
+	if dir, ok := existingModuleDir(sourceRoot, "amcache"); ok {
+		collected := filepath.Join(dir, amcacheHiveName)
 		if _, err := os.Stat(collected); err == nil {
 			return collected, true
 		}
@@ -824,14 +841,13 @@ func collectAmcacheSource(ctx context.Context, outputDir string) error {
 	return err
 }
 
-func collectAmcacheSourceForParser(ctx context.Context, req module.AnalyzeRequest, workDir string) (string, func(), error) {
-	if req.IsSelected("amcache") {
-		if collected, ok := collectedAmcacheHive(req.OutputDir); ok {
-			return collected, nil, nil
-		}
-		return "", nil, fmt.Errorf("amcache collector was selected but Amcache.hve was not found in run output")
-	}
-
+// collectAmcacheSourceForParser runs the amcache collector for a run that did
+// not select it, so the parser has a mountable hive to read.
+//
+// It no longer has a "the collector already ran" branch: Analyze only reaches
+// this after resolveArtifactSource said the collector is not part of the run, so
+// that branch could not be taken.
+func collectAmcacheSourceForParser(ctx context.Context, workDir string) (string, func(), error) {
 	// Under the analyzer's own directory, not %TEMP%: this runs the whole amcache
 	// collector, so the destination receives a full copy of the hive on the
 	// volume under investigation if it points at the subject's temp directory.

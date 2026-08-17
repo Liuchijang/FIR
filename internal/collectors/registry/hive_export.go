@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Liuchijang/Tyto/internal/acquisition"
 	"github.com/Liuchijang/Tyto/internal/module"
 	"github.com/Liuchijang/Tyto/internal/utils"
 	"golang.org/x/sys/windows"
@@ -100,6 +101,11 @@ func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInf
 		}
 	}
 
+	// One pool for the whole batch: the raw fallback below opens a volume handle
+	// per drive, and the hives all live on the same one.
+	rawPool := &acquisition.RawVolumePool{}
+	defer rawPool.Close()
+
 	var files []module.FileInfo
 	var errs []string
 	for _, spec := range specs {
@@ -107,16 +113,19 @@ func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInf
 			return nil, nil, err
 		}
 
-		fi, err := collectHiveSpec(spec)
+		fi, err := collectHiveSpec(spec, rawPool)
 		if err != nil {
-			// .LOG1/.LOG2 transaction-log companion files (non-primary specs) have
-			// no registry-save fallback and are held open by the OS for the life
-			// of the hive, so a sharing violation on them is expected and
-			// unfixable while the system is live — not worth surfacing as a
-			// module failure alongside genuinely missing/inaccessible hives.
-			if (isNotFoundError(err) || isHandleBlockedError(err)) && !spec.isPrimary {
+			// A .LOG1/.LOG2 that is not there has nothing to collect — Windows
+			// removes the second log on some configurations — so that stays quiet.
+			if isNotFoundError(err) && !spec.isPrimary {
 				continue
 			}
+			// Anything else is reported, transaction logs included. This used to
+			// swallow a blocked log entirely: the module returned success with no
+			// error and a manifest listing six files, while the four hives' logs
+			// were missing and nothing said so. A hive whose pending transactions
+			// were never collected cannot be recovered later, which is a gap an
+			// analyst has to be told about rather than infer from a file count.
 			errs = append(errs, fmt.Sprintf("%s: %v", spec.srcPath, err))
 			continue
 		}
@@ -129,7 +138,7 @@ func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInf
 	return files, errs, nil
 }
 
-func collectHiveSpec(spec hiveSpec) (module.FileInfo, error) {
+func collectHiveSpec(spec hiveSpec, rawPool *acquisition.RawVolumePool) (module.FileInfo, error) {
 	if spec.isPrimary && spec.root != 0 && spec.keyPath != "" {
 		fi, err := saveRegistryHive(spec)
 		if err == nil {
@@ -138,7 +147,7 @@ func collectHiveSpec(spec hiveSpec) (module.FileInfo, error) {
 		}
 	}
 
-	fi, err := copyRegistryFile(spec)
+	fi, err := copyRegistryFile(spec, rawPool)
 	if err == nil {
 		fi.Path = spec.relPath
 		return fi, nil
@@ -156,12 +165,36 @@ func collectHiveSpec(spec hiveSpec) (module.FileInfo, error) {
 	return fi, nil
 }
 
-func copyRegistryFile(spec hiveSpec) (module.FileInfo, error) {
+// copyRegistryFile copies a hive file, ending at a raw NTFS read.
+//
+// That last step is what a transaction log needs. The kernel holds .LOG1/.LOG2
+// open for the life of the hive with a share mode that refuses another opener, and
+// a sharing violation is not something backup semantics can lift — measured: a
+// read of the live NTUSER.DAT.LOG1 fails even with FILE_SHARE_READ|WRITE.
+// Reading the file's data runs straight off the volume goes around the lock
+// entirely, which is how the amcache collector has always got its logs and why
+// this collector was the one coming home without them.
+//
+// Primary hives rarely reach it: RegSaveKey is tried first for them and asks the
+// registry for a consistent copy rather than touching the file at all.
+func copyRegistryFile(spec hiveSpec, rawPool *acquisition.RawVolumePool) (module.FileInfo, error) {
 	fi, err := utils.SafeCopyFile(spec.srcPath, spec.dstPath)
 	if err == nil {
 		return fi, nil
 	}
-	return utils.SafeCopyFileBackup(spec.srcPath, spec.dstPath)
+
+	fi, backupErr := utils.SafeCopyFileBackup(spec.srcPath, spec.dstPath)
+	if backupErr == nil {
+		return fi, nil
+	}
+	if isNotFoundError(backupErr) {
+		return module.FileInfo{}, backupErr
+	}
+
+	if _, rawErr := rawPool.CopyFile(spec.srcPath, spec.dstPath); rawErr != nil {
+		return module.FileInfo{}, fmt.Errorf("%v; raw volume read failed: %w", backupErr, rawErr)
+	}
+	return utils.FileInfoFromPath(spec.dstPath)
 }
 
 func saveRegistryHive(spec hiveSpec) (module.FileInfo, error) {

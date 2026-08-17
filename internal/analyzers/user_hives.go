@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Liuchijang/Tyto/internal/module"
 	"golang.org/x/sys/windows"
 	winreg "golang.org/x/sys/windows/registry"
 )
@@ -19,12 +20,26 @@ type userHiveSource struct {
 	Live     bool
 }
 
-func collectedUserHiveSources(outputDir, hiveName string) ([]userHiveSource, error) {
-	dir, ok := existingModuleDir(outputDir, "registry")
-	if !ok {
-		return nil, nil
+// resolveNTUserHiveSources lists the per-user NTUSER.DAT hives to parse: the
+// analyzed run's collected copies, and the live registry only when the policy
+// allows it.
+//
+// userassist, recentdocs and runmru each carried this same chain inline. One
+// copy is what keeps them agreeing about which artifact a run's output was
+// derived from — and it is the one place the live fallback has to be refused for
+// an offline run, instead of three.
+func resolveNTUserHiveSources(req module.AnalyzeRequest) ([]userHiveSource, error) {
+	dir, live, err := resolveArtifactSource(req, "registry")
+	if err != nil {
+		return nil, err
 	}
+	if live {
+		return liveUserNTUserSources()
+	}
+	return collectedUserHiveSources(dir, "NTUSER.DAT")
+}
 
+func collectedUserHiveSources(dir, hiveName string) ([]userHiveSource, error) {
 	usersDir := filepath.Join(dir, "users")
 	entries, err := os.ReadDir(usersDir)
 	if err != nil {
@@ -53,13 +68,16 @@ func collectedUserHiveSources(outputDir, hiveName string) ([]userHiveSource, err
 }
 
 func liveUserNTUserSources() ([]userHiveSource, error) {
-	profilesKey, err := winreg.OpenKey(winreg.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`, winreg.READ)
+	profilesKey, ok, err := openLiveKey(winreg.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`)
 	if err != nil {
 		return nil, fmt.Errorf("open ProfileList: %w", err)
 	}
+	if !ok {
+		return nil, fmt.Errorf("ProfileList is not present")
+	}
 	defer profilesKey.Close()
 
-	sids, err := profilesKey.ReadSubKeyNames(-1)
+	sids, err := profilesKey.SubkeyNames()
 	if err != nil {
 		return nil, fmt.Errorf("enumerate ProfileList: %w", err)
 	}
@@ -71,8 +89,8 @@ func liveUserNTUserSources() ([]userHiveSource, error) {
 			continue
 		}
 
-		profileKey, err := winreg.OpenKey(profilesKey, sid, winreg.READ)
-		if err != nil {
+		profileKey, ok, err := profilesKey.OpenSubkey(sid)
+		if err != nil || !ok {
 			continue
 		}
 		profilePath := readRegistryFirstString(profileKey, "ProfileImagePath")
@@ -85,7 +103,7 @@ func liveUserNTUserSources() ([]userHiveSource, error) {
 			continue
 		}
 
-		userKey, ok, err := openRegistryKeyOptional(winreg.USERS, sid)
+		userKey, ok, err := openLiveKey(winreg.USERS, sid)
 		if err != nil {
 			if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 				continue
@@ -108,18 +126,20 @@ func liveUserNTUserSources() ([]userHiveSource, error) {
 	return sources, nil
 }
 
-func openUserHiveSource(source userHiveSource) (winreg.Key, error) {
+// openUserHiveSource opens one user hive: the live HKU subtree for a logged-on
+// SID, or the collected NTUSER.DAT parsed from its file.
+func openUserHiveSource(source userHiveSource) (registryKey, error) {
 	if source.Live {
-		key, ok, err := openRegistryKeyOptional(winreg.USERS, source.SID)
+		key, ok, err := openLiveKey(winreg.USERS, source.SID)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		if !ok {
-			return 0, fmt.Errorf("live user hive not found: %s", source.SID)
+			return nil, fmt.Errorf("live user hive not found: %s", source.SID)
 		}
 		return key, nil
 	}
-	return loadRegistryAppKey(source.HivePath)
+	return openCollectedHive(source.HivePath)
 }
 
 func expandKnownUserEnv(path string) string {

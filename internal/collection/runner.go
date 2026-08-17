@@ -32,6 +32,29 @@ type Options struct {
 	StorageEstimate resource.StorageEstimate
 	SilentConsole   bool
 	Callbacks       Callbacks
+	// Source is the previously collected run to analyze instead of acquiring
+	// anything. Set it and the run reads that tree and never the live host; leave
+	// it nil for a normal collection.
+	Source *SourceRun
+}
+
+// offline reports whether this run parses a previously collected tree.
+func (o Options) offline() bool { return o.Source != nil }
+
+// sourceRoot is the run directory analyzers read artifacts from — the analyzed
+// run offline, and the run being written for a live collection.
+func (o Options) sourceRoot() string {
+	if o.Source != nil {
+		return o.Source.Root
+	}
+	return ""
+}
+
+func (o Options) sourcePolicy() module.SourcePolicy {
+	if o.offline() {
+		return module.SourcePolicyCollectedOnly
+	}
+	return module.SourcePolicyCollectedThenLive
 }
 
 func Run(ctx context.Context, modules []module.Module, opts Options) (output.SummaryReport, error) {
@@ -44,12 +67,19 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 	opts.Resources.CPULimitMechanism = cpuMechanism
 	opts.Resources.DiskIOMechanism = diskMechanism
 
-	opts.StorageEstimate = resource.EstimateStorage(opts.OutputBaseDir, modules, opts.Resources.Compress)
+	// Offline analysis is sized differently: the live measurements behind
+	// EstimateStorage would describe the investigator's disks, not the artifacts
+	// actually on hand.
+	if opts.offline() {
+		opts.StorageEstimate = resource.EstimateAnalysisStorage(opts.OutputBaseDir, opts.Source.Root, modules, opts.Resources.Compress)
+	} else {
+		opts.StorageEstimate = resource.EstimateStorage(opts.OutputBaseDir, modules, opts.Resources.Compress)
+	}
 	if !opts.StorageEstimate.Healthy {
 		return output.SummaryReport{}, fmt.Errorf("storage check failed: %s", opts.StorageEstimate.Reason)
 	}
 
-	mgr, err := output.NewManager(opts.OutputBaseDir)
+	mgr, err := newOutputManager(opts)
 	if err != nil {
 		return output.SummaryReport{}, fmt.Errorf("create output directory: %w", err)
 	}
@@ -88,13 +118,20 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 		// outside the Go runtime, so this path leaves them uncapped.
 		log.Warn("CPU limit could not be applied to child processes; only goroutines are capped")
 	}
+	// Started before the integrity check, not after: re-hashing a collected tree
+	// is minutes of real work on a large one, and a duration that leaves it out
+	// understates what the run cost.
+	startedAt := time.Now()
+
+	// The check runs before any analyzer opens an artifact, so the log says
+	// whether the inputs were intact ahead of the output derived from them.
+	integrity := logSourceRun(log, opts, modules)
 	for idx, mod := range modules {
 		if opts.Callbacks.OnModuleQueued != nil {
 			opts.Callbacks.OnModuleQueued(idx, mod)
 		}
 	}
 
-	startedAt := time.Now()
 	results := runModules(ctx, modules, mgr, opts)
 	totalDuration := time.Since(startedAt)
 	finishedAt := startedAt.Add(totalDuration)
@@ -102,6 +139,33 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 	manifest := output.NewManifest(mgr.BaseDir(), startedAt, finishedAt, results)
 	manifest.Resources = opts.Resources
 	manifest.StorageEstimate = opts.StorageEstimate
+	if opts.offline() {
+		manifest.SourceRun = opts.Source.Info(integrity)
+		// Both NewManifest and NewSummaryReport describe the machine they run on.
+		// For an analysis run that is the investigator's workstation, while every
+		// CSV in the directory describes the subject — so the subject's identity
+		// wins in both, and SourceRun.AnalyzedOn records where the parsing
+		// happened. Setting only one of them is worse than setting neither: the
+		// two files ship side by side and would name different machines for the
+		// same data.
+		if opts.Source.Hostname != "" {
+			manifest.Hostname = opts.Source.Hostname
+			report.Hostname = opts.Source.Hostname
+		}
+		if opts.Source.OS != "" {
+			manifest.OS = opts.Source.OS
+			manifest.Architecture = opts.Source.Architecture
+			report.OS = opts.Source.OS
+			report.Architecture = opts.Source.Architecture
+		}
+		// Unconditional, including when the source has none. NewManifest filled
+		// this in from the machine it ran on, which here is the analyst's
+		// workstation — so leaving it alone on a run whose input predates the field
+		// would label the subject's evidence with the analyst's timezone. Absent is
+		// the honest answer and the only one available.
+		manifest.Timezone = opts.Source.Timezone
+		report.Timezone = opts.Source.Timezone
+	}
 
 	if err := output.WriteManifest(mgr.BaseDir(), manifest); err != nil {
 		log.Error(fmt.Sprintf("Failed to write manifest: %v", err))
@@ -175,6 +239,64 @@ func Run(ctx context.Context, modules []module.Module, opts Options) (output.Sum
 	}
 
 	return report, nil
+}
+
+// logSourceRun records what is being analyzed and verifies it, returning the
+// integrity report for the manifest.
+//
+// Nothing here stops the run. A mismatch means the analyst has to weigh the CSVs
+// against a file that changed since collection, which is a judgement they make
+// with the evidence in hand — but they can only make it if it is stated, so this
+// is a warning rather than a silent pass.
+func logSourceRun(log *logging.Logger, opts Options, modules []module.Module) *output.IntegrityReport {
+	if !opts.offline() {
+		return nil
+	}
+
+	source := opts.Source
+	log.Info(fmt.Sprintf("Analyzing collected run: %s", source.Root))
+	if source.Archive != "" {
+		log.Info(fmt.Sprintf("Extracted from archive: %s", source.Archive))
+	}
+	if source.ManifestFound {
+		log.Info(fmt.Sprintf("Collected on %s by Tyto %s at %s",
+			source.Hostname, source.CollectorVersion, source.CollectedAt.Format(time.RFC3339)))
+	} else if source.ManifestError != "" {
+		log.Warn(fmt.Sprintf("The analyzed run's manifest.json could not be read: %s", source.ManifestError))
+		log.Warn("Artifact hashes cannot be verified and the run is named after the input, even though the collection recorded them")
+	} else {
+		log.Warn("No manifest.json in the analyzed run: artifact hashes cannot be verified and the run is named after the input")
+	}
+	log.Info("Live sources are disabled for this run; an analyzer without its artifact is skipped")
+
+	integrity := source.VerifyIntegrity(modules)
+	if integrity == nil {
+		return nil
+	}
+	if integrity.OK() {
+		log.Success(fmt.Sprintf("Integrity: %d/%d collected file(s) match the source manifest", integrity.Verified, integrity.FilesChecked))
+		return integrity
+	}
+	log.Warn(fmt.Sprintf("Integrity: %d/%d collected file(s) match the source manifest", integrity.Verified, integrity.FilesChecked))
+	for _, name := range integrity.Mismatched {
+		log.Warn(fmt.Sprintf("Integrity: %s does not match the hash recorded at collection", name))
+	}
+	for _, name := range integrity.Missing {
+		log.Warn(fmt.Sprintf("Integrity: %s is recorded in the source manifest but missing", name))
+	}
+	for _, entry := range integrity.Unreadable {
+		log.Warn(fmt.Sprintf("Integrity: could not read %s", entry))
+	}
+	return integrity
+}
+
+// newOutputManager creates the run directory. An offline analysis names it after
+// the collection it read rather than after the machine doing the reading.
+func newOutputManager(opts Options) (*output.Manager, error) {
+	if opts.offline() {
+		return output.NewManagerWithName(opts.OutputBaseDir, opts.Source.RunDirName())
+	}
+	return output.NewManager(opts.OutputBaseDir)
 }
 
 // describeDiskBudget reports the budget together with how it is enforced, so a

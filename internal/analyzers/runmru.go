@@ -2,17 +2,17 @@ package analyzers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/Liuchijang/Tyto/internal/module"
-	winreg "golang.org/x/sys/windows/registry"
 )
 
 func init() { module.RegisterAnalyzer(&runMRUParser{}) }
 
-type runMRUParser struct{}
+type runMRUParser struct{ offlineCapable }
 
 type runMRURow struct {
 	Username              string
@@ -38,15 +38,12 @@ func (c *runMRUParser) Analyze(ctx context.Context, req module.AnalyzeRequest) m
 		return analyzerError(outDir, fmt.Errorf("create runmru output dir: %w", err))
 	}
 
-	sources, err := collectedUserHiveSources(req.OutputDir, "NTUSER.DAT")
+	sources, err := resolveNTUserHiveSources(req)
 	if err != nil {
-		return analyzerError(outDir, err)
-	}
-	if len(sources) == 0 {
-		sources, err = liveUserNTUserSources()
-		if err != nil {
-			return analyzerError(outDir, err)
+		if errors.Is(err, errNoCollectedSource) {
+			return skippedNoSource(outDir, "collected NTUSER.DAT hives")
 		}
+		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {
 		return module.AnalyzeResult{OutputPath: outDir, Error: "no NTUSER.DAT sources found in collected registry output or live registry"}
@@ -58,12 +55,12 @@ func (c *runMRUParser) Analyze(ctx context.Context, req module.AnalyzeRequest) m
 			return analyzerError(outDir, err)
 		}
 
-		root, err := openUserHiveSource(source)
+		hive, err := openUserHiveSource(source)
 		if err != nil {
 			continue
 		}
-		sourceRows, err := parseRunMRUFromRoot(root, source)
-		root.Close()
+		sourceRows, err := parseRunMRUFromRoot(hive, source)
+		hive.Close()
 		if err != nil {
 			continue
 		}
@@ -116,10 +113,10 @@ func (c *runMRUParser) Analyze(ctx context.Context, req module.AnalyzeRequest) m
 	}, csvRows)
 }
 
-func parseRunMRUFromRoot(root winreg.Key, source userHiveSource) ([]runMRURow, error) {
+func parseRunMRUFromRoot(root registryKey, source userHiveSource) ([]runMRURow, error) {
 	const keyPath = `Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU`
 
-	key, ok, err := openRegistryKeyOptional(root, keyPath)
+	key, ok, err := root.OpenSubkey(keyPath)
 	if err != nil {
 		return nil, err
 	}
@@ -130,9 +127,9 @@ func parseRunMRUFromRoot(root winreg.Key, source userHiveSource) ([]runMRURow, e
 
 	mruList := readRegistryFirstString(key, "MRUList")
 	mruPositions := parseRunMRUList(mruList)
-	keyLastWrite := registryKeyLastWriteString(key)
+	keyLastWrite := key.LastWriteString()
 
-	valueNames, err := key.ReadValueNames(-1)
+	valueNames, err := key.ValueNames()
 	if err != nil {
 		return nil, fmt.Errorf("enumerate RunMRU values: %w", err)
 	}
@@ -173,7 +170,7 @@ func parseRunMRUList(value string) map[string]int {
 	return positions
 }
 
-func readRunMRUCommand(key winreg.Key, valueName string) string {
+func readRunMRUCommand(key registryKey, valueName string) string {
 	if value := readRegistryFirstString(key, valueName); value != "" {
 		return normalizeRunMRUCommand(value)
 	}

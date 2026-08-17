@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,41 +28,12 @@ var (
 var collectCmd = &cobra.Command{
 	Use:   "collect",
 	Short: "Collect forensic artifacts (flag-driven mode)",
-	Long: `Collect specific forensic artifacts using command-line flags.
+	Long: `Collect forensic artifacts from this machine.
 
-Examples:
-  tyto collect --artifact registry,eventlog,prefetch
-  tyto collect --artifact ram,mft,registry --output C:\triage --timeout 10m
-  tyto collect --artifact all --cpu-limit 60 --disk-io 80MB
-  tyto collect --artifact all --compress
-  tyto collect --artifact eventlog --analyze
+Collector modules only by default; --analyze also runs the analyzers for the
+selected categories.
 
-By default, --artifact only runs collector modules (the ones that acquire raw
-artifacts) — analyzer modules (*_parser, autoruns, process_explorer, etc.) are
-skipped even if a category or "all" would otherwise include them. Pass
---analyze to also run the analyzer for each selected category, once its
-collector has finished.
-
-Available artifact names:
-  ram, mft, usnjrnl, secure_sds, registry, eventlog,
-  prefetch, amcache, wmi, srum, browser,
-  process_explorer, autoruns, mft_parser, usnjrnl_parser,
-  secure_sds_parser, prefetch_parser, amcache_parser,
-  browser_history_parser, browser_cookies_parser,
-  browser_credentials_parser, browser_profile_parser, srum_parser,
-  shimcache_parser, userassist_parser, recentdocs_parser,
-  runmru_parser, eventlog_parser, wmi_parser
-
-Category shortcuts:
-  all       - All modules
-  browser   - Browser forensic artifacts from popular browsers
-  live      - Live process and autoruns triage analysis
-  memory    - RAM acquisition
-  ntfs      - MFT, USN Journal, Secure SDS
-  registry  - Registry hives
-  eventlog  - Windows Event Logs
-  execution - Prefetch, Amcache
-  system    - WMI, SRUM`,
+` + moduleCategoryHelp(),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runCollect()
 	},
@@ -81,6 +53,11 @@ func init() {
 }
 
 func runCollect() error {
+	if strings.EqualFold(strings.TrimSpace(artifactFlag), artifactListKeyword) {
+		printModuleList(os.Stdout)
+		return nil
+	}
+
 	var err error
 	diskIOBytesFlag, err = parseByteSize(diskIOFlag)
 	if err != nil {

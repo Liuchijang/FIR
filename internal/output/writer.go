@@ -18,11 +18,30 @@ type Manager struct {
 }
 
 func NewManager(baseDir string) (*Manager, error) {
-	hostname := platform.DetectHost().Hostname
-	hostname = sanitizeDirName(hostname)
+	hostname := sanitizeDirName(platform.DetectHost().Hostname)
+	ts := time.Now().Format(RunTimestampLayout)
+	return NewManagerWithName(baseDir, fmt.Sprintf("%s_%s", hostname, ts))
+}
 
-	ts := time.Now().Format("20060102_150405")
-	dirName := fmt.Sprintf("%s_%s", hostname, ts)
+// RunTimestampLayout is the wall-clock part of a run directory name, in the
+// operator's local time.
+//
+// Exported because SourceRun.RunDirName formats through it too: an analysis
+// directory is named after the collection it parsed, so both stamps have to come
+// out of the same layout or the analysis stops lining up with its own input.
+const RunTimestampLayout = "20060102_150405"
+
+// NewManagerWithName creates a run directory under an explicit name.
+//
+// Offline analysis needs it: the run happens on the investigator's machine but
+// the output describes the subject's, and naming the directory after the host
+// that happens to be doing the parsing puts the wrong machine's name on the
+// evidence.
+func NewManagerWithName(baseDir, dirName string) (*Manager, error) {
+	dirName = sanitizeDirName(dirName)
+	if dirName == "" {
+		return nil, fmt.Errorf("run directory name is empty")
+	}
 
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output base directory: %w", err)
