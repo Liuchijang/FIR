@@ -261,6 +261,9 @@ func logSourceRun(log *logging.Logger, opts Options, modules []module.Module) *o
 	if source.ManifestFound {
 		log.Info(fmt.Sprintf("Collected on %s by Tyto %s at %s",
 			source.Hostname, source.CollectorVersion, source.CollectedAt.Format(time.RFC3339)))
+	} else if source.ManifestError != "" {
+		log.Warn(fmt.Sprintf("The analyzed run's manifest.json could not be read: %s", source.ManifestError))
+		log.Warn("Artifact hashes cannot be verified and the run is named after the input, even though the collection recorded them")
 	} else {
 		log.Warn("No manifest.json in the analyzed run: artifact hashes cannot be verified and the run is named after the input")
 	}

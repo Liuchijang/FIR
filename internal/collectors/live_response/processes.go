@@ -8,25 +8,19 @@ import (
 	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
-func init() { module.RegisterAnalyzer(&processExplorerAnalyzer{}) }
+func init() { module.RegisterArtifact("live", &processExplorerCollector{}) }
 
-type processExplorerAnalyzer struct{}
+type processExplorerCollector struct{}
 
-func (a *processExplorerAnalyzer) Name() string     { return "process_explorer" }
-func (a *processExplorerAnalyzer) Category() string { return "live" }
-func (a *processExplorerAnalyzer) Description() string {
-	return "Live process triage"
+func (a *processExplorerCollector) Name() string { return "process_explorer" }
+func (a *processExplorerCollector) Description() string {
+	return "Collect running processes, loaded modules and network connections"
 }
 
-func (a *processExplorerAnalyzer) Analyze(ctx context.Context, req module.AnalyzeRequest) module.AnalyzeResult {
+func (a *processExplorerCollector) Collect(ctx context.Context, req module.CollectRequest) module.CollectResult {
 	outDir, err := req.EnsureOutputDir(a.Name())
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create process explorer analyzer output dir: %w", err).Error()}
-	}
-	// A process list only exists while the processes do. Nothing in a collected
-	// run can stand in for it.
-	if !req.AllowLive() {
-		return module.LiveOnlyResult(outDir, a.Name())
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create process explorer output dir: %w", err).Error()}
 	}
 
 	script := `
@@ -189,12 +183,12 @@ $connectionRows | Sort-Object Protocol, ProcessId, LocalAddress, LocalPort, Remo
 `
 
 	if err := utils.RunPowerShell(ctx, script); err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("analyze live process data: %w", err).Error()}
+		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("collect live process data: %w", err).Error()}
 	}
 
 	files, err := utils.CollectGeneratedCSVs(outDir)
 	if err != nil {
-		return module.AnalyzeResult{OutputPath: outDir, Error: err.Error()}
+		return module.CollectResult{OutputPath: outDir, Error: err.Error()}
 	}
-	return module.AnalyzeResult{Files: files, OutputPath: outDir}
+	return module.CollectResult{Files: files, OutputPath: outDir}
 }

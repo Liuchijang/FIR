@@ -44,6 +44,12 @@ type SourceRun struct {
 	OS               string
 	Architecture     string
 	ManifestFound    bool
+	// ManifestError is set when a manifest.json is present but unreadable, which is
+	// not the same finding as one that was never written: the run *has* recorded
+	// hashes and this analysis could not use them. Both end with ManifestFound
+	// false, so without this the log would tell an analyst to look for a missing
+	// file while a corrupt one sat in the directory.
+	ManifestError string
 
 	// CollectedModules is the set of collectors whose output this run holds. It
 	// becomes AnalyzeRequest.SelectedModules, which is what makes the
@@ -201,6 +207,9 @@ func findRunRoot(dest string) string {
 // what is on disk.
 func (s *SourceRun) load() {
 	manifest, err := output.ReadManifest(s.Root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.ManifestError = err.Error()
+	}
 	if err == nil {
 		s.manifest = manifest
 		s.ManifestFound = true

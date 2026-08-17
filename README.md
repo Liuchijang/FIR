@@ -108,8 +108,9 @@ Interactive mode lets you select modules, review runtime configuration, watch li
 ### tyto collect
 
 Acquires artifacts from the machine it runs on. Collector modules only by default
-— analyzers (`*_parser`, `autoruns`, `process_explorer`) are skipped even if a
-category or `all` would otherwise include them, and `--analyze` opts into them.
+— analyzers (`*_parser`) are skipped even if a category or `all` would otherwise
+include them, and `--analyze` opts into them. `autoruns` and `process_explorer`
+are collectors, so they run without it.
 
 ```powershell
 .\tyto.exe collect --artifact registry,eventlog,prefetch     # by module name
@@ -155,7 +156,7 @@ the only difference between the two ways to call it.
 
 # Live: no --input, so the analyzers read this machine. Requires Administrator.
 .\tyto.exe analyze --artifact shimcache_parser,prefetch_parser
-.\tyto.exe analyze --artifact live                                     # autoruns and process_explorer
+.\tyto.exe analyze --artifact wmi_parser                               # carve the live OBJECTS.DATA, plus a CIM query
 ```
 
 | Flag | Description |
@@ -187,6 +188,8 @@ asks for it.
 | `mft` | `ntfs` | Collects the `$MFT` via raw disk access, from every fixed drive |
 | `secure_sds` | `ntfs` | Collects the `$Secure:$SDS` stream, from every fixed drive |
 | `usnjrnl` | `ntfs` | Collects the `$UsnJrnl:$J` USN Change Journal, from every fixed drive |
+| `autoruns` | `live` | Captures autostart configuration from the running system: services, run keys per machine and per user SID, scheduled tasks with their actions and triggers, and every startup folder. **Live state, not an artifact** |
+| `process_explorer` | `live` | Captures running processes with command lines and owners, every loaded module, and TCP/UDP connections joined to the owning process. Falls back to `netstat -ano` where the `Get-Net*` cmdlets are unavailable. **Live state, not an artifact** |
 | `registry` | `registry` | Collects primary registry hives and transaction logs (excludes `SECURITY`, which requires `SYSTEM`, not just Administrator) |
 | `srum` | `system` | Collects the SRUM database (`SRUDB.dat`) |
 | `wmi` | `system` | Collects WMI repository files |
@@ -194,14 +197,16 @@ asks for it.
 ### Analyzers
 
 Most analyzers read an artifact, so they work against a collected run or the live
-machine. **Three are live queries with no artifact behind them** — `autoruns`,
-`process_explorer` and `wmi_parser` — so `analyze --input` drops them from the
-selection rather than have them describe the machine doing the parsing.
+machine, so every one of them is available to `analyze --input`.
+
+`autoruns` and `process_explorer` are **collectors**, listed above. They acquire
+state that exists only while the machine is running, and the runner finishes every
+collector before it starts any analyzer — so as analyzers they captured the most
+volatile data in a run only after every artifact had been copied, a memory image
+included. Use `collect` for them, not `analyze`.
 
 | Name | Category | Description |
 |---|---|---|
-| `autoruns` | `live` | Live autoruns-style triage CSV: services, run keys, scheduled tasks, startup folders. **Live only** |
-| `process_explorer` | `live` | Live process, module and network triage CSV. **Live only** |
 | `amcache_parser` | `execution` | Parses Amcache artifacts |
 | `browser_history_parser` | `browser` | Parses visits and downloads from Chromium `History` and Firefox `places.sqlite`. Downloads carry the redirect chain and the decoded Safe Browsing verdict |
 | `browser_cookies_parser` | `browser` | Parses cookie metadata — host, path, creation, expiry, last access, `Secure`/`HttpOnly`/`SameSite` — from every cookie store a profile has |
@@ -217,13 +222,15 @@ selection rather than have them describe the machine doing the parsing.
 | `srum_parser` | `system` | Parses the SRUM database into one CSV per provider table, resolving application and user IDs through `SruDbIdMapTable`, network adapter types out of the interface LUID, and Wi-Fi profile names from the `SOFTWARE` hive |
 | `userassist_parser` | `registry` | Parses UserAssist |
 | `usnjrnl_parser` | `ntfs` | Parses USN records, joining in each record's `$MFT` name, path and timestamps when `mft` or `mft_parser` is part of the run |
-| `wmi_parser` | `system` | Queries WMI event subscriptions, consumers, filter bindings and namespaces from the running machine. Despite the name it does not read the `wmi` collector's repository files. **Live only** |
+| `wmi_parser` | `system` | Reports WMI event-subscription persistence from two sources. It carves `__FilterToConsumerBinding`, `__EventFilter` and the consumer records out of `OBJECTS.DATA` — the run's collected copy, or the live host's file — which is what makes it work offline and what lets it recover subscriptions already deleted from the repository. When analyzing the live machine it additionally queries `root\subscription` for the authoritative current view plus the namespace tree. The two sets of CSVs keep separate names because they are separate evidence |
 
 ### Category Shortcuts
 
 Use `browser`, `eventlog`, `execution`, `live`, `memory`, `ntfs`, `registry`,
 `system`, or `all`. A category name selects every module in it, collectors and
-analyzers alike.
+analyzers alike. `live` is the one exception in practice: it now holds only
+collectors, so `collect --artifact live` runs both of them and
+`analyze --artifact live` has nothing to run.
 
 Both lists above are also available from the binary, generated from the module
 registry rather than transcribed — `tyto collect --help` prints each category with
@@ -264,8 +271,8 @@ Two properties worth knowing before comparing Tyto's output against another tool
 | `browser_*_parser`, Chromium | `VisitTimeUTC`, `LastVisitUTC`, `CreationUTC`, `ExpiresUTC`, `DateAddedUTC`, … | Microseconds since **1601-01-01** (the WebKit epoch) |
 | `browser_*_parser`, Firefox | the same columns | Microseconds since **1970-01-01** — except `logins.json`, which uses **milliseconds** |
 | `browser_profile_parser` | the Media History columns | Unix epoch **seconds** |
-| `autoruns`, `process_explorer` | every date-bearing column | A .NET `DateTime` in **local** time. These are the only paths that convert a value, because .NET hands the script local time and the column has to match everything else |
-| `wmi_parser` | none — it selects no date-bearing properties | — |
+| `autoruns`, `process_explorer` (collectors) | `LastRunTimeUTC`, `NextRunTimeUTC`, `LastWriteTimeUTC`, `CreationDateUTC`, `CreationTimeUTC` | A .NET `DateTime` in **local** time, converted by `ConvertTo-TytoUtc`. Along with `eventlog_parser` these are the only paths that convert rather than re-render, because .NET hands the script local time |
+| `wmi_parser` | none | The object store keeps no creation time for a subscription and the CIM query selects no date-bearing property, so no column is named after one |
 
 
 ## RAM Acquisition

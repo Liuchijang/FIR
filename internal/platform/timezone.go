@@ -43,10 +43,12 @@ type TimezoneInfo struct {
 //
 // A nil receiver renders "unknown" rather than nothing: on an analysis run the
 // field's absence is a fact about the input, and a blank cell reads as a
-// rendering bug instead.
+// rendering bug instead. Kept short enough to survive the 33-column cell — the
+// first version said "not recorded by the analyzed run" and was truncated to
+// "unknown (not recorded by the a...", which reads like a crash.
 func (t *TimezoneInfo) String() string {
 	if t == nil {
-		return "unknown (not recorded by the analyzed run)"
+		return "unknown (not recorded)"
 	}
 
 	offset := t.OffsetSeconds

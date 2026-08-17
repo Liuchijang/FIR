@@ -50,7 +50,7 @@ func (r AnalyzeRequest) AllowLive() bool {
 // previously collected run instead of the live host.
 //
 // Absence means "no" on purpose. An analyzer that only exists as a live query —
-// wmi_parser, autoruns, process_explorer — would otherwise silently describe the
+// wmi_parser is the remaining one — would otherwise silently describe the
 // investigator's own machine in a report labelled with the subject's hostname,
 // so offline capability has to be claimed rather than assumed.
 type OfflineAnalyzer interface {

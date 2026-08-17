@@ -20,10 +20,11 @@ import (
 // therefore run against a previously collected run instead of the live host.
 //
 // Embedded at the type declaration rather than written out as a method per
-// analyzer, so the claim is one greppable line where a reader already is. The
-// analyzers that do not embed it — wmi_parser and the live_response pair — are
-// live queries with no artifact to read, and module.SupportsOffline excludes
-// them from an offline run.
+// analyzer, so the claim is one greppable line where a reader already is. The one
+// analyzer that does not embed it — wmi_parser — is a live query with no artifact
+// to read, and module.SupportsOffline excludes it from an offline run. The other
+// live queries, autoruns and process_explorer, are collectors and never reach this
+// question at all.
 type offlineCapable struct{}
 
 func (offlineCapable) SupportsOffline() bool { return true }

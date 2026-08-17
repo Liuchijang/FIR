@@ -113,10 +113,11 @@ func runAnalyze() error {
 
 // analyzeModules resolves --artifact to the analyzers this invocation can run.
 //
-// Collectors always go: there is nothing to acquire here either way. What differs
-// is the live-only analyzers — wmi_parser, autoruns, process_explorer. Against a
-// collected run they cannot answer at all, so they are dropped with a note;
-// analyzing the live machine is exactly what they are for, so there they stay.
+// Collectors always go: there is nothing to acquire here either way, and that now
+// covers autoruns and process_explorer, which acquire live state rather than parse
+// an artifact. What differs between the modes is the live-only analyzer wmi_parser.
+// Against a collected run it cannot answer at all, so it is dropped with a note;
+// analyzing the live machine is exactly what it is for, so there it stays.
 func analyzeModules(offline bool) ([]module.Module, error) {
 	resolved, err := collection.ResolveModules(analyzeArtifactFlag)
 	if err != nil {
