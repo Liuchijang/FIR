@@ -3,6 +3,7 @@ package analyzers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ import (
 
 func init() { module.RegisterAnalyzer(&browserProfileParser{}) }
 
-type browserProfileParser struct{}
+type browserProfileParser struct{ offlineCapable }
 
 func (c *browserProfileParser) Name() string     { return "browser_profile_parser" }
 func (c *browserProfileParser) Category() string { return "browser" }
@@ -90,6 +91,9 @@ func (c *browserProfileParser) Analyze(ctx context.Context, req module.AnalyzeRe
 
 	sources, err := resolveBrowserProfileSources(req)
 	if err != nil {
+		if errors.Is(err, errNoCollectedSource) {
+			return skippedNoSource(outDir, "collected browser profiles")
+		}
 		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {

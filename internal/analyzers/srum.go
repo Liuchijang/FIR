@@ -3,6 +3,7 @@ package analyzers
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,7 +20,7 @@ import (
 
 func init() { module.RegisterAnalyzer(&srumParser{}) }
 
-type srumParser struct{}
+type srumParser struct{ offlineCapable }
 
 func (c *srumParser) Name() string     { return "srum_parser" }
 func (c *srumParser) Category() string { return "system" }
@@ -39,6 +40,9 @@ func (c *srumParser) Analyze(ctx context.Context, req module.AnalyzeRequest) mod
 
 	dbPath, cleanup, err := resolveSRUMDatabase(req, outDir)
 	if err != nil {
+		if errors.Is(err, errNoCollectedSource) {
+			return skippedNoSource(outDir, "collected "+srumDatabaseName)
+		}
 		return analyzerError(outDir, err)
 	}
 	if cleanup != nil {
@@ -79,8 +83,8 @@ func (c *srumParser) Analyze(ctx context.Context, req module.AnalyzeRequest) mod
 	exporter := srumExporter{
 		catalog:   catalog,
 		ids:       ids,
-		wlan:      loadSRUMWLANProfiles(req.OutputDir),
-		providers: loadSRUMProviderNames(req.OutputDir),
+		wlan:      loadSRUMWLANProfiles(req),
+		providers: loadSRUMProviderNames(req),
 	}
 
 	var files []module.FileInfo
@@ -124,15 +128,20 @@ func (c *srumParser) Analyze(ctx context.Context, req module.AnalyzeRequest) mod
 // The staged copy goes under the analyzer's own output directory rather than the
 // machine's temp directory, because the subject volume is evidence.
 func resolveSRUMDatabase(req module.AnalyzeRequest, outDir string) (string, func(), error) {
-	if dir, ok := existingModuleDir(req.OutputDir, "srum"); ok {
+	dir, live, err := resolveArtifactSource(req, "srum")
+	if err != nil {
+		return "", nil, err
+	}
+	if !live {
 		collected := filepath.Join(dir, srumDatabaseName)
-		if _, err := os.Stat(collected); err == nil {
-			return collected, nil, nil
+		if _, err := os.Stat(collected); err != nil {
+			return "", nil, errNoCollectedSource
 		}
+		return collected, nil, nil
 	}
 
-	live := filepath.Join(os.Getenv("SystemRoot"), "System32", "sru", srumDatabaseName)
-	if _, err := os.Stat(live); err != nil {
+	livePath := filepath.Join(os.Getenv("SystemRoot"), "System32", "sru", srumDatabaseName)
+	if _, err := os.Stat(livePath); err != nil {
 		return "", nil, fmt.Errorf("no collected %s and no live database: %w", srumDatabaseName, err)
 	}
 
@@ -143,10 +152,10 @@ func resolveSRUMDatabase(req module.AnalyzeRequest, outDir string) (string, func
 	cleanup := func() { _ = os.RemoveAll(stageDir) }
 
 	staged := filepath.Join(stageDir, srumDatabaseName)
-	if _, err := utils.SafeCopyFile(live, staged); err == nil {
+	if _, err := utils.SafeCopyFile(livePath, staged); err == nil {
 		return staged, cleanup, nil
 	}
-	if _, err := utils.SafeCopyFileBackup(live, staged); err == nil {
+	if _, err := utils.SafeCopyFileBackup(livePath, staged); err == nil {
 		return staged, cleanup, nil
 	}
 	cleanup()

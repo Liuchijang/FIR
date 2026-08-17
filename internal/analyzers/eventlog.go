@@ -14,7 +14,7 @@ import (
 
 func init() { module.RegisterAnalyzer(&eventLogParser{}) }
 
-type eventLogParser struct{}
+type eventLogParser struct{ offlineCapable }
 
 func (c *eventLogParser) Name() string     { return "eventlog_parser" }
 func (c *eventLogParser) Category() string { return "eventlog" }
@@ -28,9 +28,12 @@ func (c *eventLogParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 		return analyzerError(outDir, fmt.Errorf("create eventlog parser output dir: %w", err))
 	}
 
-	sourceDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
-	if dir, ok := existingModuleDir(req.OutputDir, "eventlog"); ok {
-		sourceDir = dir
+	sourceDir, live, err := resolveArtifactSource(req, "eventlog")
+	if err != nil {
+		return skippedNoSource(outDir, "collected EVTX files")
+	}
+	if live {
+		sourceDir = filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
 	}
 	selectedFiles, err := eventlogpkg.ResolveSelectedOrAllLogs(sourceDir)
 	if err != nil {

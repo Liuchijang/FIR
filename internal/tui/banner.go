@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/Liuchijang/Tyto/internal/output"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -21,6 +22,31 @@ var (
 	bannerStarWhite = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	bannerStarPink  = lipgloss.NewStyle().Foreground(bannerAccent)
 )
+
+// RenderCommandBanner is the banner the flag-driven commands print before a run.
+//
+// It reuses the interactive mark rather than drawing a second one, so the two
+// front doors of the tool cannot drift apart. subtitle names what is about to
+// happen — the flag path has no header row to carry that the way the TUI does.
+//
+// No box and no fixed width: this goes to a stderr that may be a pipe or a log
+// file, where a bordered panel sized to a guessed terminal width is noise.
+func RenderCommandBanner(subtitle string) string {
+	mark := BannerMarkLines(bannerCommandWidth)
+
+	lines := make([]string, 0, len(mark)+1)
+	lines = append(lines, mark...)
+	title := bannerTitleStyle.Render("Tyto v" + output.Version)
+	if subtitle != "" {
+		title += bannerMutedStyle.Render("  |  ") + bannerMutedStyle.Render(subtitle)
+	}
+	lines = append(lines, title)
+	return strings.Join(lines, "\n")
+}
+
+// bannerCommandWidth keeps a couple of stars around the owl without assuming a
+// terminal width, since the output may not be going to a terminal at all.
+const bannerCommandWidth = 31
 
 func trimToWidth(value string, width int) string {
 	if width <= 0 {

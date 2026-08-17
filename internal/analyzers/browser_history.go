@@ -3,6 +3,7 @@ package analyzers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,7 +19,7 @@ import (
 
 func init() { module.RegisterAnalyzer(&browserHistoryParser{}) }
 
-type browserHistoryParser struct{}
+type browserHistoryParser struct{ offlineCapable }
 
 type browserHistoryRow struct {
 	Username     string
@@ -50,6 +51,9 @@ func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRe
 
 	sources, err := resolveBrowserProfileSources(req)
 	if err != nil {
+		if errors.Is(err, errNoCollectedSource) {
+			return skippedNoSource(outDir, "collected browser profiles")
+		}
 		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {
@@ -141,14 +145,19 @@ func (c *browserHistoryParser) Analyze(ctx context.Context, req module.AnalyzeRe
 }
 
 func resolveBrowserProfileSources(req module.AnalyzeRequest) ([]browserProfileSource, error) {
-	if req.IsSelected(browsercollector.BrowserCollectorName) {
-		if sourceDir, ok := existingModuleDir(req.OutputDir, browsercollector.BrowserCollectorName); ok {
-			sources, err := collectedBrowserProfileSources(sourceDir)
-			if err == nil && len(sources) > 0 {
-				return sources, nil
-			}
+	sourceDir, live, err := resolveArtifactSource(req, browsercollector.BrowserCollectorName)
+	if err != nil {
+		return nil, err
+	}
+	if !live {
+		sources, err := collectedBrowserProfileSources(sourceDir)
+		if err != nil {
+			return nil, fmt.Errorf("read collected browser profiles in %s: %w", sourceDir, err)
 		}
-		return nil, fmt.Errorf("browser collector was selected but collected browser history sources were not found")
+		if len(sources) == 0 {
+			return nil, fmt.Errorf("collected browser tree %s holds no profile", sourceDir)
+		}
+		return sources, nil
 	}
 
 	profiles, err := browsercollector.ResolveProfiles()

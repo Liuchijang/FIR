@@ -51,3 +51,12 @@ func (a *analyzerAdapter) Collect(ctx context.Context, outputDir string) ([]File
 func (a *analyzerAdapter) AnalyzeWithRequest(ctx context.Context, req AnalyzeRequest) AnalyzeResult {
 	return a.analyzer.Analyze(ctx, req)
 }
+
+// SupportsOffline forwards to the wrapped analyzer so the adapter does not hide
+// the claim; an analyzer that does not make it cannot run offline.
+func (a *analyzerAdapter) SupportsOffline() bool {
+	if offline, ok := a.analyzer.(OfflineAnalyzer); ok {
+		return offline.SupportsOffline()
+	}
+	return false
+}

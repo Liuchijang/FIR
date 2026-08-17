@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Liuchijang/Tyto/internal/module"
 	winreg "golang.org/x/sys/windows/registry"
 )
 
@@ -33,37 +34,47 @@ var srumProviderNameValues = []string{"", "FriendlyName", "Name", "Description",
 // Failure is silent and total: the caller falls back to the built-in table and
 // then to the GUID itself, so a host that does not register its providers still
 // produces a complete export.
-func loadSRUMProviderNames(outputDir string) map[string]string {
-	if dir, ok := existingModuleDir(outputDir, "registry"); ok {
-		hive := filepath.Join(dir, "SOFTWARE")
-		if _, err := os.Stat(hive); err == nil {
-			if root, err := loadRegistryAppKey(hive); err == nil {
-				names := readSRUMProviderNames(root, srumExtensionsKey)
-				root.Close()
-				if len(names) > 0 {
-					return names
-				}
-			}
-		}
+func loadSRUMProviderNames(req module.AnalyzeRequest) map[string]string {
+	dir, live, err := resolveArtifactSource(req, "registry")
+	if err != nil {
+		return nil
 	}
-	return readSRUMProviderNames(winreg.LOCAL_MACHINE, `SOFTWARE\`+srumExtensionsKey)
+	if live {
+		root, ok, err := openLiveKey(winreg.LOCAL_MACHINE, `SOFTWARE\`+srumExtensionsKey)
+		if err != nil || !ok {
+			return nil
+		}
+		defer root.Close()
+		return readSRUMProviderNames(root, "")
+	}
+
+	hive := filepath.Join(dir, "SOFTWARE")
+	if _, err := os.Stat(hive); err != nil {
+		return nil
+	}
+	root, err := openCollectedHive(hive)
+	if err != nil {
+		return nil
+	}
+	defer root.Close()
+	return readSRUMProviderNames(root, srumExtensionsKey)
 }
 
-func readSRUMProviderNames(root winreg.Key, path string) map[string]string {
-	extensions, ok, err := openRegistryKeyOptional(root, path)
+func readSRUMProviderNames(root registryKey, path string) map[string]string {
+	extensions, ok, err := root.OpenSubkey(path)
 	if err != nil || !ok {
 		return nil
 	}
 	defer extensions.Close()
 
-	guids, err := extensions.ReadSubKeyNames(-1)
+	guids, err := extensions.SubkeyNames()
 	if err != nil {
 		return nil
 	}
 
 	names := make(map[string]string)
 	for _, guid := range guids {
-		provider, ok, err := openRegistryKeyOptional(extensions, guid)
+		provider, ok, err := extensions.OpenSubkey(guid)
 		if err != nil || !ok {
 			continue
 		}
@@ -77,7 +88,7 @@ func readSRUMProviderNames(root winreg.Key, path string) map[string]string {
 }
 
 // srumProviderName reads a usable provider name out of one registration.
-func srumProviderName(provider winreg.Key) string {
+func srumProviderName(provider registryKey) string {
 	for _, value := range srumProviderNameValues {
 		candidate := readRegistryFirstString(provider, value)
 		if slug := srumProviderSlug(candidate); slug != "" {

@@ -15,7 +15,7 @@ import (
 
 func runModules(ctx context.Context, modules []module.Module, mgr *output.Manager, opts Options) []module.Result {
 	results := make([]module.Result, len(modules))
-	selectedModules := selectedModuleSet(modules)
+	selectedModules := selectedModuleSet(modules, opts)
 
 	var collectorIdx []int
 	var analyzerIdx []int
@@ -35,10 +35,22 @@ func runModules(ctx context.Context, modules []module.Module, mgr *output.Manage
 	return results
 }
 
-func selectedModuleSet(modules []module.Module) map[string]bool {
+// selectedModuleSet is what req.IsSelected answers from: the modules taking part
+// in this run.
+//
+// Offline analysis substitutes the collectors the analyzed run holds output for.
+// The question the analyzers ask through IsSelected is "is this artifact part of
+// what I am working from" — for a live run that is the run's own selection, and
+// for an offline one it is what the earlier collection produced.
+func selectedModuleSet(modules []module.Module, opts Options) map[string]bool {
 	selected := make(map[string]bool, len(modules))
 	for _, mod := range modules {
 		selected[mod.Name()] = true
+	}
+	if opts.offline() {
+		for name := range opts.Source.CollectedModules {
+			selected[name] = true
+		}
 	}
 	return selected
 }
@@ -68,7 +80,7 @@ func runBatch(ctx context.Context, modules []module.Module, results []module.Res
 				if opts.Callbacks.OnModuleStart != nil {
 					opts.Callbacks.OnModuleStart(idx, mod)
 				}
-				result := runModule(ctx, mod, mgr, opts.Timeout, selectedModules)
+				result := runModule(ctx, mod, mgr, opts, selectedModules)
 				results[idx] = result
 				if opts.Callbacks.OnModuleFinish != nil {
 					opts.Callbacks.OnModuleFinish(idx, result)
@@ -91,7 +103,8 @@ func runBatch(ctx context.Context, modules []module.Module, results []module.Res
 	wg.Wait()
 }
 
-func runModule(parent context.Context, mod module.Module, mgr *output.Manager, timeout time.Duration, selectedModules map[string]bool) (result module.Result) {
+func runModule(parent context.Context, mod module.Module, mgr *output.Manager, opts Options, selectedModules map[string]bool) (result module.Result) {
+	timeout := opts.Timeout
 	log := logging.G()
 	artifactDir := module.ModuleDir(mgr.BaseDir(), mod)
 	result = module.Result{
@@ -141,7 +154,7 @@ func runModule(parent context.Context, mod module.Module, mgr *output.Manager, t
 				completed <- moduleRun{panicValue: recovered}
 			}
 		}()
-		if outcome, ok := runRequestModule(ctx, mod, mgr.BaseDir(), artifactDir, startedAt, selectedModules); ok {
+		if outcome, ok := runRequestModule(ctx, mod, mgr.BaseDir(), artifactDir, startedAt, opts, selectedModules); ok {
 			completed <- moduleRun{outcome: outcome, viaRequest: true}
 			return
 		}
@@ -206,8 +219,13 @@ type moduleOutcome struct {
 	errMessage string
 }
 
-func runRequestModule(ctx context.Context, mod module.Module, outputDir string, moduleDir string, startedAt time.Time, selectedModules map[string]bool) (moduleOutcome, bool) {
+func runRequestModule(ctx context.Context, mod module.Module, outputDir string, moduleDir string, startedAt time.Time, opts Options, selectedModules map[string]bool) (moduleOutcome, bool) {
 	hostname := hostnameOrUnknown()
+	if opts.offline() && opts.Source.Hostname != "" {
+		// An analyzer that stamps a hostname into its output is describing the
+		// machine the artifacts came from, not the one parsing them.
+		hostname = opts.Source.Hostname
+	}
 	if requestCollector, ok := mod.(module.RequestCollector); ok {
 		result := requestCollector.CollectWithRequest(ctx, module.CollectRequest{
 			OutputDir:       outputDir,
@@ -227,10 +245,11 @@ func runRequestModule(ctx context.Context, mod module.Module, outputDir string, 
 	if requestAnalyzer, ok := mod.(module.RequestAnalyzer); ok {
 		result := requestAnalyzer.AnalyzeWithRequest(ctx, module.AnalyzeRequest{
 			OutputDir:       outputDir,
+			SourceDir:       opts.sourceRoot(),
 			AnalyzerDir:     moduleDir,
 			Hostname:        hostname,
 			StartedAt:       startedAt,
-			SourcePolicy:    module.SourcePolicyCollectedThenLive,
+			SourcePolicy:    opts.sourcePolicy(),
 			SelectedModules: selectedModules,
 		})
 		return moduleOutcome{
@@ -247,6 +266,19 @@ func applyModuleOutcome(ctx context.Context, mod module.Module, result *module.R
 	result.FilesCollected = outcome.files
 	result.OutputPath = outcome.outputPath
 	result.Skipped = outcome.skipped
+	// Skipped is checked before the message, because a skipped module's message is
+	// a reason and not a failure — "the analyzed run holds no $MFT" would
+	// otherwise be logged as Failed and then be corrected to SKIPPED by
+	// finalizeResult, with the two disagreeing in the log and the summary.
+	if outcome.skipped {
+		if outcome.errMessage != "" {
+			result.Error = outcome.errMessage
+			log.Warn(fmt.Sprintf("Skipped: %s (%s)", mod.Name(), outcome.errMessage))
+			return
+		}
+		log.Warn(fmt.Sprintf("Skipped: %s", mod.Name()))
+		return
+	}
 	if outcome.errMessage != "" {
 		result.Error = errorWithContext(ctx, outcome.errMessage)
 		if len(outcome.files) == 0 {
@@ -260,10 +292,6 @@ func applyModuleOutcome(ctx context.Context, mod module.Module, result *module.R
 		result.Success = true
 		log.Warn(fmt.Sprintf("%s: %s", mod.Name(), result.Error))
 		log.Done(mod.Name(), len(outcome.files), "artifacts", time.Since(startedAt))
-		return
-	}
-	if outcome.skipped {
-		log.Warn(fmt.Sprintf("Skipped: %s", mod.Name()))
 		return
 	}
 	result.Success = true

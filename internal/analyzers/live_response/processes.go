@@ -23,6 +23,11 @@ func (a *processExplorerAnalyzer) Analyze(ctx context.Context, req module.Analyz
 	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create process explorer analyzer output dir: %w", err).Error()}
 	}
+	// A process list only exists while the processes do. Nothing in a collected
+	// run can stand in for it.
+	if !req.AllowLive() {
+		return module.LiveOnlyResult(outDir, a.Name())
+	}
 
 	script := `
 $ErrorActionPreference = 'SilentlyContinue'

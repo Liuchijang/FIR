@@ -9,7 +9,7 @@ import (
 
 func init() { module.RegisterAnalyzer(&browserCookiesParser{}) }
 
-type browserCookiesParser struct{}
+type browserCookiesParser struct{ offlineCapable }
 
 func (c *browserCookiesParser) Name() string     { return "browser_cookies_parser" }
 func (c *browserCookiesParser) Category() string { return "browser" }

@@ -23,6 +23,11 @@ func (a *autorunsAnalyzer) Analyze(ctx context.Context, req module.AnalyzeReques
 	if err != nil {
 		return module.AnalyzeResult{OutputPath: outDir, Error: fmt.Errorf("create autoruns analyzer output dir: %w", err).Error()}
 	}
+	// Services, run keys and scheduled tasks are read out of the running system,
+	// so there is nothing here an offline run could point at.
+	if !req.AllowLive() {
+		return module.LiveOnlyResult(outDir, a.Name())
+	}
 
 	script := `
 $ErrorActionPreference = 'SilentlyContinue'

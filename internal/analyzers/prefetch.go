@@ -16,7 +16,7 @@ import (
 
 func init() { module.RegisterAnalyzer(&prefetchParser{}) }
 
-type prefetchParser struct{}
+type prefetchParser struct{ offlineCapable }
 
 func (c *prefetchParser) Name() string     { return "prefetch_parser" }
 func (c *prefetchParser) Category() string { return "execution" }
@@ -30,9 +30,12 @@ func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 		return analyzerError(outDir, fmt.Errorf("create prefetch parser output dir: %w", err))
 	}
 
-	sourceDir := filepath.Join(os.Getenv("SystemRoot"), "Prefetch")
-	if dir, ok := existingModuleDir(req.OutputDir, "prefetch"); ok {
-		sourceDir = dir
+	sourceDir, live, err := resolveArtifactSource(req, "prefetch")
+	if err != nil {
+		return skippedNoSource(outDir, "collected Prefetch directory")
+	}
+	if live {
+		sourceDir = filepath.Join(os.Getenv("SystemRoot"), "Prefetch")
 	}
 
 	entries, err := os.ReadDir(sourceDir)

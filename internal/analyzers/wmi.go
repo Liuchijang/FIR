@@ -23,6 +23,11 @@ func (c *wmiParser) Analyze(ctx context.Context, req module.AnalyzeRequest) modu
 	if err != nil {
 		return analyzerError(outDir, fmt.Errorf("create WMI parser output dir: %w", err))
 	}
+	// There is no collected artifact behind this one: every row comes from a CIM
+	// query against the machine running the query.
+	if !req.AllowLive() {
+		return module.LiveOnlyResult(outDir, c.Name())
+	}
 
 	script := `
 $ErrorActionPreference = 'SilentlyContinue'

@@ -3,17 +3,17 @@ package analyzers
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/Liuchijang/Tyto/internal/module"
-	winreg "golang.org/x/sys/windows/registry"
 )
 
 func init() { module.RegisterAnalyzer(&userAssistParser{}) }
 
-type userAssistParser struct{}
+type userAssistParser struct{ offlineCapable }
 
 type userAssistRow struct {
 	Username              string
@@ -41,15 +41,12 @@ func (c *userAssistParser) Analyze(ctx context.Context, req module.AnalyzeReques
 		return analyzerError(outDir, fmt.Errorf("create userassist output dir: %w", err))
 	}
 
-	sources, err := collectedUserHiveSources(req.OutputDir, "NTUSER.DAT")
+	sources, err := resolveNTUserHiveSources(req)
 	if err != nil {
-		return analyzerError(outDir, err)
-	}
-	if len(sources) == 0 {
-		sources, err = liveUserNTUserSources()
-		if err != nil {
-			return analyzerError(outDir, err)
+		if errors.Is(err, errNoCollectedSource) {
+			return skippedNoSource(outDir, "collected NTUSER.DAT hives")
 		}
+		return analyzerError(outDir, err)
 	}
 	if len(sources) == 0 {
 		return module.AnalyzeResult{OutputPath: outDir, Error: "no NTUSER.DAT sources found in collected registry output or live registry"}
@@ -61,12 +58,12 @@ func (c *userAssistParser) Analyze(ctx context.Context, req module.AnalyzeReques
 			return analyzerError(outDir, err)
 		}
 
-		root, err := openUserHiveSource(source)
+		hive, err := openUserHiveSource(source)
 		if err != nil {
 			continue
 		}
-		sourceRows, err := parseUserAssistFromRoot(root, source)
-		root.Close()
+		sourceRows, err := parseUserAssistFromRoot(hive, source)
+		hive.Close()
 		if err != nil {
 			continue
 		}
@@ -118,8 +115,8 @@ func (c *userAssistParser) Analyze(ctx context.Context, req module.AnalyzeReques
 	}, csvRows)
 }
 
-func parseUserAssistFromRoot(root winreg.Key, source userHiveSource) ([]userAssistRow, error) {
-	baseKey, ok, err := openRegistryKeyOptional(root, `Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist`)
+func parseUserAssistFromRoot(root registryKey, source userHiveSource) ([]userAssistRow, error) {
+	baseKey, ok, err := root.OpenSubkey(`Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist`)
 	if err != nil {
 		return nil, err
 	}
@@ -128,18 +125,18 @@ func parseUserAssistFromRoot(root winreg.Key, source userHiveSource) ([]userAssi
 	}
 	defer baseKey.Close()
 
-	guidNames, err := baseKey.ReadSubKeyNames(-1)
+	guidNames, err := baseKey.SubkeyNames()
 	if err != nil {
 		return nil, fmt.Errorf("enumerate UserAssist GUIDs: %w", err)
 	}
 
 	rows := make([]userAssistRow, 0, 128)
 	for _, guidName := range guidNames {
-		guidKey, err := winreg.OpenKey(baseKey, guidName, winreg.READ)
-		if err != nil {
+		guidKey, ok, err := baseKey.OpenSubkey(guidName)
+		if err != nil || !ok {
 			continue
 		}
-		countKey, ok, err := openRegistryKeyOptional(guidKey, "Count")
+		countKey, ok, err := guidKey.OpenSubkey("Count")
 		guidKey.Close()
 		if err != nil {
 			return nil, err
@@ -148,12 +145,12 @@ func parseUserAssistFromRoot(root winreg.Key, source userHiveSource) ([]userAssi
 			continue
 		}
 
-		valueNames, err := countKey.ReadValueNames(-1)
+		valueNames, err := countKey.ValueNames()
 		if err != nil {
 			countKey.Close()
 			continue
 		}
-		keyLastWrite := registryKeyLastWriteString(countKey)
+		keyLastWrite := countKey.LastWriteString()
 		for _, valueName := range valueNames {
 			if valueName == "" {
 				continue
