@@ -11,6 +11,7 @@ import (
 
 	"github.com/Liuchijang/Tyto/internal/acquisition"
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 	winreg "golang.org/x/sys/windows/registry"
 )
@@ -748,7 +749,7 @@ func normalizeAmcacheSHA1(value string) string {
 // transaction logs onto the volume being investigated, and a run that is killed
 // mid-parse would leave them there.
 func stageLiveAmcacheHive(workDir string) (string, func(), error) {
-	src := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", amcacheHiveName)
+	src := filepath.Join(platform.SystemRoot(), "AppCompat", "Programs", amcacheHiveName)
 	if _, err := os.Stat(src); err != nil {
 		return "", nil, err
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/Liuchijang/Tyto/internal/acquisition"
 	"github.com/Liuchijang/Tyto/internal/logging"
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
@@ -37,7 +38,7 @@ func (c *wmiCollector) Collect(ctx context.Context, req module.CollectRequest) m
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create WMI output dir: %w", err).Error()}
 	}
 
-	wmiDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "wbem", "Repository")
+	wmiDir := filepath.Join(platform.SystemRoot(), "System32", "wbem", "Repository")
 
 	names := append([]string{}, wmiFiles...)
 	matches, globErr := filepath.Glob(filepath.Join(wmiDir, "MAPPING*.MAP"))
@@ -131,5 +132,5 @@ func collectWMIFile(src, dst string, rawPool *acquisition.RawVolumePool) (module
 }
 
 func (c *wmiCollector) EstimatedBytes() int64 {
-	return utils.PathsSize(filepath.Join(os.Getenv("SystemRoot"), "System32", "wbem", "Repository"))
+	return utils.PathsSize(filepath.Join(platform.SystemRoot(), "System32", "wbem", "Repository"))
 }

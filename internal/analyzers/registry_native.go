@@ -134,6 +134,30 @@ var registryDateLayouts = []string{
 // original text, because these values land in timestamp columns and a consumer
 // that types those columns rejects the entire CSV over one cell it cannot
 // convert — see the invariant in common.go.
+//
+// The zoneless layouts below are parsed as UTC, and that is measured rather than
+// assumed. It was an open question — time.Parse assumes UTC on a layout with no
+// zone, so a value Windows wrote in local time would land in the CSV off by the
+// machine's offset — and it is answered on a run collected from a UTC+7 host,
+// where local time would show up as a flat 7-hour skew:
+//
+//   - DriverLastWriteTime is the driver file's own mtime, so the run's $MFT
+//     carries the same instant as a FILETIME. 75 of the 83 rows that could be
+//     joined on path agree to the second; the 8 that do not are off by weeks or
+//     years, which is a file replaced after Amcache recorded it, and none is off
+//     by the offset.
+//   - LinkDate is a PE TimeDateStamp. 49 of the entries name a binary present on
+//     the analysis host with a matching SHA-1 — the identical file, so the
+//     identical header — and 46 match the TimeDateStamp read out of it exactly.
+//
+// DriverVerDate and InventoryDriverPackage's Date are the ones a blanket
+// conversion would damage: they come from an INF DriverVer directive and are
+// vendor-authored calendar dates with no time and no zone, so every one of the
+// 308 in that run is midnight. Shifting a midnight by an offset moves it to the
+// previous day.
+//
+// So: no ParseInLocation here. Anything reopening this needs the same two joins,
+// not a plausible argument.
 func normalizeRegistryDateString(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
