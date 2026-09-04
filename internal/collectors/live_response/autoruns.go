@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
@@ -112,7 +113,9 @@ $startupLocations = @(
     [pscustomobject]@{ Scope = 'CurrentUser'; Path = [Environment]::GetFolderPath('Startup') }
 )
 
-$userProfileRoot = Join-Path $env:SystemDrive 'Users'
+# Resolved in Go from ProfileList's own ProfilesDirectory rather than assumed to
+# be $env:SystemDrive\Users, which is only the default.
+$userProfileRoot = ` + utils.PSQuote(platform.ProfilesDirectory()) + `
 Get-ChildItem -Path $userProfileRoot -Directory |
     Where-Object { $_.Name -notin '.', '..', 'Public', 'Default', 'Default User', 'All Users', 'DefaultAppPool' } |
     ForEach-Object {

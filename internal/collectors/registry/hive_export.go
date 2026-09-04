@@ -10,6 +10,7 @@ import (
 
 	"github.com/Liuchijang/Tyto/internal/acquisition"
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 	"golang.org/x/sys/windows"
 	winreg "golang.org/x/sys/windows/registry"
@@ -26,7 +27,7 @@ type hiveSpec struct {
 }
 
 func collectRegistryDirect(ctx context.Context, outDir string) ([]module.FileInfo, []string, error) {
-	configDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "config")
+	configDir := filepath.Join(platform.SystemRoot(), "System32", "config")
 	sidToProfile, err := loadProfileSIDMap()
 	if err != nil {
 		return nil, nil, fmt.Errorf("load profile SID map: %w", err)
@@ -221,7 +222,7 @@ func loadProfileSIDMap() (map[string]string, error) {
 	}
 
 	out := make(map[string]string)
-	usersRoot := strings.ToLower(filepath.Clean(filepath.Join(os.Getenv("SystemDrive")+`\`, "Users")))
+	usersRoot := strings.ToLower(filepath.Clean(platform.ProfilesDirectory()))
 	for _, sid := range sids {
 		key, err := winreg.OpenKey(profilesKey, sid, winreg.READ)
 		if err != nil {
@@ -234,27 +235,13 @@ func loadProfileSIDMap() (map[string]string, error) {
 			continue
 		}
 
-		expanded := expandKnownEnv(path)
+		expanded := platform.ExpandEnv(path)
 		if !strings.HasPrefix(strings.ToLower(expanded), usersRoot+`\`) {
 			continue
 		}
 		out[sid] = expanded
 	}
 	return out, nil
-}
-
-func expandKnownEnv(path string) string {
-	replacements := map[string]string{
-		"%SystemDrive%": os.Getenv("SystemDrive"),
-		"%SystemRoot%":  os.Getenv("SystemRoot"),
-		"%systemroot%":  os.Getenv("SystemRoot"),
-	}
-	for needle, value := range replacements {
-		if value != "" {
-			path = strings.ReplaceAll(path, needle, value)
-		}
-	}
-	return filepath.Clean(path)
 }
 
 func isHandleBlockedError(err error) bool {
@@ -272,7 +259,7 @@ func isNotFoundError(err error) bool {
 // EstimatedBytes sums the hives this run will copy: the system hives with their
 // .LOG1/.LOG2 companions, plus NTUSER.DAT and UsrClass.dat for every profile.
 func estimatedRegistryBytes() int64 {
-	configDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "config")
+	configDir := filepath.Join(platform.SystemRoot(), "System32", "config")
 
 	var paths []string
 	for _, hive := range systemHives {

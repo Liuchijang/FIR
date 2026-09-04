@@ -14,6 +14,7 @@ import (
 	"github.com/Liuchijang/Tyto/internal/logging"
 	"github.com/Liuchijang/Tyto/internal/module"
 	"github.com/Liuchijang/Tyto/internal/output"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
@@ -208,27 +209,16 @@ func ResolveProfiles() ([]BrowserProfile, error) {
 }
 
 func DiscoverProfiles() ([]BrowserProfile, error) {
-	usersRoot := filepath.Join(os.Getenv("SystemDrive")+`\`, "Users")
-	entries, err := os.ReadDir(usersRoot)
+	users, err := platform.UserProfiles()
 	if err != nil {
-		return nil, fmt.Errorf("read Users directory: %w", err)
+		return nil, fmt.Errorf("read profiles directory: %w", err)
 	}
 
 	var profiles []BrowserProfile
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		username := entry.Name()
-		if isSkippedWindowsProfile(username) {
-			continue
-		}
-
-		userRoot := filepath.Join(usersRoot, username)
+	for _, user := range users {
 		for _, root := range browserRoots {
-			browserRoot := filepath.Join(userRoot, root.RelPath)
-			profiles = append(profiles, discoverProfilesForRoot(username, root, browserRoot)...)
+			browserRoot := filepath.Join(user.Path, root.RelPath)
+			profiles = append(profiles, discoverProfilesForRoot(user.Name, root, browserRoot)...)
 		}
 	}
 
@@ -422,23 +412,15 @@ func discoverFirefoxProfiles(username, browserName, profilesDir string) []Browse
 
 func buildProfileFromPath(path string) (BrowserProfile, bool) {
 	clean := filepath.Clean(path)
-	parts := strings.Split(clean, string(os.PathSeparator))
-	if len(parts) < 4 {
+	if len(strings.Split(clean, string(os.PathSeparator))) < 4 {
 		return BrowserProfile{}, false
 	}
 
-	userIdx := -1
-	for i, part := range parts {
-		if strings.EqualFold(part, "Users") && i+1 < len(parts) {
-			userIdx = i
-			break
-		}
-	}
-	if userIdx == -1 || userIdx+1 >= len(parts) {
+	user, ok := userFromProfilePath(clean, platform.ProfilesDirectory())
+	if !ok {
 		return BrowserProfile{}, false
 	}
 
-	user := parts[userIdx+1]
 	browser, family := inferBrowserMetadata(clean)
 	return BrowserProfile{
 		Browser: browser,
@@ -447,6 +429,56 @@ func buildProfileFromPath(path string) (BrowserProfile, bool) {
 		Name:    filepath.Base(clean),
 		Path:    clean,
 	}, true
+}
+
+// userFromProfilePath names the account a selected browser profile belongs to.
+//
+// The profile root is asked for rather than assumed. A selected path is
+// <ProfilesDirectory>\<user>\..., and DiscoverProfiles already enumerates from
+// the real root — but this half still scanned for a segment literally named
+// "Users", so on a host keeping profiles somewhere else it matched nothing and
+// resolveSelectedProfiles filed every selected profile under "unknown". The
+// artifacts were still collected, which is what makes it worth pinning: nothing
+// in the output says the attribution is wrong.
+//
+// The "Users" scan stays as the fallback. ProfilesDirectory answers for the
+// machine this is running on, and a path that came from anywhere else still
+// resolves the way it always did.
+//
+// profilesRoot is passed in rather than read here so the relocated case is
+// testable: on a host whose root is the default, no end-to-end test can tell the
+// two code paths apart.
+func userFromProfilePath(clean, profilesRoot string) (string, bool) {
+	if user, ok := segmentUnderRoot(clean, profilesRoot); ok {
+		return user, true
+	}
+	parts := strings.Split(clean, string(os.PathSeparator))
+	for i, part := range parts {
+		if strings.EqualFold(part, "Users") && i+1 < len(parts) {
+			return parts[i+1], true
+		}
+	}
+	return "", false
+}
+
+// segmentUnderRoot returns the first path segment of clean below root.
+func segmentUnderRoot(clean, root string) (string, bool) {
+	root = strings.TrimRight(filepath.Clean(root), string(os.PathSeparator))
+	if root == "" || len(clean) <= len(root)+1 {
+		return "", false
+	}
+	if !strings.EqualFold(clean[:len(root)], root) || clean[len(root)] != os.PathSeparator {
+		return "", false
+	}
+
+	rest := clean[len(root)+1:]
+	if i := strings.IndexByte(rest, os.PathSeparator); i >= 0 {
+		rest = rest[:i]
+	}
+	if rest == "" {
+		return "", false
+	}
+	return rest, true
 }
 
 func inferBrowserMetadata(path string) (browserName, family string) {
@@ -502,15 +534,6 @@ func looksLikeChromiumProfile(profileDir, name string) bool {
 		}
 	}
 	return false
-}
-
-func isSkippedWindowsProfile(name string) bool {
-	switch strings.ToLower(name) {
-	case "public", "default", "default user", "all users", "defaultapppool":
-		return true
-	default:
-		return false
-	}
 }
 
 // collectProfile copies one profile's artifacts. The two families differ only in

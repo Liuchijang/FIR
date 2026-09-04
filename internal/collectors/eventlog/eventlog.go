@@ -12,6 +12,7 @@ import (
 
 	"github.com/Liuchijang/Tyto/internal/logging"
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
@@ -44,7 +45,7 @@ func ConfigureSelectedLogs(names []string) {
 }
 
 func evtxLogDir() string {
-	return filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
+	return filepath.Join(platform.SystemRoot(), "System32", "winevt", "Logs")
 }
 
 func DiscoverAvailableLogs() ([]EventLogFile, error) {

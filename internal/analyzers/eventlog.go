@@ -9,6 +9,7 @@ import (
 
 	eventlogpkg "github.com/Liuchijang/Tyto/internal/collectors/eventlog"
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
@@ -33,7 +34,7 @@ func (c *eventLogParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 		return skippedNoSource(outDir, "collected EVTX files")
 	}
 	if live {
-		sourceDir = filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
+		sourceDir = filepath.Join(platform.SystemRoot(), "System32", "winevt", "Logs")
 	}
 	selectedFiles, err := eventlogpkg.ResolveSelectedOrAllLogs(sourceDir)
 	if err != nil {
@@ -152,12 +153,23 @@ public static class FirEvtx
             w.NewLine = "\r\n";
 
             var sb = new StringBuilder(512);
-            foreach (var fileName in files)
+            for (int i = 0; i < files.Length; i++)
             {
+                var fileName = files[i];
                 var source = Path.Combine(sourceDir, fileName);
                 if (!File.Exists(source)) continue;
 
-                var path = Path.Combine(stageDir, fileName);
+                // The staged copy is numbered, not named after its log, and that is
+                // the difference between parsing a run's event logs and skipping
+                // them. Channel names run to 90 characters
+                // ("Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider%4Operational.evtx"),
+                // and .NET Framework's File.Copy still enforces MAX_PATH — so on a
+                // run whose -o happened to sit 60 characters deeper, 11 of this
+                // machine's logs failed to stage and went unread, while the same
+                // input analyzed from a shorter output directory read all of them.
+                // Nothing downstream sees this name: SourceFile in the CSV is
+                // written from fileName above.
+                var path = Path.Combine(stageDir, i.ToString(CultureInfo.InvariantCulture) + ".evtx");
                 try { File.Copy(source, path, true); }
                 catch (Exception ex)
                 {

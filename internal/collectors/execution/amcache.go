@@ -3,12 +3,12 @@ package execution
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/Liuchijang/Tyto/internal/acquisition"
 	"github.com/Liuchijang/Tyto/internal/logging"
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 	winreg "golang.org/x/sys/windows/registry"
 )
@@ -37,7 +37,7 @@ func (c *amcacheCollector) Collect(ctx context.Context, req module.CollectReques
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create execution output dir: %w", err).Error()}
 	}
 
-	basePath := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve")
+	basePath := filepath.Join(platform.SystemRoot(), "AppCompat", "Programs", "Amcache.hve")
 	specs := []amcacheFileSpec{
 		{
 			srcPath:    basePath,
@@ -47,12 +47,12 @@ func (c *amcacheCollector) Collect(ctx context.Context, req module.CollectReques
 			useHiveAPI: true,
 		},
 		{
-			srcPath: filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve.LOG1"),
+			srcPath: filepath.Join(platform.SystemRoot(), "AppCompat", "Programs", "Amcache.hve.LOG1"),
 			dstPath: filepath.Join(outDir, "Amcache.hve.LOG1"),
 			relPath: "Amcache.hve.LOG1",
 		},
 		{
-			srcPath: filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve.LOG2"),
+			srcPath: filepath.Join(platform.SystemRoot(), "AppCompat", "Programs", "Amcache.hve.LOG2"),
 			dstPath: filepath.Join(outDir, "Amcache.hve.LOG2"),
 			relPath: "Amcache.hve.LOG2",
 		},
@@ -132,6 +132,6 @@ func saveMountedAmcacheHive(dst string) (module.FileInfo, error) {
 }
 
 func (c *amcacheCollector) EstimatedBytes() int64 {
-	base := filepath.Join(os.Getenv("SystemRoot"), "AppCompat", "Programs", "Amcache.hve")
+	base := filepath.Join(platform.SystemRoot(), "AppCompat", "Programs", "Amcache.hve")
 	return utils.PathsSize(base, base+".LOG1", base+".LOG2")
 }

@@ -51,6 +51,27 @@ type FileInfo struct {
 	// at that size is itself a finding, so the artifact is kept and the manifest says
 	// what it is worth.
 	ZeroFilled bool `json:"zero_filled,omitempty"`
+
+	// SourceCreated and SourceModified are the artifact's own timestamps on the
+	// subject machine, RFC3339Nano in UTC.
+	//
+	// Nothing else can carry them. No copier in the tree preserves file times, so
+	// a collected copy's own timestamps record when Tyto copied it: prefetch_parser
+	// had to drop four columns over exactly that, and the same run analyzed twice
+	// produced 256 rows differing only in AccessedUTC. For some artifacts it is the
+	// finding rather than a detail — a Recent folder's .lnk is created the first
+	// time a document is opened and written the last time.
+	//
+	// Preserving the times on the copy would have been simpler and is deliberately
+	// not done: collected files carrying collection times is what made it possible
+	// to prove the event log parser was rewriting artifacts after the collector had
+	// hashed them, by showing the two mtime windows did not overlap.
+	//
+	// The access time is not recorded. Windows updates it inconsistently and
+	// disables it outright for many operations, so the column would look like a
+	// measurement without being one.
+	SourceCreated  string `json:"source_created,omitempty"`
+	SourceModified string `json:"source_modified,omitempty"`
 }
 
 type Result struct {

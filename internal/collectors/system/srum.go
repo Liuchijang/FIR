@@ -3,11 +3,11 @@ package system
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/Liuchijang/Tyto/internal/logging"
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
@@ -27,7 +27,7 @@ func (c *srumCollector) Collect(ctx context.Context, req module.CollectRequest) 
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create system output dir: %w", err).Error()}
 	}
 
-	srumPath := filepath.Join(os.Getenv("SystemRoot"), "System32", "sru", "SRUDB.dat")
+	srumPath := filepath.Join(platform.SystemRoot(), "System32", "sru", "SRUDB.dat")
 	dst := filepath.Join(outDir, "SRUDB.dat")
 	fi, err := utils.SafeCopyFile(srumPath, dst)
 	if err != nil {
@@ -42,5 +42,5 @@ func (c *srumCollector) Collect(ctx context.Context, req module.CollectRequest) 
 }
 
 func (c *srumCollector) EstimatedBytes() int64 {
-	return utils.PathsSize(filepath.Join(os.Getenv("SystemRoot"), "System32", "sru", "SRUDB.dat"))
+	return utils.PathsSize(filepath.Join(platform.SystemRoot(), "System32", "sru", "SRUDB.dat"))
 }

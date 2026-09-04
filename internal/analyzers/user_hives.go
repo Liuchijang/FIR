@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"golang.org/x/sys/windows"
 	winreg "golang.org/x/sys/windows/registry"
 )
@@ -83,7 +84,7 @@ func liveUserNTUserSources() ([]userHiveSource, error) {
 	}
 
 	sources := make([]userHiveSource, 0, len(sids))
-	usersRoot := strings.ToLower(filepath.Clean(filepath.Join(os.Getenv("SystemDrive")+`\`, "Users")))
+	usersRoot := strings.ToLower(filepath.Clean(platform.ProfilesDirectory()))
 	for _, sid := range sids {
 		if strings.HasSuffix(sid, "_Classes") || sid == ".DEFAULT" {
 			continue
@@ -98,7 +99,7 @@ func liveUserNTUserSources() ([]userHiveSource, error) {
 		if profilePath == "" {
 			continue
 		}
-		expandedProfilePath := expandKnownUserEnv(profilePath)
+		expandedProfilePath := platform.ExpandEnv(profilePath)
 		if !strings.HasPrefix(strings.ToLower(expandedProfilePath), usersRoot+`\`) {
 			continue
 		}
@@ -140,18 +141,4 @@ func openUserHiveSource(source userHiveSource) (registryKey, error) {
 		return key, nil
 	}
 	return openCollectedHive(source.HivePath)
-}
-
-func expandKnownUserEnv(path string) string {
-	replacements := map[string]string{
-		"%SystemDrive%": os.Getenv("SystemDrive"),
-		"%SystemRoot%":  os.Getenv("SystemRoot"),
-		"%systemroot%":  os.Getenv("SystemRoot"),
-	}
-	for needle, value := range replacements {
-		if value != "" {
-			path = strings.ReplaceAll(path, needle, value)
-		}
-	}
-	return filepath.Clean(path)
 }

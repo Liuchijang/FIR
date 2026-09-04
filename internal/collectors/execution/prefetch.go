@@ -10,6 +10,7 @@ import (
 
 	"github.com/Liuchijang/Tyto/internal/logging"
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 )
 
@@ -29,7 +30,7 @@ func (c *prefetchCollector) Collect(ctx context.Context, req module.CollectReque
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("create prefetch output dir: %w", err).Error()}
 	}
 
-	prefetchDir := filepath.Join(os.Getenv("SystemRoot"), "Prefetch")
+	prefetchDir := filepath.Join(platform.SystemRoot(), "Prefetch")
 	entries, err := os.ReadDir(prefetchDir)
 	if err != nil {
 		return module.CollectResult{OutputPath: outDir, Error: fmt.Errorf("read Prefetch directory: %w", err).Error()}
@@ -65,5 +66,5 @@ func (c *prefetchCollector) Collect(ctx context.Context, req module.CollectReque
 }
 
 func (c *prefetchCollector) EstimatedBytes() int64 {
-	return utils.PathsSize(filepath.Join(os.Getenv("SystemRoot"), "Prefetch"))
+	return utils.PathsSize(filepath.Join(platform.SystemRoot(), "Prefetch"))
 }

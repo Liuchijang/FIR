@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 	"github.com/Velocidex/ordereddict"
 	ese "www.velocidex.com/golang/go-ese/parser"
@@ -140,7 +141,7 @@ func resolveSRUMDatabase(req module.AnalyzeRequest, outDir string) (string, func
 		return collected, nil, nil
 	}
 
-	livePath := filepath.Join(os.Getenv("SystemRoot"), "System32", "sru", srumDatabaseName)
+	livePath := filepath.Join(platform.SystemRoot(), "System32", "sru", srumDatabaseName)
 	if _, err := os.Stat(livePath); err != nil {
 		return "", nil, fmt.Errorf("no collected %s and no live database: %w", srumDatabaseName, err)
 	}

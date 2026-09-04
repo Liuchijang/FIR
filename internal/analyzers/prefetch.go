@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/prefetch"
 )
 
@@ -53,7 +54,7 @@ func (c *prefetchParser) Analyze(ctx context.Context, req module.AnalyzeRequest)
 		return skippedNoSource(outDir, "collected Prefetch directory")
 	}
 	if live {
-		sourceDir = filepath.Join(os.Getenv("SystemRoot"), "Prefetch")
+		sourceDir = filepath.Join(platform.SystemRoot(), "Prefetch")
 	}
 
 	entries, err := os.ReadDir(sourceDir)

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Liuchijang/Tyto/internal/module"
+	"github.com/Liuchijang/Tyto/internal/platform"
 	"github.com/Liuchijang/Tyto/internal/utils"
 	"github.com/Liuchijang/Tyto/internal/wmirepo"
 )
@@ -196,7 +197,7 @@ func (c *wmiParser) analyzeRepository(req module.AnalyzeRequest, outDir string) 
 
 	objectsPath := filepath.Join(sourceDir, wmiObjectStoreName)
 	if live {
-		objectsPath = filepath.Join(os.Getenv("SystemRoot"), "System32", "wbem", "Repository", wmiObjectStoreName)
+		objectsPath = filepath.Join(platform.SystemRoot(), "System32", "wbem", "Repository", wmiObjectStoreName)
 	}
 	if _, err := os.Stat(objectsPath); err != nil {
 		// Live, the store is simply where Windows keeps it; collected, its absence
