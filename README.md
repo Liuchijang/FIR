@@ -18,22 +18,25 @@
 
 ## Overview
 
-Tyto is a Windows first-response triage tool: it collects forensic artifacts, parses them into CSV, and packages the run with integrity metadata. Collectors and analyzers sit behind a shared module contract, and one engine drives both an interactive terminal UI and a flag-driven CLI.
+Tyto collects Windows forensic artifacts from a running machine, parses them into
+CSV, and packages the run with a SHA-256 per file. Collection happens on the
+affected host; `tyto analyze --input` parses that run later on the investigator's
+machine, with no access to the live system.
 
 ## Features
 
-- **Three ways to run**: an interactive Bubble Tea workflow, `tyto collect` for automation, and `tyto analyze` for a run collected earlier. Collectors run alone by default; `--analyze` adds the parsers for the selected categories.
-- **Collect on the host, analyze off it**: `tyto analyze --input <run|zip>` parses a run collected earlier, on the investigator's machine. Live sources are disabled for the whole run — an analyzer whose artifact is missing reports `SKIPPED` rather than describing the analyst's own computer — and the artifacts are re-hashed against the collecting run's manifest before anything parses them.
-- **One rule for where an analyzer reads from**: collect *and* analyze in one run and every analyzer reads that run's collected artifacts; `analyze` with no `--input` reads the live host; `analyze --input` reads only the input. There is no fallback between them, so a CSV never quietly describes a source other than the one the manifest names.
-- **Native Windows acquisition**: backup semantics, registry hive save APIs, and raw NTFS reads — `$MFT`, `$UsnJrnl:$J` and `$Secure:$SDS` from every fixed drive, not just `C:`. Requires Administrator, and enables the backup, restore, security and debug privileges at startup.
-- **Parses what it collects**: `$MFT`, the USN journal, `$Secure:$SDS`, EVTX, Amcache, Prefetch, ShimCache, UserAssist, RecentDocs, RunMRU, WMI, the SRUM database, and browser history, downloads, cookies, saved-login metadata, autofill, bookmarks, extensions and profile settings. Every timestamp column in every CSV uses one RFC3339 UTC layout, so the halves of an output directory join on time without reformatting.
-- **Self-tuning concurrency**: no worker knob. Tyto surveys the drives a run reads and writes, then picks a worker count per phase — collection backs off on spinning media, analysis scales with free RAM. The numbers and the reasoning land in `manifest.json`.
-- **Caps that reach child processes**: CPU and disk limits go through a Windows Job Object, so `winpmem` and the PowerShell-hosted analyzers are covered rather than quietly exempt. Disk throttling is opt-in.
-- **Partial-failure tolerant**: a module fails only if it collected nothing; partial errors surface as warnings instead of hiding the artifacts that did come through.
-- **Hashed on the way out**: every artifact is SHA-256'd as it is written rather than read back afterwards, including the ZIP itself. `manifest.json` records a digest per file, and browser artifacts are qualified by user, browser and profile so an entry names exactly one file.
-- **Structured output**: `manifest.json`, `summary.txt`, `collector.log`, a storage estimate before the run, and an optional ZIP with a `.sha256` sidecar.
+- **Three ways to run** — interactive TUI, `tyto collect` for automation, `tyto analyze` for a run collected earlier.
+- **Collect here, analyze there** — `analyze --input` re-hashes every artifact against the source manifest, never falls back to the live host, and names the output after the subject rather than the machine parsing it.
+- **Native acquisition** — backup semantics, registry hive save APIs, and raw NTFS reads of `$MFT`, `$UsnJrnl:$J` and `$Secure:$SDS` from every fixed drive. A locked file gets three escalating attempts.
+- **Parses what it collects** — 15 collectors and 18 analyzers over NTFS, event logs, execution artifacts, jump lists, shell links, the registry, WMI, SRUM and browsers. See [Available Modules](#available-modules).
+- **Reads evidence without changing it** — event logs are parsed from a staged copy, because opening a dirty `.evtx` makes Windows rewrite it. Registry hives are parsed from the file, not mounted.
+- **Nothing is lost quietly** — a partial result warns instead of hiding what came through, a file that copies as all zeroes is flagged, and a record that will not parse still gets a row saying why.
+- **One timestamp rule** — every timestamp column is RFC3339 in UTC and holds the artifact's own instant; a value that cannot be resolved leaves the cell empty.
+- **No worker knob** — workers are derived from the storage topology per phase, and CPU and disk caps go through a Job Object so child processes are covered too.
+- **Hashed on the way out** — artifacts are SHA-256'd as they are written, the ZIP included.
+- **Cross-checked against JLECmd** — 27 of 35 shared fields identical across 2,133 jump list entries.
 
-Tyto does not decrypt browser secrets. Cookie values and saved passwords are exported as hex beside a column naming the scheme that wrapped them, because Chrome 127+ App-Bound Encryption is tied to the machine that created it and is worth telling apart from the older DPAPI-keyed form before anyone spends time on recovery. The encrypted stores themselves are collected intact.
+Tyto does not decrypt browser secrets: cookie values and saved passwords are exported as hex beside the scheme that wrapped them, and the encrypted stores are collected intact.
 
 ## Tech Stack
 
@@ -184,6 +187,8 @@ asks for it.
 | `eventlog` | `eventlog` | Collects Windows Event Log files (`.evtx`) |
 | `amcache` | `execution` | Collects `Amcache.hve` and transaction logs |
 | `prefetch` | `execution` | Collects Windows Prefetch files (`.pf`) |
+| `jumplist` | `execution` | Collects jump lists per user profile: both `AutomaticDestinations` and `CustomDestinations`, including the `.temp` files Windows leaves behind mid-write — on one measured host those held 155 embedded links against 120 in the finished files |
+| `recentfiles` | `execution` | Collects the shell links a user leaves when opening a document, from **two** folders: `Windows\Recent` and `Office\Recent`. Office keeps its own MRU, and only that copy survives a user clearing the shell's list |
 | `ram` | `memory` | Acquires physical memory using `winpmem` |
 | `mft` | `ntfs` | Collects the `$MFT` via raw disk access, from every fixed drive |
 | `secure_sds` | `ntfs` | Collects the `$Secure:$SDS` stream, from every fixed drive |
@@ -213,9 +218,11 @@ included. Use `collect` for them, not `analyze`.
 | `browser_credentials_parser` | `browser` | Parses saved-login metadata and autofill from `Login Data`, `Web Data`, `logins.json` and `formhistory.sqlite`. Separate from the other browser analyzers so a triage can skip the most sensitive artifacts |
 | `browser_profile_parser` | `browser` | Parses bookmarks with folder paths, installed extensions with their permissions and content scripts, selected profile settings, omnibox shortcuts, media history and DIPS bounce records |
 | `eventlog_parser` | `eventlog` | Parses EVTX logs |
+| `jumplist_parser` | `execution` | Parses jump lists: the DestList of each automatic file and the LNK bodies both kinds wrap. Reports what was opened, in what order, on which machine, from which volume, and the target's own size, timestamps and `$MFT` position. Three CSVs: a row per file (including the empty ones), a row per DestList entry, and a row per link in a custom destinations file |
 | `mft_parser` | `ntfs` | Parses `$MFT` into CSV, streaming one row per record with resolved full paths |
 | `prefetch_parser` | `execution` | Parses Prefetch records, decompressing the Windows 10/11 container first. Reports up to **eight execution timestamps** per program with the run count, the volumes it touched with their serials and creation times, and every file and directory the traced runs loaded. Versions 17 through 31 (XP to Windows 11). Four CSVs: per-record summary, a run-time timeline, volumes, and path references |
 | `recentdocs_parser` | `registry` | Parses RecentDocs entries |
+| `recentfiles_parser` | `execution` | Parses Recent and Office Recent shell links. Carries the link file's own creation and modification times — the first and last time that document was opened — alongside everything the link records about the target, including the serial and label of a volume that has since been unplugged |
 | `runmru_parser` | `registry` | Parses RunMRU entries |
 | `secure_sds_parser` | `ntfs` | Parses Secure SDS data |
 | `shimcache_parser` | `registry` | Parses ShimCache |
@@ -259,7 +266,11 @@ Two properties worth knowing before comparing Tyto's output against another tool
 | `mft_parser` | `SI_CreatedUTC`, `SI_ModifiedUTC`, `SI_MFTModifiedUTC`, `SI_AccessedUTC`, and the four `FN_*UTC` equivalents | FILETIME — 100ns ticks since 1601-01-01 UTC |
 | `usnjrnl_parser` | `TimestampUTC`, plus the `$MFT` times joined in when `mft`/`mft_parser` is in the run | FILETIME |
 | `secure_sds_parser` | none — `$Secure:$SDS` carries no timestamps | — |
-| `prefetch_parser` | `LastRunUTC`, `PreviousRun1..7UTC`, `RunUTC`, `VolumeCreatedUTC` | FILETIME, read from **inside the record**. That is the point: the execution times are in the file's bytes, so a collected copy carries them intact. The `.pf` file's own filesystem timestamps are deliberately no longer reported — copying does not preserve them, so for a collected artifact they described the moment Tyto copied it |
+| `prefetch_parser` | `LastRunUTC`, `PreviousRun1..7UTC`, `RunUTC`, `VolumeCreatedUTC` | FILETIME, read from **inside the record**. That is the point: the execution times are in the file's bytes, so a collected copy carries them intact. The `.pf` file's own filesystem timestamps are not reported: everything they carried is inside the record |
+| `jumplist_parser` | `LastModifiedUTC` | FILETIME in the DestList entry — when that item was last opened |
+| | `DroidCreatedUTC`, `TrackerCreatedUTC` | The timestamp inside a version 1 UUID, counted in 100ns from **1582-10-15**. It dates the identifier, not the file — it has been observed tracking the machine's boot time — which is why neither column is named after a creation |
+| `recentfiles_parser` | `LinkCreatedUTC`, `LinkModifiedUTC` | The `.lnk` file's own timestamps: the first and last time the document was opened. See *An artifact's own timestamps* below |
+| both, from the embedded link | `TargetCreatedUTC`, `TargetModifiedUTC`, `TargetAccessedUTC` | FILETIME in the link header, describing the **target** as it was when the link was last written |
 | `eventlog_parser` | `TimeCreatedUTC` | EVTX record `SystemTime` (FILETIME), rendered through .NET's round-trip `"o"` format under the invariant culture so the column never depends on the operator's regional settings |
 | `amcache_parser` | `KeyLastWriteTimestamp`, `FileKeyLastWriteTimestamp` | Hive key last-write FILETIME |
 | | `DriverTimeStamp` | A `REG_DWORD` holding the driver's PE `TimeDateStamp` — Unix epoch **seconds**, not a FILETIME |
@@ -274,6 +285,37 @@ Two properties worth knowing before comparing Tyto's output against another tool
 | `autoruns`, `process_explorer` (collectors) | `LastRunTimeUTC`, `NextRunTimeUTC`, `LastWriteTimeUTC`, `CreationDateUTC`, `CreationTimeUTC` | A .NET `DateTime` in **local** time, converted by `ConvertTo-TytoUtc`. Along with `eventlog_parser` these are the only paths that convert rather than re-render, because .NET hands the script local time |
 | `wmi_parser` | none | The object store keeps no creation time for a subscription and the CIM query selects no date-bearing property, so no column is named after one |
 
+
+### An artifact's own timestamps
+
+Copying a file does not preserve its timestamps, so a collected artifact carries
+the moment Tyto wrote it rather than the moment the subject's machine did. For
+most artifacts that costs nothing — the evidence is inside the file. For a Recent
+folder's `.lnk` it is the evidence: the link is created the first time a document
+is opened and rewritten every time after.
+
+So the collector records the source's own creation and modification times as it
+copies, and `manifest.json` carries them per file:
+
+```json
+{
+  "path": "users\\alice\\Recent\\report.docx.lnk",
+  "sha256": "…",
+  "size": 1234,
+  "source_created": "2026-03-31T09:05:01.8065995Z",
+  "source_modified": "2026-09-03T06:47:06.0013361Z"
+}
+```
+
+An analyzer reads them back from that record offline, and stats the file directly
+when it is reading the live host — both render identically, so a row does not say
+which mode produced it. The access time is deliberately not recorded: Windows
+updates it inconsistently and disables it outright for many operations.
+
+The copy itself still does not preserve times, and that is deliberate. Collected
+files carrying *collection* times is what made it possible to prove that a parser
+was rewriting artifacts after the collector had hashed them, by showing the two
+mtime windows did not overlap.
 
 ## RAM Acquisition
 

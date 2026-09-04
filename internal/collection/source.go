@@ -263,6 +263,23 @@ func (s *SourceRun) collectedModules() map[string]bool {
 // A mismatch does not stop the run. The analyst still needs whatever the file
 // holds; what they must not do is trust it silently, so every mismatch is
 // reported here, logged, and recorded in the manifest.
+// CollectedFiles is what the analyzed run's manifest recorded about each
+// artifact, keyed by the collector that produced it.
+//
+// It is the offline half of AnalyzeRequest.CollectedFiles: a live run gets the
+// same record from the collectors that just ran, and an analyzer cannot tell the
+// two apart, which is the point.
+func (s SourceRun) CollectedFiles() map[string][]module.FileInfo {
+	if !s.ManifestFound {
+		return nil
+	}
+	out := make(map[string][]module.FileInfo, len(s.manifest.Artifacts))
+	for _, artifact := range s.manifest.Artifacts {
+		out[artifact.Name] = artifact.Files
+	}
+	return out
+}
+
 func (s SourceRun) VerifyIntegrity(analyzers []module.Module) *output.IntegrityReport {
 	if !s.ManifestFound {
 		return nil

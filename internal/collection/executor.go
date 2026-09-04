@@ -28,12 +28,54 @@ func runModules(ctx context.Context, modules []module.Module, mgr *output.Manage
 		collectorIdx = append(collectorIdx, idx)
 	}
 
+	runCtx := runContext{selected: selectedModules}
+
 	// The two batches get their own worker counts: collection is I/O against a
 	// single device, analysis is CPU and memory against artifacts already on
 	// disk, and the right degree of parallelism is not the same number.
-	runBatch(ctx, modules, results, collectorIdx, mgr, opts, selectedModules, opts.Resources.CollectorWorkers)
-	runBatch(ctx, modules, results, analyzerIdx, mgr, opts, selectedModules, opts.Resources.AnalyzerWorkers)
+	runBatch(ctx, modules, results, collectorIdx, mgr, opts, runCtx, opts.Resources.CollectorWorkers)
+
+	// Between the batches, which is the only place this can be built: every
+	// collector has finished and no analyzer has started, so what the collectors
+	// recorded is complete and nothing is still writing to it.
+	runCtx.collected = collectedFileIndex(modules, results, opts)
+
+	runBatch(ctx, modules, results, analyzerIdx, mgr, opts, runCtx, opts.Resources.AnalyzerWorkers)
 	return results
+}
+
+// runContext is what a module needs to know about the run around it.
+//
+// The two facts travel together because they answer the same kind of question —
+// what else is in this run, and what did it find — and threading each one through
+// runBatch and runModule as its own parameter is how a signature grows until
+// nobody reads it.
+type runContext struct {
+	selected  map[string]bool
+	collected map[string][]module.FileInfo
+}
+
+// collectedFileIndex is what an analyzer reads a collected artifact's own
+// timestamps out of.
+//
+// The copy cannot carry them: nothing in the tree preserves file times, so the
+// file an analyzer opens is stamped with the moment it was copied. The collector
+// read the real ones and recorded them, and this is how they cross the barrier.
+// Offline the same index comes from the analyzed run's manifest, so an analyzer
+// cannot tell the two modes apart.
+func collectedFileIndex(modules []module.Module, results []module.Result, opts Options) map[string][]module.FileInfo {
+	if opts.offline() {
+		return opts.Source.CollectedFiles()
+	}
+
+	index := make(map[string][]module.FileInfo)
+	for i, mod := range modules {
+		if module.ModeOf(mod) == module.ModeAnalyzer || len(results[i].FilesCollected) == 0 {
+			continue
+		}
+		index[mod.Name()] = results[i].FilesCollected
+	}
+	return index
 }
 
 // selectedModuleSet is what req.IsSelected answers from: the modules taking part
@@ -56,7 +98,7 @@ func selectedModuleSet(modules []module.Module, opts Options) map[string]bool {
 	return selected
 }
 
-func runBatch(ctx context.Context, modules []module.Module, results []module.Result, indices []int, mgr *output.Manager, opts Options, selectedModules map[string]bool, workers int) {
+func runBatch(ctx context.Context, modules []module.Module, results []module.Result, indices []int, mgr *output.Manager, opts Options, runCtx runContext, workers int) {
 	if len(indices) == 0 {
 		return
 	}
@@ -81,7 +123,7 @@ func runBatch(ctx context.Context, modules []module.Module, results []module.Res
 				if opts.Callbacks.OnModuleStart != nil {
 					opts.Callbacks.OnModuleStart(idx, mod)
 				}
-				result := runModule(ctx, mod, mgr, opts, selectedModules)
+				result := runModule(ctx, mod, mgr, opts, runCtx)
 				results[idx] = result
 				if opts.Callbacks.OnModuleFinish != nil {
 					opts.Callbacks.OnModuleFinish(idx, result)
@@ -104,7 +146,7 @@ func runBatch(ctx context.Context, modules []module.Module, results []module.Res
 	wg.Wait()
 }
 
-func runModule(parent context.Context, mod module.Module, mgr *output.Manager, opts Options, selectedModules map[string]bool) (result module.Result) {
+func runModule(parent context.Context, mod module.Module, mgr *output.Manager, opts Options, runCtx runContext) (result module.Result) {
 	timeout := opts.Timeout
 	log := logging.G()
 	artifactDir := module.ModuleDir(mgr.BaseDir(), mod)
@@ -155,7 +197,7 @@ func runModule(parent context.Context, mod module.Module, mgr *output.Manager, o
 				completed <- moduleRun{panicValue: recovered}
 			}
 		}()
-		if outcome, ok := runRequestModule(ctx, mod, mgr.BaseDir(), artifactDir, startedAt, opts, selectedModules); ok {
+		if outcome, ok := runRequestModule(ctx, mod, mgr.BaseDir(), artifactDir, startedAt, opts, runCtx); ok {
 			completed <- moduleRun{outcome: outcome, viaRequest: true}
 			return
 		}
@@ -220,7 +262,7 @@ type moduleOutcome struct {
 	errMessage string
 }
 
-func runRequestModule(ctx context.Context, mod module.Module, outputDir string, moduleDir string, startedAt time.Time, opts Options, selectedModules map[string]bool) (moduleOutcome, bool) {
+func runRequestModule(ctx context.Context, mod module.Module, outputDir string, moduleDir string, startedAt time.Time, opts Options, runCtx runContext) (moduleOutcome, bool) {
 	hostname := hostnameOrUnknown()
 	if opts.offline() && opts.Source.Hostname != "" {
 		// An analyzer that stamps a hostname into its output is describing the
@@ -234,7 +276,7 @@ func runRequestModule(ctx context.Context, mod module.Module, outputDir string, 
 			Hostname:        hostname,
 			StartedAt:       startedAt,
 			SourcePolicy:    module.SourcePolicyCollectedThenLive,
-			SelectedModules: selectedModules,
+			SelectedModules: runCtx.selected,
 		})
 		return moduleOutcome{
 			files:      result.Files,
@@ -251,7 +293,8 @@ func runRequestModule(ctx context.Context, mod module.Module, outputDir string, 
 			Hostname:        hostname,
 			StartedAt:       startedAt,
 			SourcePolicy:    opts.sourcePolicy(),
-			SelectedModules: selectedModules,
+			SelectedModules: runCtx.selected,
+			CollectedFiles:  runCtx.collected,
 		})
 		return moduleOutcome{
 			files:      result.Files,

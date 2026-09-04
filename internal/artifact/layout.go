@@ -30,6 +30,10 @@ func ModuleDir(outputDir, mode, name, category string) string {
 		return filepath.Join(outputDir, "system", "wmi")
 	case "prefetch":
 		return filepath.Join(outputDir, "execution", "prefetch")
+	case "jumplist":
+		return filepath.Join(outputDir, "execution", "jumplist")
+	case "recentfiles":
+		return filepath.Join(outputDir, "execution", "recentfiles")
 	case "amcache":
 		return filepath.Join(outputDir, "execution")
 	case "eventlog":

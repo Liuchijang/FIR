@@ -15,9 +15,11 @@ import (
 	_ "github.com/Liuchijang/Tyto/internal/collectors/browser"
 	_ "github.com/Liuchijang/Tyto/internal/collectors/eventlog"
 	_ "github.com/Liuchijang/Tyto/internal/collectors/execution"
+	_ "github.com/Liuchijang/Tyto/internal/collectors/jumplist"
 	_ "github.com/Liuchijang/Tyto/internal/collectors/live_response"
 	_ "github.com/Liuchijang/Tyto/internal/collectors/memory"
 	_ "github.com/Liuchijang/Tyto/internal/collectors/ntfs"
+	_ "github.com/Liuchijang/Tyto/internal/collectors/recentfiles"
 	_ "github.com/Liuchijang/Tyto/internal/collectors/registry"
 	_ "github.com/Liuchijang/Tyto/internal/collectors/system"
 )
